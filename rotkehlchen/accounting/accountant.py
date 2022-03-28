@@ -295,7 +295,8 @@ class Accountant():
         taxable events into account. Not where processing starts from. Processing
         always starts from the very first event we find in the history.
         """
-        active_premium = self.premium and self.premium.is_active()
+        # active_premium = self.premium and self.premium.is_active()
+        active_premium = True
         log.info(
             'Start of history processing',
             start_ts=start_ts,
