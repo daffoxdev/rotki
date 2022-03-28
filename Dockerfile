@@ -1,3 +1,13 @@
+# To build image:
+# docker build -t rotki-custom-docker .
+#
+# To run container:
+# docker run -d --name rotki \
+#     -p 8084:80 \
+#     -v $HOME/.rotki/data:/data \
+#     -v $HOME/.rotki/logs:/logs \
+# rotki-custom-docker:latest
+
 # build stage
 FROM node:lts-alpine as frontend-build-stage
 
