@@ -10,9 +10,11 @@ from urllib.parse import urlencode
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.utils import symbol_to_asset_or_token
+from rotkehlchen.constants.assets import A_EUR
 from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset
 from rotkehlchen.exchanges.data_structures import (
     AssetMovement,
@@ -28,9 +30,8 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount,
     deserialize_fee,
     deserialize_timestamp_from_date,
-    deserialize_trade_type,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, Timestamp
+from rotkehlchen.typing import ApiKey, ApiSecret, Timestamp, TradeType
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import iso8601ts_to_timestamp
 
@@ -98,14 +99,14 @@ def trade_from_bitcoinde(raw_trade: Dict) -> Trade:
             'bitcoinde',
         )
 
-    trade_type = deserialize_trade_type(raw_trade['type'])
+    trade_type = TradeType.deserialize(raw_trade['type'])
     tx_amount = deserialize_asset_amount(raw_trade['amount_currency_to_trade'])
     native_amount = deserialize_asset_amount(raw_trade['volume_currency_to_pay'])
     tx_asset, native_asset = bitcoinde_pair_to_world(raw_trade['trading_pair'])
     amount = tx_amount
     rate = Price(native_amount / tx_amount)
     fee_amount = deserialize_fee(raw_trade['fee_currency_to_pay'])
-    fee_asset = Asset('EUR')
+    fee_asset = A_EUR
 
     return Trade(
         timestamp=timestamp,
@@ -124,15 +125,33 @@ def trade_from_bitcoinde(raw_trade: Dict) -> Trade:
 class Bitcoinde(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
     ):
-        super().__init__('bitcoinde', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.BITCOINDE,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.uri = 'https://api.bitcoin.de'
         self.session.headers.update({'x-api-key': api_key})
         self.msg_aggregator = msg_aggregator
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'x-api-key': api_key})
+        return changed
 
     def _generate_signature(self, request_type: str, url: str, nonce: str) -> str:
         signed_data = '#'.join([request_type, url, self.api_key, nonce, MD5_EMPTY_STR]).encode()
@@ -222,7 +241,7 @@ class Bitcoinde(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def validate_api_key(self) -> Tuple[bool, str]:
         """
-        Validates that the Bitcoin.de API key is good for usage in Rotki
+        Validates that the Bitcoin.de API key is good for usage in rotki
         """
 
         try:
@@ -276,7 +295,7 @@ class Bitcoinde(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
 
         page = 1
         resp_trades = []
@@ -332,13 +351,20 @@ class Bitcoinde(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 )
                 continue
 
-        return trades
+        return trades, (start_ts, end_ts)
 
     def query_online_deposits_withdrawals(
             self,  # pylint: disable=no-self-use
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[AssetMovement]:
+        return []  # noop for bitcoinde
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for bitcoinde
 
     def query_online_margin_history(

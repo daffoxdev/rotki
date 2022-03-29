@@ -3,7 +3,6 @@ from typing import List, Union
 from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import DefiEvent
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.assets.unknown_asset import UnknownEthereumToken
 from rotkehlchen.chain.ethereum.trades import AMMTrade
 from rotkehlchen.constants.assets import A_ETH
 from rotkehlchen.exchanges.data_structures import AssetMovement, Loan, MarginPosition, Trade
@@ -63,7 +62,21 @@ def action_get_type(action: TaxableAction) -> str:
     raise AssertionError(f'TaxableAction of unknown type {type(action)} encountered')
 
 
-def action_get_assets(action: TaxableAction) -> List[Union[Asset, UnknownEthereumToken]]:
+def action_get_identifier(action: TaxableAction) -> str:
+    """Get a unique identifier from a taxable action if possible"""
+    if isinstance(action, (AMMTrade, Trade, AssetMovement, MarginPosition, LedgerAction)):
+        return str(action.identifier)
+    if isinstance(action, EthereumTransaction):
+        return '0x' + action.tx_hash.hex()
+    if isinstance(action, Loan):
+        return 'loan_' + str(action.close_time)
+    if isinstance(action, DefiEvent):
+        return str(action)
+    # else
+    raise AssertionError(f'TaxableAction of unknown type {type(action)} encountered')
+
+
+def action_get_assets(action: TaxableAction) -> List[Asset]:
     """Gets the assets involved in the action
 
     May raise:

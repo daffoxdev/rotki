@@ -20,10 +20,12 @@ from rotkehlchen.errors import (
     PremiumAuthenticationError,
     RemoteError,
 )
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import B64EncodedBytes, Timestamp
 from rotkehlchen.utils.serialization import jsonloads_dict
 
 logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 HANDLABLE_STATUS_CODES = [
     HTTPStatus.OK,
@@ -82,11 +84,11 @@ class PremiumCredentials():
             ) from e
 
     def serialize_key(self) -> str:
-        """Turn the API key into the format to send outside Rotki (network, DB e.t.c.)"""
+        """Turn the API key into the format to send outside rotki (network, DB e.t.c.)"""
         return self.api_key
 
     def serialize_secret(self) -> str:
-        """Turn the API secret into the format to send outside Rotki (network, DB e.t.c.)"""
+        """Turn the API secret into the format to send outside rotki (network, DB e.t.c.)"""
         return b64encode(self.api_secret).decode()
 
     def __eq__(self, other: object) -> bool:
@@ -224,7 +226,7 @@ class Premium():
             )
         except requests.exceptions.RequestException as e:
             msg = f'Could not connect to rotki server due to {str(e)}'
-            logger.error(msg)
+            log.error(msg)
             raise RemoteError(msg) from e
 
         return _process_dict_response(response)
@@ -250,7 +252,7 @@ class Premium():
             )
         except requests.exceptions.RequestException as e:
             msg = f'Could not connect to rotki server due to {str(e)}'
-            logger.error(msg)
+            log.error(msg)
             raise RemoteError(msg) from e
 
         return _process_dict_response(response)
@@ -275,7 +277,7 @@ class Premium():
             )
         except requests.exceptions.RequestException as e:
             msg = f'Could not connect to rotki server due to {str(e)}'
-            logger.error(msg)
+            log.error(msg)
             raise RemoteError(msg) from e
 
         result = _process_dict_response(response)
@@ -287,13 +289,13 @@ class Premium():
         )
         return metadata
 
-    def query_statistics_renderer(self) -> str:
-        """Queries for the source of the statistics_renderer from the server
+    def query_premium_components(self) -> str:
+        """Queries for the source code of the premium components from the server
 
         Raises RemoteError if there are problems reaching the server or if
         there is an error returned by the server
         """
-        signature, data = self.sign('statistics_rendererv2')
+        signature, data = self.sign('statistics_rendererv2', version=1)
         self.session.headers.update({
             'API-SIGN': base64.b64encode(signature.digest()),  # type: ignore
         })
@@ -306,7 +308,7 @@ class Premium():
             )
         except requests.exceptions.RequestException as e:
             msg = f'Could not connect to rotki server due to {str(e)}'
-            logger.error(msg)
+            log.error(msg)
             raise RemoteError(msg) from e
 
         result = _process_dict_response(response)
@@ -334,7 +336,7 @@ class Premium():
             )
         except requests.exceptions.RequestException as e:
             msg = f'Could not connect to rotki server due to {str(e)}'
-            logger.error(msg)
+            log.error(msg)
             raise RemoteError(msg) from e
 
         return _decode_premium_json(response)

@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.assets import A_BTC
@@ -33,7 +34,8 @@ from rotkehlchen.typing import (
 )
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import iso8601ts_to_timestamp, satoshis_to_btc
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 
 if TYPE_CHECKING:
     from rotkehlchen.db.dbhandler import DBHandler
@@ -71,7 +73,6 @@ def trade_from_bitmex(bitmex_trade: Dict) -> MarginPosition:
 
     log.debug(
         'Processing Bitmex Trade',
-        sensitive_log=True,
         timestamp=close_time,
         profit_loss=profit_loss,
         currency=currency,
@@ -95,15 +96,33 @@ def trade_from_bitmex(bitmex_trade: Dict) -> MarginPosition:
 class Bitmex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
     ):
-        super().__init__('bitmex', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.BITMEX,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.uri = 'https://bitmex.com'
         self.session.headers.update({'api-key': api_key})
         self.msg_aggregator = msg_aggregator
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'api-key': api_key})
+        return changed
 
     def first_connection(self) -> None:
         self.first_connection_made = True
@@ -248,7 +267,6 @@ class Bitmex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         )
         log.debug(
             'Bitmex balance query result',
-            sensitive_log=True,
             currency='BTC',
             amount=amount,
             usd_value=usd_value,
@@ -350,5 +368,16 @@ class Bitmex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 continue
         return movements
 
-    def query_online_trade_history(self, start_ts: Timestamp, end_ts: Timestamp) -> List[Trade]:
+    def query_online_trade_history(
+            self,
+            start_ts: Timestamp,
+            end_ts: Timestamp,
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
+        return [], (start_ts, end_ts)  # noop for bitmex
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for bitmex

@@ -1,33 +1,42 @@
-import { default as BigNumber } from 'bignumber.js';
-import sortBy from 'lodash/sortBy';
-import { truncateAddress } from '@/filters';
-import i18n from '@/i18n';
+import { AddressIndexed, Balance, BigNumber } from '@rotki/common';
+import { DefiAccount } from '@rotki/common/lib/account';
+import { Blockchain, DefiProtocol } from '@rotki/common/lib/blockchain';
 import {
-  AAVE_BORROWING_EVENTS,
-  AAVE_LENDING_EVENTS,
-  DEFI_AAVE,
-  DEFI_COMPOUND,
-  DEFI_EVENT_LIQUIDATION,
-  DEFI_MAKERDAO,
-  DEFI_YEARN_VAULTS
-} from '@/services/defi/consts';
-import { SupportedDefiProtocols, TokenDetails } from '@/services/defi/types';
-import {
+  AaveBorrowingEventType,
   AaveEvent,
   AaveHistoryEvents,
   AaveHistoryTotal,
-  AaveLending
-} from '@/services/defi/types/aave';
+  AaveLending,
+  AaveLendingEventType,
+  isAaveLiquidationEvent
+} from '@rotki/common/lib/defi/aave';
+import {
+  BalancerBalanceWithOwner,
+  BalancerEvent,
+  BalancerProfitLoss,
+  Pool
+} from '@rotki/common/lib/defi/balancer';
+import { DexTrade } from '@rotki/common/lib/defi/dex';
+import {
+  XswapBalance,
+  XswapEventDetails,
+  XswapPool,
+  XswapPoolProfit
+} from '@rotki/common/lib/defi/xswap';
+import sortBy from 'lodash/sortBy';
+import { explorerUrls } from '@/components/helper/asset-urls';
+import { truncateAddress } from '@/filters';
+import i18n from '@/i18n';
+import { ProtocolVersion } from '@/services/defi/consts';
 import { CompoundLoan } from '@/services/defi/types/compound';
 import { DEPOSIT } from '@/services/defi/types/consts';
 import {
-  SupportedYearnVault,
   YearnVaultAsset,
   YearnVaultBalance,
-  YearnVaultProfitLoss
+  YearnVaultProfitLoss,
+  YearnVaultsHistory
 } from '@/services/defi/types/yearn';
 import { Trade } from '@/services/history/types';
-import { Balance } from '@/services/types-api';
 import { Section, Status } from '@/store/const';
 import {
   AAVE,
@@ -36,15 +45,18 @@ import {
   getProtcolIcon,
   GETTER_BALANCER_BALANCES,
   GETTER_UNISWAP_ASSETS,
-  MAKERDAO,
-  YEARN_FINANCE_VAULTS
+  LIQUITY,
+  MAKERDAO_DSR,
+  MAKERDAO_VAULTS,
+  YEARN_FINANCE_VAULTS,
+  YEARN_FINANCE_VAULTS_V2
 } from '@/store/defi/const';
+import { LiquityLoan } from '@/store/defi/liquity/types';
 import {
   AaveLoan,
   Airdrop,
   AirdropDetail,
   AirdropType,
-  BalancerBalanceWithOwner,
   BaseDefiBalance,
   Collateral,
   DefiBalance,
@@ -52,92 +64,93 @@ import {
   DefiLoan,
   DefiProtocolSummary,
   DefiState,
+  DexTrades,
   LoanSummary,
   MakerDAOVaultModel,
   OverviewDefiProtocol,
   PoapDelivery,
   ProfitLossModel,
-  TokenInfo,
-  UniswapBalance,
-  UniswapEventDetails,
-  UniswapPool,
-  UniswapPoolProfit,
-  DexTrade,
-  DexTrades,
-  BalancerEvent,
-  Pool,
-  BalancerProfitLoss
+  TokenInfo
 } from '@/store/defi/types';
 import { balanceUsdValueSum, toProfitLossModel } from '@/store/defi/utils';
+import {
+  getBalances,
+  getEventDetails,
+  getPoolProfit,
+  getPools
+} from '@/store/defi/xswap-utils';
+import { SettingsState } from '@/store/settings/state';
 import { RotkehlchenState } from '@/store/types';
 import { Getters } from '@/store/typing';
 import { filterAddresses } from '@/store/utils';
 import { Writeable } from '@/types';
-import { DefiAccount, ETH } from '@/typing/types';
-import { uniqueStrings } from '@/utils/array';
+import { assert } from '@/utils/assertions';
 import { Zero } from '@/utils/bignumbers';
 import { balanceSum } from '@/utils/calculation';
+import { uniqueStrings } from '@/utils/data';
 
 function isLendingEvent(value: AaveHistoryEvents): value is AaveEvent {
-  const lending: string[] = [...AAVE_LENDING_EVENTS];
+  const lending: string[] = Object.keys(AaveLendingEventType);
   return lending.indexOf(value.eventType) !== -1;
 }
 
-function assetIdentifier(details: TokenDetails) {
-  if (typeof details === 'string') {
-    return details;
-  }
-  return `_ceth_${details.ethereumAddress}`;
+export namespace DefiGetterTypes {
+  export type YearnVaultProfitType = (
+    addresses: string[],
+    version: ProtocolVersion
+  ) => YearnVaultProfitLoss[];
+
+  export type YearnVaultAssetType = (
+    addresses: string[],
+    version: ProtocolVersion
+  ) => YearnVaultAsset[];
 }
 
 interface DefiGetters {
-  totalUsdEarned: (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ) => BigNumber;
+  totalUsdEarned: (protocols: DefiProtocol[], addresses: string[]) => BigNumber;
   totalLendingDeposit: (
-    protocols: SupportedDefiProtocols[],
+    protocols: DefiProtocol[],
     addresses: string[]
   ) => BigNumber;
   loan: (
     identifier: string
-  ) => MakerDAOVaultModel | AaveLoan | CompoundLoan | null;
-  defiAccounts: (protocols: SupportedDefiProtocols[]) => DefiAccount[];
-  loans: (protocols: SupportedDefiProtocols[]) => DefiLoan[];
-  loanSummary: (protocol: SupportedDefiProtocols[]) => LoanSummary;
+  ) => MakerDAOVaultModel | AaveLoan | CompoundLoan | LiquityLoan | null;
+  defiAccounts: (protocols: DefiProtocol[]) => DefiAccount[];
+  loans: (protocols: DefiProtocol[]) => DefiLoan[];
+  loanSummary: (protocol: DefiProtocol[]) => LoanSummary;
   effectiveInterestRate: (
-    protocols: SupportedDefiProtocols[],
+    protocols: DefiProtocol[],
     addresses: string[]
   ) => string;
   aggregatedLendingBalances: (
-    protocols: SupportedDefiProtocols[],
+    protocols: DefiProtocol[],
     addresses: string[]
   ) => BaseDefiBalance[];
   lendingBalances: (
-    protocols: SupportedDefiProtocols[],
+    protocols: DefiProtocol[],
     addresses: string[]
   ) => DefiBalance[];
   lendingHistory: (
-    protocols: SupportedDefiProtocols[],
+    protocols: DefiProtocol[],
     addresses: string[]
-  ) => DefiLendingHistory<SupportedDefiProtocols>[];
+  ) => DefiLendingHistory<DefiProtocol>[];
   defiOverview: DefiProtocolSummary[];
   compoundRewards: ProfitLossModel[];
   compoundInterestProfit: ProfitLossModel[];
   compoundLiquidationProfit: ProfitLossModel[];
   compoundDebtLoss: ProfitLossModel[];
-  yearnVaultsProfit: (addresses: string[]) => YearnVaultProfitLoss[];
-  yearnVaultsAssets: (addresses: string[]) => YearnVaultBalance[];
+  yearnVaultsProfit: DefiGetterTypes.YearnVaultProfitType;
+  yearnVaultsAssets: DefiGetterTypes.YearnVaultAssetType;
   aaveTotalEarned: (addresses: string[]) => ProfitLossModel[];
-  uniswapBalances: (addresses: string[]) => UniswapBalance[];
+  uniswapBalances: (addresses: string[]) => XswapBalance[];
   basicDexTrades: (addresses: string[]) => Trade[];
-  uniswapPoolProfit: (addresses: string[]) => UniswapPoolProfit[];
-  uniswapEvents: (addresses: string[]) => UniswapEventDetails[];
+  uniswapPoolProfit: (addresses: string[]) => XswapPoolProfit[];
+  uniswapEvents: (addresses: string[]) => XswapEventDetails[];
   uniswapAddresses: string[];
   dexTrades: (addresses: string[]) => DexTrade[];
   airdrops: (addresses: string[]) => Airdrop[];
   airdropAddresses: string[];
-  [GETTER_UNISWAP_ASSETS]: UniswapPool[];
+  [GETTER_UNISWAP_ASSETS]: XswapPool[];
   [GETTER_BALANCER_BALANCES]: BalancerBalanceWithOwner[];
   balancerAddresses: string[];
   balancerEvents: (addresses: string[]) => BalancerEvent[];
@@ -146,807 +159,967 @@ interface DefiGetters {
 }
 
 export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
-  totalUsdEarned: ({
-    dsrHistory,
-    aaveHistory,
-    compoundHistory,
-    yearnVaultsHistory
-  }: DefiState) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): BigNumber => {
-    let total = Zero;
-    const showAll = protocols.length === 0;
-    const allAddresses = addresses.length === 0;
+  totalUsdEarned:
+    ({
+      dsrHistory,
+      aaveHistory,
+      compoundHistory,
+      yearnVaultsHistory,
+      yearnVaultsV2History
+    }: DefiState) =>
+    (protocols: DefiProtocol[], addresses: string[]): BigNumber => {
+      let total = Zero;
+      const showAll = protocols.length === 0;
+      const allAddresses = addresses.length === 0;
 
-    if (showAll || protocols.includes('makerdao')) {
-      for (const address of Object.keys(dsrHistory)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        total = total.plus(dsrHistory[address].gainSoFar.usdValue);
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_AAVE)) {
-      for (const address of Object.keys(aaveHistory)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const totalEarned = aaveHistory[address].totalEarnedInterest;
-        for (const asset of Object.keys(totalEarned)) {
-          total = total.plus(totalEarned[asset].usdValue);
-        }
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_COMPOUND)) {
-      for (const address in compoundHistory.interestProfit) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-
-        const accountProfit = compoundHistory.interestProfit[address];
-        for (const asset in accountProfit) {
-          const assetProfit = accountProfit[asset];
-          total = total.plus(assetProfit.usdValue);
-        }
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_YEARN_VAULTS)) {
-      for (const address in yearnVaultsHistory) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const accountVaults = yearnVaultsHistory[address];
-        for (const key in accountVaults) {
-          const vault = key as SupportedYearnVault;
-          const vaultData = accountVaults[vault];
-          if (!vaultData) {
+      if (showAll || protocols.includes(DefiProtocol.MAKERDAO_DSR)) {
+        for (const address of Object.keys(dsrHistory)) {
+          if (!allAddresses && !addresses.includes(address)) {
             continue;
           }
-          total = total.plus(vaultData.profitLoss.usdValue);
+          total = total.plus(dsrHistory[address].gainSoFar.usdValue);
         }
       }
-    }
-    return total;
-  },
 
-  defiAccounts: ({
-    aaveBalances,
-    aaveHistory,
-    dsrBalances,
-    dsrHistory
-  }: DefiState) => (protocols: SupportedDefiProtocols[]): DefiAccount[] => {
-    const aaveAddresses: string[] = [];
-    const makerAddresses: string[] = [];
-    if (protocols.length === 0 || protocols.includes(DEFI_AAVE)) {
-      const uniqueAddresses: string[] = [
-        ...Object.keys(aaveBalances),
-        ...Object.keys(aaveHistory)
-      ].filter(uniqueStrings);
-      aaveAddresses.push(...uniqueAddresses);
-    }
-
-    if (protocols.length === 0 || protocols.includes(DEFI_MAKERDAO)) {
-      const uniqueAddresses: string[] = [
-        ...Object.keys(dsrHistory),
-        ...Object.keys(dsrBalances.balances)
-      ].filter(uniqueStrings);
-      makerAddresses.push(...uniqueAddresses);
-    }
-
-    const accounts: DefiAccount[] = [];
-    for (const address of aaveAddresses) {
-      const protocols: SupportedDefiProtocols[] = [DEFI_AAVE];
-      const index = makerAddresses.indexOf(address);
-      if (index >= 0) {
-        protocols.push(DEFI_MAKERDAO);
-        makerAddresses.splice(index, 1);
+      if (showAll || protocols.includes(DefiProtocol.AAVE)) {
+        for (const address of Object.keys(aaveHistory)) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+          const totalEarned = aaveHistory[address].totalEarnedInterest;
+          for (const asset of Object.keys(totalEarned)) {
+            total = total.plus(totalEarned[asset].usdValue);
+          }
+        }
       }
-      accounts.push({
-        address,
-        chain: ETH,
-        protocols
-      });
-    }
 
-    for (const address of makerAddresses) {
-      accounts.push({
-        address,
-        chain: ETH,
-        protocols: [DEFI_MAKERDAO]
-      });
-    }
+      if (showAll || protocols.includes(DefiProtocol.COMPOUND)) {
+        for (const address in compoundHistory.interestProfit) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
 
-    return accounts;
-  },
+          const accountProfit = compoundHistory.interestProfit[address];
+          for (const asset in accountProfit) {
+            const assetProfit = accountProfit[asset];
+            total = total.plus(assetProfit.usdValue);
+          }
+        }
+      }
 
-  loans: (
-    {
+      function yearnTotalEarned(vaultsHistory: YearnVaultsHistory): BigNumber {
+        let yearnEarned = Zero;
+        for (const address in vaultsHistory) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+          const accountVaults = vaultsHistory[address];
+          for (const vault in accountVaults) {
+            const vaultData = accountVaults[vault];
+            if (!vaultData) {
+              continue;
+            }
+            yearnEarned = yearnEarned.plus(vaultData.profitLoss.usdValue);
+          }
+        }
+        return yearnEarned;
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.YEARN_VAULTS)) {
+        total = total.plus(yearnTotalEarned(yearnVaultsHistory));
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.YEARN_VAULTS_V2)) {
+        total = total.plus(yearnTotalEarned(yearnVaultsV2History));
+      }
+      return total;
+    },
+
+  defiAccounts:
+    ({
       aaveBalances,
       aaveHistory,
-      makerDAOVaults,
+      dsrBalances,
+      dsrHistory,
       compoundBalances,
-      compoundHistory: { events }
-    }: DefiState,
-    _dg,
-    _rs,
-    { 'balances/assetInfo': assetInfo }
-  ) => (protocols: SupportedDefiProtocols[]): DefiLoan[] => {
-    const loans: DefiLoan[] = [];
-    const showAll = protocols.length === 0;
-
-    if (showAll || protocols.includes(DEFI_MAKERDAO)) {
-      loans.push(
-        ...makerDAOVaults.map(
-          value =>
-            ({
-              identifier: `${value.identifier}`,
-              protocol: DEFI_MAKERDAO
-            } as DefiLoan)
-        )
-      );
-    }
-
-    if (showAll || protocols.includes(DEFI_AAVE)) {
-      const knownAssets: string[] = [];
-      for (const address of Object.keys(aaveBalances)) {
-        const { borrowing } = aaveBalances[address];
-        const assets = Object.keys(borrowing);
-        if (assets.length === 0) {
-          continue;
+      compoundHistory,
+      yearnVaultsBalances,
+      yearnVaultsHistory,
+      yearnVaultsV2Balances,
+      yearnVaultsV2History
+    }: DefiState) =>
+    (protocols: DefiProtocol[]): DefiAccount[] => {
+      const getProtocolAddresses = (
+        protocol: DefiProtocol,
+        balances: AddressIndexed<any>,
+        history: AddressIndexed<any> | string[]
+      ) => {
+        const addresses: string[] = [];
+        if (protocols.length === 0 || protocols.includes(protocol)) {
+          const uniqueAddresses: string[] = [
+            ...Object.keys(balances),
+            ...(Array.isArray(history) ? history : Object.keys(history))
+          ].filter(uniqueStrings);
+          addresses.push(...uniqueAddresses);
         }
+        return addresses;
+      };
 
-        for (const asset of assets) {
-          const symbol = assetInfo(asset)?.symbol ?? asset;
-          loans.push({
-            identifier: `${symbol} - ${truncateAddress(address, 6)}`,
-            protocol: DEFI_AAVE,
-            owner: address,
-            asset
-          });
-          knownAssets.push(asset);
+      const addresses: {
+        [key in Exclude<
+          DefiProtocol,
+          | DefiProtocol.MAKERDAO_VAULTS
+          | DefiProtocol.UNISWAP
+          | DefiProtocol.LIQUITY
+        >]: string[];
+      } = {
+        [DefiProtocol.MAKERDAO_DSR]: [],
+        [DefiProtocol.AAVE]: [],
+        [DefiProtocol.COMPOUND]: [],
+        [DefiProtocol.YEARN_VAULTS]: [],
+        [DefiProtocol.YEARN_VAULTS_V2]: []
+      };
+
+      addresses[DefiProtocol.AAVE] = getProtocolAddresses(
+        DefiProtocol.AAVE,
+        aaveBalances,
+        aaveHistory
+      );
+
+      addresses[DefiProtocol.COMPOUND] = getProtocolAddresses(
+        DefiProtocol.COMPOUND,
+        compoundBalances,
+        compoundHistory.events.map(({ address }) => address)
+      );
+
+      addresses[DefiProtocol.YEARN_VAULTS] = getProtocolAddresses(
+        DefiProtocol.YEARN_VAULTS,
+        yearnVaultsBalances,
+        yearnVaultsHistory
+      );
+
+      addresses[DefiProtocol.YEARN_VAULTS_V2] = getProtocolAddresses(
+        DefiProtocol.YEARN_VAULTS_V2,
+        yearnVaultsV2Balances,
+        yearnVaultsV2History
+      );
+
+      addresses[DefiProtocol.MAKERDAO_DSR] = getProtocolAddresses(
+        DefiProtocol.MAKERDAO_DSR,
+        dsrBalances.balances,
+        dsrHistory
+      );
+
+      const accounts: { [address: string]: DefiAccount } = {};
+      for (const protocol in addresses) {
+        const selectedProtocol = protocol as Exclude<
+          DefiProtocol,
+          | DefiProtocol.MAKERDAO_VAULTS
+          | DefiProtocol.UNISWAP
+          | DefiProtocol.LIQUITY
+        >;
+        const perProtocolAddresses = addresses[selectedProtocol];
+        for (const address of perProtocolAddresses) {
+          if (accounts[address]) {
+            accounts[address].protocols.push(selectedProtocol);
+          } else {
+            accounts[address] = {
+              address,
+              chain: Blockchain.ETH,
+              protocols: [selectedProtocol]
+            };
+          }
         }
       }
 
-      for (const address in aaveHistory) {
-        const { events } = aaveHistory[address];
-        const borrowEvents: string[] = [...AAVE_BORROWING_EVENTS];
-        const historyAssets = events
-          .filter(e => borrowEvents.includes(e.eventType))
-          .map(event =>
-            event.eventType === DEFI_EVENT_LIQUIDATION
-              ? event.principalAsset
-              : event.asset
+      return Object.values(accounts);
+    },
+
+  loans:
+    (
+      {
+        aaveBalances,
+        aaveHistory,
+        makerDAOVaults,
+        compoundBalances,
+        compoundHistory: { events },
+        liquity
+      }: DefiState,
+      _dg,
+      _rs,
+      { 'balances/assetInfo': assetInfo }
+    ) =>
+    (protocols: DefiProtocol[]): DefiLoan[] => {
+      const loans: DefiLoan[] = [];
+      const showAll = protocols.length === 0;
+
+      if (showAll || protocols.includes(DefiProtocol.MAKERDAO_VAULTS)) {
+        loans.push(
+          ...makerDAOVaults.map(
+            value =>
+              ({
+                identifier: `${value.identifier}`,
+                protocol: DefiProtocol.MAKERDAO_VAULTS
+              } as DefiLoan)
           )
-          .filter(uniqueStrings)
-          .filter(asset => !knownAssets.includes(asset));
+        );
+      }
 
-        for (const asset of historyAssets) {
-          const symbol = assetInfo(asset)?.symbol ?? asset;
-          loans.push({
-            identifier: `${symbol} - ${truncateAddress(address, 6)}`,
-            protocol: DEFI_AAVE,
-            owner: address,
-            asset
-          });
+      if (showAll || protocols.includes(DefiProtocol.AAVE)) {
+        const knownAssets: string[] = [];
+        for (const address of Object.keys(aaveBalances)) {
+          const { borrowing } = aaveBalances[address];
+          const assets = Object.keys(borrowing);
+          if (assets.length === 0) {
+            continue;
+          }
+
+          for (const asset of assets) {
+            const symbol = assetInfo(asset)?.symbol ?? asset;
+            loans.push({
+              identifier: `${symbol} - ${truncateAddress(address, 6)}`,
+              protocol: DefiProtocol.AAVE,
+              owner: address,
+              asset
+            });
+            knownAssets.push(asset);
+          }
+        }
+
+        for (const address in aaveHistory) {
+          const { events } = aaveHistory[address];
+          const borrowEvents: string[] = Object.values(AaveBorrowingEventType);
+          const historyAssets = events
+            .filter(e => borrowEvents.includes(e.eventType))
+            .map(event =>
+              isAaveLiquidationEvent(event) ? event.principalAsset : event.asset
+            )
+            .filter(uniqueStrings)
+            .filter(asset => !knownAssets.includes(asset));
+
+          for (const asset of historyAssets) {
+            const symbol = assetInfo(asset)?.symbol ?? asset;
+            loans.push({
+              identifier: `${symbol} - ${truncateAddress(address, 6)}`,
+              protocol: DefiProtocol.AAVE,
+              owner: address,
+              asset
+            });
+          }
         }
       }
-    }
 
-    if (showAll || protocols.includes(DEFI_COMPOUND)) {
-      const assetAddressPair = events
-        .filter(
-          ({ eventType }) => !['mint', 'redeem', 'comp'].includes(eventType)
-        )
-        .map(({ asset, address }) => ({ asset, address }));
+      if (showAll || protocols.includes(DefiProtocol.COMPOUND)) {
+        const assetAddressPair = events
+          .filter(
+            ({ eventType }) => !['mint', 'redeem', 'comp'].includes(eventType)
+          )
+          .map(({ asset, address }) => ({ asset, address }));
 
-      for (const address of Object.keys(compoundBalances)) {
-        const { borrowing } = compoundBalances[address];
-        const assets = Object.keys(borrowing);
+        for (const address of Object.keys(compoundBalances)) {
+          const { borrowing } = compoundBalances[address];
+          const assets = Object.keys(borrowing);
 
-        if (assets.length === 0) {
-          continue;
+          if (assets.length === 0) {
+            continue;
+          }
+
+          for (const asset of assets) {
+            assetAddressPair.push({ asset, address });
+          }
         }
-
-        for (const asset of assets) {
-          assetAddressPair.push({ asset, address });
-        }
-      }
-      assetAddressPair
-        .filter(
-          (value, index, array) =>
-            array.findIndex(
-              ({ address, asset }) =>
-                value.asset === asset && value.address === address
-            ) === index
-        )
-        .forEach(({ address, asset }) => {
-          loans.push({
-            identifier: `${asset} - ${truncateAddress(address, 6)}`,
-            protocol: DEFI_COMPOUND,
-            owner: address,
-            asset
+        assetAddressPair
+          .filter(
+            (value, index, array) =>
+              array.findIndex(
+                ({ address, asset }) =>
+                  value.asset === asset && value.address === address
+              ) === index
+          )
+          .forEach(({ address, asset }) => {
+            loans.push({
+              identifier: `${asset} - ${truncateAddress(address, 6)}`,
+              protocol: DefiProtocol.COMPOUND,
+              owner: address,
+              asset
+            });
           });
-        });
-    }
+      }
 
-    return sortBy(loans, 'identifier');
-  },
+      if (showAll || protocols.includes(DefiProtocol.LIQUITY)) {
+        assert(liquity);
+        const { events, balances } = liquity;
+        const balanceAddress = Object.keys(balances);
+        const eventAddresses = Object.keys(events);
 
-  loan: (
-    {
-      makerDAOVaults,
-      makerDAOVaultDetails,
-      aaveBalances,
-      aaveHistory,
-      compoundBalances,
-      compoundHistory: { events }
-    }: DefiState,
-    { loans }
-  ) => (
-    identifier?: string
-  ): MakerDAOVaultModel | AaveLoan | CompoundLoan | null => {
-    const id = identifier?.toLocaleLowerCase();
-    const loan = loans([]).find(
-      loan => loan.identifier.toLocaleLowerCase() === id
-    );
+        loans.push(
+          ...[...balanceAddress, ...eventAddresses]
+            .filter(uniqueStrings)
+            .map(address => {
+              let troveId = 0;
+              if (balances[address]) {
+                troveId = balances[address].troveId;
+              }
+              return {
+                identifier: `Trove ${troveId} - ${truncateAddress(address, 6)}`,
+                protocol: DefiProtocol.LIQUITY,
+                owner: address,
+                asset: ''
+              };
+            })
+        );
+      }
 
-    if (!loan) {
-      return null;
-    }
+      return sortBy(loans, 'identifier');
+    },
 
-    if (loan.protocol === DEFI_MAKERDAO) {
-      const vault = makerDAOVaults.find(
-        vault => vault.identifier.toString().toLocaleLowerCase() === id
+  loan:
+    (
+      {
+        makerDAOVaults,
+        makerDAOVaultDetails,
+        aaveBalances,
+        aaveHistory,
+        compoundBalances,
+        compoundHistory: { events },
+        liquity
+      }: DefiState,
+      { loans }
+    ) =>
+    (
+      identifier?: string
+    ): MakerDAOVaultModel | AaveLoan | CompoundLoan | LiquityLoan | null => {
+      const id = identifier?.toLocaleLowerCase();
+      const loan = loans([]).find(
+        loan => loan.identifier.toLocaleLowerCase() === id
       );
 
-      if (!vault) {
+      if (!loan) {
         return null;
       }
 
-      const details = makerDAOVaultDetails.find(
-        details => details.identifier.toString().toLocaleLowerCase() === id
-      );
-
-      return details ? { ...vault, ...details, asset: 'DAI' } : vault;
-    }
-
-    if (loan.protocol === DEFI_AAVE) {
-      const owner = loan.owner ?? '';
-      const asset = loan.asset ?? '';
-
-      let selectedLoan = {
-        stableApr: '-',
-        variableApr: '-',
-        balance: { amount: Zero, usdValue: Zero }
-      };
-      let lending: AaveLending = {};
-      if (aaveBalances[owner]) {
-        const balances = aaveBalances[owner];
-        selectedLoan = balances.borrowing[asset] ?? selectedLoan;
-        lending = balances.lending ?? lending;
-      }
-
-      const lost: Writeable<AaveHistoryTotal> = {};
-      const liquidationEarned: Writeable<AaveHistoryTotal> = {};
-      const events: AaveHistoryEvents[] = [];
-      if (aaveHistory[owner]) {
-        const {
-          totalLost,
-          events: allEvents,
-          totalEarnedLiquidations
-        } = aaveHistory[owner];
-
-        for (const event of allEvents) {
-          if (event.eventType !== DEFI_EVENT_LIQUIDATION) {
-            continue;
-          }
-
-          if (event.principalAsset !== asset) {
-            continue;
-          }
-
-          const collateralAsset = event.collateralAsset;
-
-          if (!lost[collateralAsset] && totalLost[collateralAsset]) {
-            lost[collateralAsset] = totalLost[collateralAsset];
-          }
-
-          if (
-            !liquidationEarned[collateralAsset] &&
-            totalEarnedLiquidations[collateralAsset]
-          ) {
-            liquidationEarned[collateralAsset] =
-              totalEarnedLiquidations[collateralAsset];
-          }
-        }
-
-        if (totalLost[asset]) {
-          lost[asset] = totalLost[asset];
-        }
-        if (!liquidationEarned[asset] && totalEarnedLiquidations[asset]) {
-          liquidationEarned[asset] = totalEarnedLiquidations[asset];
-        }
-
-        events.push(
-          ...allEvents.filter(event => {
-            let isAsset: boolean;
-            if (event.eventType !== DEFI_EVENT_LIQUIDATION) {
-              isAsset = event.asset === asset;
-            } else {
-              isAsset = event.principalAsset === asset;
-            }
-            return (
-              isAsset &&
-              AAVE_BORROWING_EVENTS.find(
-                eventType => eventType === event.eventType
-              )
-            );
-          })
+      if (loan.protocol === DefiProtocol.MAKERDAO_VAULTS) {
+        const vault = makerDAOVaults.find(
+          vault => vault.identifier.toString().toLocaleLowerCase() === id
         );
+
+        if (!vault) {
+          return null;
+        }
+
+        const details = makerDAOVaultDetails.find(
+          details => details.identifier.toString().toLocaleLowerCase() === id
+        );
+
+        return details ? { ...vault, ...details, asset: 'DAI' } : vault;
       }
 
-      return {
-        asset,
-        owner,
-        protocol: loan.protocol,
-        identifier: loan.identifier,
-        stableApr: selectedLoan.stableApr,
-        variableApr: selectedLoan.variableApr,
-        debt: {
-          amount: selectedLoan.balance.amount,
-          usdValue: selectedLoan.balance.usdValue
-        },
-        collateral: Object.keys(lending).map(asset => ({
+      if (loan.protocol === DefiProtocol.AAVE) {
+        const owner = loan.owner ?? '';
+        const asset = loan.asset ?? '';
+
+        let selectedLoan = {
+          stableApr: '-',
+          variableApr: '-',
+          balance: { amount: Zero, usdValue: Zero }
+        };
+        let lending: AaveLending = {};
+        if (aaveBalances[owner]) {
+          const balances = aaveBalances[owner];
+          selectedLoan = balances.borrowing[asset] ?? selectedLoan;
+          lending = balances.lending ?? lending;
+        }
+
+        const lost: Writeable<AaveHistoryTotal> = {};
+        const liquidationEarned: Writeable<AaveHistoryTotal> = {};
+        const events: AaveHistoryEvents[] = [];
+        if (aaveHistory[owner]) {
+          const {
+            totalLost,
+            events: allEvents,
+            totalEarnedLiquidations
+          } = aaveHistory[owner];
+
+          for (const event of allEvents) {
+            if (!isAaveLiquidationEvent(event)) {
+              continue;
+            }
+
+            if (event.principalAsset !== asset) {
+              continue;
+            }
+
+            const collateralAsset = event.collateralAsset;
+
+            if (!lost[collateralAsset] && totalLost[collateralAsset]) {
+              lost[collateralAsset] = totalLost[collateralAsset];
+            }
+
+            if (
+              !liquidationEarned[collateralAsset] &&
+              totalEarnedLiquidations[collateralAsset]
+            ) {
+              liquidationEarned[collateralAsset] =
+                totalEarnedLiquidations[collateralAsset];
+            }
+          }
+
+          if (totalLost[asset]) {
+            lost[asset] = totalLost[asset];
+          }
+          if (!liquidationEarned[asset] && totalEarnedLiquidations[asset]) {
+            liquidationEarned[asset] = totalEarnedLiquidations[asset];
+          }
+
+          events.push(
+            ...allEvents.filter(event => {
+              const isAsset: boolean = !isAaveLiquidationEvent(event)
+                ? event.asset === asset
+                : event.principalAsset === asset;
+              return (
+                isAsset &&
+                Object.values(AaveBorrowingEventType).find(
+                  eventType => eventType === event.eventType
+                )
+              );
+            })
+          );
+        }
+
+        return {
           asset,
-          ...lending[asset].balance
-        })),
-        totalLost: lost,
-        liquidationEarned: liquidationEarned,
-        events
-      } as AaveLoan;
-    }
-
-    if (loan.protocol === DEFI_COMPOUND) {
-      const owner = loan.owner ?? '';
-      const asset = loan.asset ?? '';
-
-      let apy: string = '0%';
-      let debt: Balance = { amount: Zero, usdValue: Zero };
-      let collateral: Collateral<string>[] = [];
-
-      if (compoundBalances[owner]) {
-        const { borrowing, lending } = compoundBalances[owner];
-        const selectedLoan = borrowing[asset];
-
-        if (selectedLoan) {
-          apy = selectedLoan.apy;
-          debt = selectedLoan.balance;
-          collateral = Object.keys(lending).map(asset => ({
+          owner,
+          protocol: loan.protocol,
+          identifier: loan.identifier,
+          stableApr: selectedLoan.stableApr,
+          variableApr: selectedLoan.variableApr,
+          debt: {
+            amount: selectedLoan.balance.amount,
+            usdValue: selectedLoan.balance.usdValue
+          },
+          collateral: Object.keys(lending).map(asset => ({
             asset,
             ...lending[asset].balance
-          }));
+          })),
+          totalLost: lost,
+          liquidationEarned: liquidationEarned,
+          events
+        } as AaveLoan;
+      }
+
+      if (loan.protocol === DefiProtocol.COMPOUND) {
+        const owner = loan.owner ?? '';
+        const asset = loan.asset ?? '';
+
+        let apy: string = '0%';
+        let debt: Balance = { amount: Zero, usdValue: Zero };
+        let collateral: Collateral<string>[] = [];
+
+        if (compoundBalances[owner]) {
+          const { borrowing, lending } = compoundBalances[owner];
+          const selectedLoan = borrowing[asset];
+
+          if (selectedLoan) {
+            apy = selectedLoan.apy;
+            debt = selectedLoan.balance;
+            collateral = Object.keys(lending).map(asset => ({
+              asset,
+              ...lending[asset].balance
+            }));
+          }
         }
-      }
 
-      return {
-        asset,
-        owner,
-        protocol: loan.protocol,
-        identifier: loan.identifier,
-        apy,
-        debt,
-        collateral,
-        events: events
-          .filter(event => event.asset === asset || event.eventType === 'comp')
-          .filter(({ address }) => address === owner)
-          .filter(({ eventType }) => !['mint', 'redeem'].includes(eventType))
-          .map(value => ({ ...value, id: `${value.txHash}-${value.logIndex}` }))
-      } as CompoundLoan;
-    }
-
-    return null;
-  },
-
-  loanSummary: ({
-    makerDAOVaults,
-    aaveBalances,
-    compoundBalances
-  }: DefiState) => (protocols: SupportedDefiProtocols[]): LoanSummary => {
-    let totalCollateralUsd = Zero;
-    let totalDebt = Zero;
-
-    const showAll = protocols.length === 0;
-    if (showAll || protocols.includes(DEFI_MAKERDAO)) {
-      totalCollateralUsd = makerDAOVaults
-        .map(({ collateral: { usdValue } }) => usdValue)
-        .reduce((sum, collateralUsdValue) => sum.plus(collateralUsdValue), Zero)
-        .plus(totalCollateralUsd);
-
-      totalDebt = makerDAOVaults
-        .map(({ debt: { usdValue } }) => usdValue)
-        .reduce((sum, debt) => sum.plus(debt), Zero)
-        .plus(totalDebt);
-    }
-
-    if (showAll || protocols.includes(DEFI_AAVE)) {
-      for (const address of Object.keys(aaveBalances)) {
-        const { borrowing, lending } = aaveBalances[address];
-        totalCollateralUsd = balanceUsdValueSum(Object.values(lending)).plus(
-          totalCollateralUsd
-        );
-
-        totalDebt = balanceUsdValueSum(Object.values(borrowing)).plus(
-          totalDebt
-        );
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_COMPOUND)) {
-      for (const address of Object.keys(compoundBalances)) {
-        const { borrowing, lending } = compoundBalances[address];
-        totalCollateralUsd = balanceUsdValueSum(Object.values(lending)).plus(
-          totalCollateralUsd
-        );
-
-        totalDebt = balanceUsdValueSum(Object.values(borrowing)).plus(
-          totalDebt
-        );
-      }
-    }
-
-    return { totalCollateralUsd, totalDebt };
-  },
-
-  effectiveInterestRate: (_, { lendingBalances, yearnVaultsAssets }) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): string => {
-    let { usdValue, weight } = lendingBalances(protocols, addresses)
-      .filter(({ balance }) => balance.usdValue.gt(0))
-      .map(({ effectiveInterestRate, balance: { usdValue } }) => {
-        const n = parseFloat(effectiveInterestRate);
         return {
-          weight: usdValue.multipliedBy(n),
-          usdValue
-        };
-      })
-      .reduce(
-        (sum, current) => ({
-          weight: sum.weight.plus(current.weight),
-          usdValue: sum.usdValue.plus(current.usdValue)
-        }),
-        {
-          weight: Zero,
-          usdValue: Zero
+          asset,
+          owner,
+          protocol: loan.protocol,
+          identifier: loan.identifier,
+          apy,
+          debt,
+          collateral,
+          events: events
+            .filter(
+              event => event.asset === asset || event.eventType === 'comp'
+            )
+            .filter(({ address }) => address === owner)
+            .filter(({ eventType }) => !['mint', 'redeem'].includes(eventType))
+            .map(value => ({
+              ...value,
+              id: `${value.txHash}-${value.logIndex}`
+            }))
+        } as CompoundLoan;
+      }
+
+      if (loan.protocol === DefiProtocol.LIQUITY) {
+        assert(liquity);
+        assert(loan.owner);
+        const { owner } = loan;
+        const { balances, events } = liquity;
+
+        return {
+          owner: owner,
+          protocol: loan.protocol,
+          balance: balances[owner],
+          events: events[owner] ?? []
+        } as LiquityLoan;
+      }
+
+      return null;
+    },
+
+  loanSummary:
+    ({ makerDAOVaults, aaveBalances, compoundBalances, liquity }: DefiState) =>
+    (protocols: DefiProtocol[]): LoanSummary => {
+      let totalCollateralUsd = Zero;
+      let totalDebt = Zero;
+
+      const showAll = protocols.length === 0;
+      if (showAll || protocols.includes(DefiProtocol.MAKERDAO_VAULTS)) {
+        totalCollateralUsd = makerDAOVaults
+          .map(({ collateral: { usdValue } }) => usdValue)
+          .reduce(
+            (sum, collateralUsdValue) => sum.plus(collateralUsdValue),
+            Zero
+          )
+          .plus(totalCollateralUsd);
+
+        totalDebt = makerDAOVaults
+          .map(({ debt: { usdValue } }) => usdValue)
+          .reduce((sum, debt) => sum.plus(debt), Zero)
+          .plus(totalDebt);
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.AAVE)) {
+        for (const address of Object.keys(aaveBalances)) {
+          const { borrowing, lending } = aaveBalances[address];
+          totalCollateralUsd = balanceUsdValueSum(Object.values(lending)).plus(
+            totalCollateralUsd
+          );
+
+          totalDebt = balanceUsdValueSum(Object.values(borrowing)).plus(
+            totalDebt
+          );
         }
-      );
+      }
 
-    if (protocols.length === 0 || protocols.includes(DEFI_YEARN_VAULTS)) {
-      const { usdValue: yUsdValue, weight: yWeight } = yearnVaultsAssets([])
-        .filter(({ underlyingValue }) => underlyingValue.usdValue.gt(Zero))
-        .map(({ underlyingValue: { usdValue }, roi }) => ({
-          usdValue: usdValue,
-          weight: usdValue.multipliedBy(parseFloat(roi))
-        }))
-        .reduce(
-          ({ usdValue, weight: sWeight }, current) => ({
-            weight: sWeight.plus(current.weight),
-            usdValue: usdValue.plus(current.usdValue)
-          }),
-          { weight: Zero, usdValue: Zero }
-        );
+      if (showAll || protocols.includes(DefiProtocol.COMPOUND)) {
+        for (const address of Object.keys(compoundBalances)) {
+          const { borrowing, lending } = compoundBalances[address];
+          totalCollateralUsd = balanceUsdValueSum(Object.values(lending)).plus(
+            totalCollateralUsd
+          );
 
-      usdValue = usdValue.plus(yUsdValue);
-      weight = weight.plus(yWeight);
-    }
-
-    const effectiveInterestRate = weight.div(usdValue);
-    return effectiveInterestRate.isNaN()
-      ? '0.00%'
-      : `${effectiveInterestRate.toFormat(2)}%`;
-  },
-
-  totalLendingDeposit: (
-    _: DefiState,
-    { lendingBalances, yearnVaultsAssets }
-  ) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): BigNumber => {
-    let lendingDeposit = lendingBalances(protocols, addresses)
-      .map(value => value.balance.usdValue)
-      .reduce((sum, usdValue) => sum.plus(usdValue), Zero);
-
-    if (protocols.length === 0 || protocols.includes(DEFI_YEARN_VAULTS)) {
-      lendingDeposit = lendingDeposit.plus(
-        yearnVaultsAssets(addresses)
-          .map(value => value.underlyingValue.usdValue)
-          .reduce((sum, usdValue) => sum.plus(usdValue), Zero)
-      );
-    }
-    return lendingDeposit;
-  },
-
-  aggregatedLendingBalances: (_, { lendingBalances }) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): BaseDefiBalance[] => {
-    const balances = lendingBalances(protocols, addresses).reduce(
-      (grouped, { address, protocol, ...baseBalance }) => {
-        const { asset } = baseBalance;
-        if (!grouped[asset]) {
-          grouped[asset] = [baseBalance];
-        } else {
-          grouped[asset].push(baseBalance);
+          totalDebt = balanceUsdValueSum(Object.values(borrowing)).plus(
+            totalDebt
+          );
         }
+      }
 
-        return grouped;
-      },
-      {} as { [asset: string]: BaseDefiBalance[] }
-    );
+      if (showAll || protocols.includes(DefiProtocol.LIQUITY)) {
+        const balances = liquity!!.balances;
+        for (const address in balances) {
+          const balance = balances[address];
+          const { collateral, debt } = balance;
+          totalCollateralUsd = collateral.usdValue.plus(totalCollateralUsd);
+          totalDebt = debt.usdValue.plus(totalDebt);
+        }
+      }
 
-    const aggregated: BaseDefiBalance[] = [];
+      return { totalCollateralUsd, totalDebt };
+    },
 
-    for (const asset in balances) {
-      const { weight, amount, usdValue } = balances[asset]
-        .map(({ effectiveInterestRate, balance: { usdValue, amount } }) => {
+  effectiveInterestRate:
+    (_, { lendingBalances, yearnVaultsAssets }) =>
+    (protocols: DefiProtocol[], addresses: string[]): string => {
+      let { usdValue, weight } = lendingBalances(protocols, addresses)
+        .filter(({ balance }) => balance.usdValue.gt(0))
+        .map(({ effectiveInterestRate, balance: { usdValue } }) => {
+          const n = parseFloat(effectiveInterestRate);
           return {
-            weight: usdValue.multipliedBy(parseFloat(effectiveInterestRate)),
-            usdValue,
-            amount
+            weight: usdValue.multipliedBy(n),
+            usdValue
           };
         })
         .reduce(
           (sum, current) => ({
             weight: sum.weight.plus(current.weight),
-            usdValue: sum.usdValue.plus(current.usdValue),
-            amount: sum.amount.plus(current.amount)
+            usdValue: sum.usdValue.plus(current.usdValue)
           }),
           {
             weight: Zero,
-            usdValue: Zero,
-            amount: Zero
+            usdValue: Zero
           }
         );
 
+      function yearnData(version: ProtocolVersion = ProtocolVersion.V1): {
+        weight: BigNumber;
+        usdValue: BigNumber;
+      } {
+        return yearnVaultsAssets([], version)
+          .filter(({ underlyingValue }) => underlyingValue.usdValue.gt(Zero))
+          .map(({ underlyingValue: { usdValue }, roi }) => ({
+            usdValue: usdValue,
+            weight: usdValue.multipliedBy(parseFloat(roi))
+          }))
+          .reduce(
+            ({ usdValue, weight: sWeight }, current) => ({
+              weight: sWeight.plus(current.weight),
+              usdValue: usdValue.plus(current.usdValue)
+            }),
+            { weight: Zero, usdValue: Zero }
+          );
+      }
+
+      if (
+        protocols.length === 0 ||
+        protocols.includes(DefiProtocol.YEARN_VAULTS)
+      ) {
+        const { usdValue: yUsdValue, weight: yWeight } = yearnData();
+        usdValue = usdValue.plus(yUsdValue);
+        weight = weight.plus(yWeight);
+      }
+
+      if (
+        protocols.length === 0 ||
+        protocols.includes(DefiProtocol.YEARN_VAULTS_V2)
+      ) {
+        const { usdValue: yUsdValue, weight: yWeight } = yearnData();
+        usdValue = usdValue.plus(yUsdValue);
+        weight = weight.plus(yWeight);
+      }
+
       const effectiveInterestRate = weight.div(usdValue);
+      return effectiveInterestRate.isNaN()
+        ? '0.00%'
+        : `${effectiveInterestRate.toFormat(2)}%`;
+    },
 
-      aggregated.push({
-        asset,
-        balance: {
-          amount,
-          usdValue
+  totalLendingDeposit:
+    (_: DefiState, { lendingBalances, yearnVaultsAssets }) =>
+    (protocols: DefiProtocol[], addresses: string[]): BigNumber => {
+      let lendingDeposit = lendingBalances(protocols, addresses)
+        .map(value => value.balance.usdValue)
+        .reduce((sum, usdValue) => sum.plus(usdValue), Zero);
+
+      function getYearnDeposit(version: ProtocolVersion = ProtocolVersion.V1) {
+        return yearnVaultsAssets(addresses, version)
+          .map(value => value.underlyingValue.usdValue)
+          .reduce((sum, usdValue) => sum.plus(usdValue), Zero);
+      }
+
+      if (
+        protocols.length === 0 ||
+        protocols.includes(DefiProtocol.YEARN_VAULTS)
+      ) {
+        lendingDeposit = lendingDeposit.plus(getYearnDeposit());
+      }
+
+      if (
+        protocols.length === 0 ||
+        protocols.includes(DefiProtocol.YEARN_VAULTS_V2)
+      ) {
+        lendingDeposit = lendingDeposit.plus(
+          getYearnDeposit(ProtocolVersion.V2)
+        );
+      }
+
+      return lendingDeposit;
+    },
+
+  aggregatedLendingBalances:
+    (_, { lendingBalances }) =>
+    (protocols: DefiProtocol[], addresses: string[]): BaseDefiBalance[] => {
+      const balances = lendingBalances(protocols, addresses).reduce(
+        (grouped, { address, protocol, ...baseBalance }) => {
+          const { asset } = baseBalance;
+          if (!grouped[asset]) {
+            grouped[asset] = [baseBalance];
+          } else {
+            grouped[asset].push(baseBalance);
+          }
+
+          return grouped;
         },
-        effectiveInterestRate: effectiveInterestRate.isNaN()
-          ? '0.00%'
-          : `${effectiveInterestRate.toFormat(2)}%`
-      });
-    }
-    return aggregated;
-  },
+        {} as { [asset: string]: BaseDefiBalance[] }
+      );
 
-  lendingBalances: (
-    { dsrBalances, aaveBalances, compoundBalances }: DefiState,
-    _dg,
-    _rs,
-    { 'balances/getIdentifierForSymbol': getIdentifierForSymbol }
-  ) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): DefiBalance[] => {
-    const balances: DefiBalance[] = [];
-    const showAll = protocols.length === 0;
-    const allAddresses = addresses.length === 0;
+      const aggregated: BaseDefiBalance[] = [];
 
-    if (showAll || protocols.includes(DEFI_MAKERDAO)) {
-      for (const address of Object.keys(dsrBalances.balances)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const balance = dsrBalances.balances[address];
-        const currentDsr = dsrBalances.currentDsr;
-        // noinspection SuspiciousTypeOfGuard
-        const isBigNumber = currentDsr instanceof BigNumber;
-        const format = isBigNumber ? currentDsr.toFormat(2) : 0;
-        balances.push({
-          address,
-          protocol: DEFI_MAKERDAO,
-          asset: getIdentifierForSymbol('DAI'),
-          balance: { ...balance },
-          effectiveInterestRate: `${format}%`
+      for (const asset in balances) {
+        const { weight, amount, usdValue } = balances[asset]
+          .map(({ effectiveInterestRate, balance: { usdValue, amount } }) => {
+            return {
+              weight: usdValue.multipliedBy(parseFloat(effectiveInterestRate)),
+              usdValue,
+              amount
+            };
+          })
+          .reduce(
+            (sum, current) => ({
+              weight: sum.weight.plus(current.weight),
+              usdValue: sum.usdValue.plus(current.usdValue),
+              amount: sum.amount.plus(current.amount)
+            }),
+            {
+              weight: Zero,
+              usdValue: Zero,
+              amount: Zero
+            }
+          );
+
+        const effectiveInterestRate = weight.div(usdValue);
+
+        aggregated.push({
+          asset,
+          balance: {
+            amount,
+            usdValue
+          },
+          effectiveInterestRate: effectiveInterestRate.isNaN()
+            ? '0.00%'
+            : `${effectiveInterestRate.toFormat(2)}%`
         });
       }
-    }
+      return aggregated;
+    },
 
-    if (showAll || protocols.includes(DEFI_AAVE)) {
-      for (const address of Object.keys(aaveBalances)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const { lending } = aaveBalances[address];
+  lendingBalances:
+    (
+      { dsrBalances, aaveBalances, compoundBalances }: DefiState,
+      _dg,
+      _rs,
+      { 'balances/getIdentifierForSymbol': getIdentifierForSymbol }
+    ) =>
+    (protocols: DefiProtocol[], addresses: string[]): DefiBalance[] => {
+      const balances: DefiBalance[] = [];
+      const showAll = protocols.length === 0;
+      const allAddresses = addresses.length === 0;
 
-        for (const asset of Object.keys(lending)) {
-          const aaveAsset = lending[asset];
+      if (showAll || protocols.includes(DefiProtocol.MAKERDAO_DSR)) {
+        for (const address of Object.keys(dsrBalances.balances)) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+          const balance = dsrBalances.balances[address];
+          const currentDsr = dsrBalances.currentDsr;
+          // noinspection SuspiciousTypeOfGuard
+          const isBigNumber = currentDsr instanceof BigNumber;
+          const format = isBigNumber ? currentDsr.toFormat(2) : 0;
           balances.push({
             address,
-            protocol: DEFI_AAVE,
-            asset,
-            effectiveInterestRate: aaveAsset.apy,
-            balance: { ...aaveAsset.balance }
-          });
-        }
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_COMPOUND)) {
-      for (const address of Object.keys(compoundBalances)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const { lending } = compoundBalances[address];
-        for (const asset of Object.keys(lending)) {
-          const assetDetails = lending[asset];
-          balances.push({
-            address,
-            protocol: DEFI_COMPOUND,
-            asset,
-            effectiveInterestRate: assetDetails.apy ?? '0%',
-            balance: { ...assetDetails.balance }
-          });
-        }
-      }
-    }
-
-    return sortBy(balances, 'asset');
-  },
-
-  lendingHistory: (
-    { dsrHistory, aaveHistory, compoundHistory, yearnVaultsHistory }: DefiState,
-    _dg,
-    _rs,
-    { 'balances/getIdentifierForSymbol': getIdentifierForSymbol }
-  ) => (
-    protocols: SupportedDefiProtocols[],
-    addresses: string[]
-  ): DefiLendingHistory<SupportedDefiProtocols>[] => {
-    const defiLendingHistory: DefiLendingHistory<SupportedDefiProtocols>[] = [];
-    const showAll = protocols.length === 0;
-    const allAddresses = addresses.length === 0;
-    let id = 1;
-
-    if (showAll || protocols.includes(DEFI_MAKERDAO)) {
-      for (const address of Object.keys(dsrHistory)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-
-        const history = dsrHistory[address];
-
-        for (const movement of history.movements) {
-          defiLendingHistory.push({
-            id: `${movement.txHash}-${id++}`,
-            eventType: movement.movementType,
-            protocol: DEFI_MAKERDAO,
-            address,
+            protocol: DefiProtocol.MAKERDAO_DSR,
             asset: getIdentifierForSymbol('DAI'),
-            value: movement.value,
-            blockNumber: movement.blockNumber,
-            timestamp: movement.timestamp,
-            txHash: movement.txHash,
-            extras: {
-              gainSoFar: movement.gainSoFar
-            }
+            balance: { ...balance },
+            effectiveInterestRate: `${format}%`
           });
         }
       }
-    }
 
-    if (showAll || protocols.includes(DEFI_AAVE)) {
-      for (const address of Object.keys(aaveHistory)) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
+      if (showAll || protocols.includes(DefiProtocol.AAVE)) {
+        for (const address of Object.keys(aaveBalances)) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+          const { lending } = aaveBalances[address];
+
+          for (const asset of Object.keys(lending)) {
+            const aaveAsset = lending[asset];
+            balances.push({
+              address,
+              protocol: DefiProtocol.AAVE,
+              asset,
+              effectiveInterestRate: aaveAsset.apy,
+              balance: { ...aaveAsset.balance }
+            });
+          }
         }
+      }
 
-        const history = aaveHistory[address];
+      if (showAll || protocols.includes(DefiProtocol.COMPOUND)) {
+        for (const address of Object.keys(compoundBalances)) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+          const { lending } = compoundBalances[address];
+          for (const asset of Object.keys(lending)) {
+            const assetDetails = lending[asset];
+            balances.push({
+              address,
+              protocol: DefiProtocol.COMPOUND,
+              asset,
+              effectiveInterestRate: assetDetails.apy ?? '0%',
+              balance: { ...assetDetails.balance }
+            });
+          }
+        }
+      }
 
-        for (const event of history.events) {
-          if (!isLendingEvent(event)) {
+      return sortBy(balances, 'asset');
+    },
+
+  lendingHistory:
+    (
+      {
+        dsrHistory,
+        aaveHistory,
+        compoundHistory,
+        yearnVaultsHistory,
+        yearnVaultsV2History
+      }: DefiState,
+      _dg,
+      _rs,
+      { 'balances/getIdentifierForSymbol': getIdentifierForSymbol }
+    ) =>
+    (
+      protocols: DefiProtocol[],
+      addresses: string[]
+    ): DefiLendingHistory<DefiProtocol>[] => {
+      const defiLendingHistory: DefiLendingHistory<DefiProtocol>[] = [];
+      const showAll = protocols.length === 0;
+      const allAddresses = addresses.length === 0;
+      let id = 1;
+
+      if (showAll || protocols.includes(DefiProtocol.MAKERDAO_DSR)) {
+        for (const address of Object.keys(dsrHistory)) {
+          if (!allAddresses && !addresses.includes(address)) {
             continue;
           }
 
-          const items = {
+          const history = dsrHistory[address];
+
+          for (const movement of history.movements) {
+            defiLendingHistory.push({
+              id: `${movement.txHash}-${id++}`,
+              eventType: movement.movementType,
+              protocol: DefiProtocol.MAKERDAO_DSR,
+              address,
+              asset: getIdentifierForSymbol('DAI'),
+              value: movement.value,
+              blockNumber: movement.blockNumber,
+              timestamp: movement.timestamp,
+              txHash: movement.txHash,
+              extras: {
+                gainSoFar: movement.gainSoFar
+              }
+            });
+          }
+        }
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.AAVE)) {
+        for (const address of Object.keys(aaveHistory)) {
+          if (!allAddresses && !addresses.includes(address)) {
+            continue;
+          }
+
+          const history = aaveHistory[address];
+
+          for (const event of history.events) {
+            if (!isLendingEvent(event)) {
+              continue;
+            }
+
+            const items = {
+              id: `${event.txHash}-${event.logIndex}`,
+              eventType: event.eventType,
+              protocol: DefiProtocol.AAVE,
+              address,
+              asset: event.asset,
+              atoken: event.atoken,
+              value: event.value,
+              blockNumber: event.blockNumber,
+              timestamp: event.timestamp,
+              txHash: event.txHash,
+              extras: {}
+            } as DefiLendingHistory<typeof DefiProtocol.AAVE>;
+            defiLendingHistory.push(items);
+          }
+        }
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.COMPOUND)) {
+        for (const event of compoundHistory.events) {
+          if (!allAddresses && !addresses.includes(event.address)) {
+            continue;
+          }
+          if (!['mint', 'redeem', 'comp'].includes(event.eventType)) {
+            continue;
+          }
+
+          const item = {
             id: `${event.txHash}-${event.logIndex}`,
             eventType: event.eventType,
-            protocol: DEFI_AAVE,
-            address,
+            protocol: DefiProtocol.COMPOUND,
+            address: event.address,
             asset: event.asset,
-            atoken: event.atoken,
             value: event.value,
             blockNumber: event.blockNumber,
             timestamp: event.timestamp,
             txHash: event.txHash,
-            extras: {}
-          } as DefiLendingHistory<typeof DEFI_AAVE>;
-          defiLendingHistory.push(items);
+            extras: {
+              eventType: event.eventType,
+              asset: event.asset,
+              value: event.value,
+              toAsset: event.toAsset,
+              toValue: event.toValue,
+              realizedPnl: event.realizedPnl
+            }
+          } as DefiLendingHistory<typeof DefiProtocol.COMPOUND>;
+          defiLendingHistory.push(item);
         }
       }
-    }
 
-    if (showAll || protocols.includes(DEFI_COMPOUND)) {
-      for (const event of compoundHistory.events) {
-        if (!allAddresses && !addresses.includes(event.address)) {
-          continue;
-        }
-        if (!['mint', 'redeem', 'comp'].includes(event.eventType)) {
-          continue;
-        }
-
-        const item = {
-          id: `${event.txHash}-${event.logIndex}`,
-          eventType: event.eventType,
-          protocol: DEFI_COMPOUND,
-          address: event.address,
-          asset: event.asset,
-          value: event.value,
-          blockNumber: event.blockNumber,
-          timestamp: event.timestamp,
-          txHash: event.txHash,
-          extras: {
-            eventType: event.eventType,
-            asset: event.asset,
-            value: event.value,
-            toAsset: event.toAsset,
-            toValue: event.toValue,
-            realizedPnl: event.realizedPnl
-          }
-        } as DefiLendingHistory<typeof DEFI_COMPOUND>;
-        defiLendingHistory.push(item);
-      }
-    }
-
-    if (showAll || protocols.includes(DEFI_YEARN_VAULTS)) {
-      for (const address in yearnVaultsHistory) {
-        if (!allAddresses && !addresses.includes(address)) {
-          continue;
-        }
-        const history = yearnVaultsHistory[address];
-
-        for (const vault in history) {
-          const data = history[vault as SupportedYearnVault];
-          if (!data || !data.events || data.events.length === 0) {
+      function yearnHistory(version: ProtocolVersion = ProtocolVersion.V1) {
+        const isV1 = version === ProtocolVersion.V1;
+        const vaultsHistory = isV1 ? yearnVaultsHistory : yearnVaultsV2History;
+        for (const address in vaultsHistory) {
+          if (!allAddresses && !addresses.includes(address)) {
             continue;
           }
-          for (const event of data.events) {
-            const item = {
-              id: `${event.txHash}-${event.logIndex}`,
-              eventType: event.eventType,
-              protocol: DEFI_YEARN_VAULTS,
-              address: address,
-              asset: event.fromAsset,
-              value: event.fromValue,
-              blockNumber: event.blockNumber,
-              timestamp: event.timestamp,
-              txHash: event.txHash,
-              extras: {
+          const history = vaultsHistory[address];
+
+          for (const vault in history) {
+            const data = history[vault];
+            if (!data || !data.events || data.events.length === 0) {
+              continue;
+            }
+            for (const event of data.events) {
+              const item = {
+                id: `${event.txHash}-${event.logIndex}`,
                 eventType: event.eventType,
+                protocol: isV1
+                  ? DefiProtocol.YEARN_VAULTS
+                  : DefiProtocol.YEARN_VAULTS_V2,
+                address: address,
                 asset: event.fromAsset,
                 value: event.fromValue,
-                toAsset: event.toAsset,
-                toValue: event.toValue,
-                realizedPnl: event.realizedPnl
-              }
-            } as DefiLendingHistory<typeof DEFI_YEARN_VAULTS>;
-            defiLendingHistory.push(item);
+                blockNumber: event.blockNumber,
+                timestamp: event.timestamp,
+                txHash: event.txHash,
+                extras: {
+                  eventType: event.eventType,
+                  asset: event.fromAsset,
+                  value: event.fromValue,
+                  toAsset: event.toAsset,
+                  toValue: event.toValue,
+                  realizedPnl: event.realizedPnl
+                }
+              } as DefiLendingHistory<typeof DefiProtocol.YEARN_VAULTS>;
+              defiLendingHistory.push(item);
+            }
           }
         }
       }
-    }
-    return sortBy(defiLendingHistory, 'timestamp').reverse();
-  },
+
+      if (showAll || protocols.includes(DefiProtocol.YEARN_VAULTS)) {
+        yearnHistory();
+      }
+
+      if (showAll || protocols.includes(DefiProtocol.YEARN_VAULTS_V2)) {
+        yearnHistory(ProtocolVersion.V2);
+      }
+      return sortBy(defiLendingHistory, 'timestamp').reverse();
+    },
 
   defiOverview: (
     { allProtocols },
@@ -954,11 +1127,20 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
     _,
     { status }
   ) => {
+    function shouldDisplay(summary: DefiProtocolSummary) {
+      const lending = summary.totalLendingDepositUsd.gt(0);
+      const debt = summary.totalDebtUsd.gt(0);
+      const balance = summary.balanceUsd && summary.balanceUsd.gt(0);
+      const collateral = summary.totalCollateralUsd.gt(0);
+      return lending || debt || balance || collateral;
+    }
+
     const protocolSummary = (
-      protocol: SupportedDefiProtocols,
+      protocol: DefiProtocol,
       section: Section,
       name: OverviewDefiProtocol,
-      noLiabilities?: boolean
+      noLiabilities?: boolean,
+      noDeposits?: boolean
     ): DefiProtocolSummary | undefined => {
       const currentStatus = status(section);
       if (
@@ -967,7 +1149,7 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
       ) {
         return undefined;
       }
-      const filter: SupportedDefiProtocols[] = [protocol];
+      const filter: DefiProtocol[] = [protocol];
       const { totalCollateralUsd, totalDebt } = noLiabilities
         ? { totalCollateralUsd: Zero, totalDebt: Zero }
         : loanSummary(filter);
@@ -976,15 +1158,21 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
           name: name,
           icon: getProtcolIcon(name)
         },
+        liabilities: !noLiabilities,
+        deposits: !noDeposits,
         tokenInfo: null,
         assets: [],
         liabilitiesUrl: noLiabilities
           ? undefined
           : `/defi/liabilities?protocol=${protocol}`,
-        depositsUrl: `/defi/deposits?protocol=${protocol}`,
+        depositsUrl: noDeposits
+          ? undefined
+          : `/defi/deposits?protocol=${protocol}`,
         totalCollateralUsd,
         totalDebtUsd: totalDebt,
-        totalLendingDepositUsd: totalLendingDeposit(filter, [])
+        totalLendingDepositUsd: noDeposits
+          ? Zero
+          : totalLendingDeposit(filter, [])
       };
     };
     const summary: { [protocol: string]: Writeable<DefiProtocolSummary> } = {};
@@ -997,12 +1185,12 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
 
         if (protocol === AAVE) {
           const aaveSummary = protocolSummary(
-            DEFI_AAVE,
+            DefiProtocol.AAVE,
             Section.DEFI_AAVE_BALANCES,
             protocol
           );
 
-          if (aaveSummary) {
+          if (aaveSummary && shouldDisplay(aaveSummary)) {
             summary[protocol] = aaveSummary;
           }
           continue;
@@ -1010,28 +1198,44 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
 
         if (protocol === COMPOUND) {
           const compoundSummary = protocolSummary(
-            DEFI_COMPOUND,
+            DefiProtocol.COMPOUND,
             Section.DEFI_COMPOUND_BALANCES,
             protocol
           );
 
-          if (compoundSummary) {
+          if (compoundSummary && shouldDisplay(compoundSummary)) {
             summary[protocol] = compoundSummary;
           }
           continue;
         }
 
         if (protocol === YEARN_FINANCE_VAULTS) {
-          const compoundSummary = protocolSummary(
-            DEFI_YEARN_VAULTS,
+          const yearnVaultsSummary = protocolSummary(
+            DefiProtocol.YEARN_VAULTS,
             Section.DEFI_YEARN_VAULTS_BALANCES,
             protocol,
             true
           );
 
-          if (compoundSummary) {
-            summary[protocol] = compoundSummary;
+          if (yearnVaultsSummary && shouldDisplay(yearnVaultsSummary)) {
+            summary[protocol] = yearnVaultsSummary;
           }
+          continue;
+        }
+
+        if (protocol === LIQUITY) {
+          const liquity = protocolSummary(
+            DefiProtocol.LIQUITY,
+            Section.DEFI_LIQUITY_BALANCES,
+            protocol,
+            false,
+            true
+          );
+
+          if (liquity && shouldDisplay(liquity)) {
+            summary[protocol] = liquity;
+          }
+
           continue;
         }
 
@@ -1046,6 +1250,8 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
               tokenSymbol: entry.baseBalance.tokenSymbol
             },
             assets: [],
+            deposits: false,
+            liabilities: false,
             totalCollateralUsd: Zero,
             totalDebtUsd: Zero,
             totalLendingDepositUsd: Zero
@@ -1085,25 +1291,67 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
       }
     }
 
-    if (status === Status.LOADED || status === Status.REFRESHING) {
-      const filter: SupportedDefiProtocols[] = [DEFI_MAKERDAO];
-      const { totalCollateralUsd, totalDebt } = loanSummary(filter);
-      summary[DEFI_MAKERDAO] = {
+    const overviewStatus = status(Section.DEFI_OVERVIEW);
+    if (
+      overviewStatus === Status.LOADED ||
+      overviewStatus === Status.REFRESHING
+    ) {
+      const filter: DefiProtocol[] = [DefiProtocol.MAKERDAO_DSR];
+      const makerDAODSRSummary: DefiProtocolSummary = {
         protocol: {
-          name: MAKERDAO,
-          icon: getProtcolIcon(MAKERDAO)
+          name: MAKERDAO_DSR,
+          icon: getProtcolIcon(MAKERDAO_DSR)
         },
         tokenInfo: null,
         assets: [],
-        liabilitiesUrl: '/defi/liabilities?protocol=makerdao',
         depositsUrl: '/defi/deposits?protocol=makerdao',
-        totalCollateralUsd,
-        totalDebtUsd: totalDebt,
+        deposits: true,
+        liabilities: false,
+        totalCollateralUsd: Zero,
+        totalDebtUsd: Zero,
         totalLendingDepositUsd: totalLendingDeposit(filter, [])
       };
+
+      const { totalCollateralUsd, totalDebt } = loanSummary([
+        DefiProtocol.MAKERDAO_VAULTS
+      ]);
+      const makerDAOVaultSummary: DefiProtocolSummary = {
+        protocol: {
+          name: MAKERDAO_VAULTS,
+          icon: getProtcolIcon(MAKERDAO_VAULTS)
+        },
+        tokenInfo: null,
+        assets: [],
+        deposits: false,
+        liabilities: true,
+        liabilitiesUrl: '/defi/liabilities?protocol=makerdao',
+        totalDebtUsd: totalDebt,
+        totalCollateralUsd,
+        totalLendingDepositUsd: Zero
+      };
+
+      if (shouldDisplay(makerDAODSRSummary)) {
+        summary[DefiProtocol.MAKERDAO_DSR] = makerDAODSRSummary;
+      }
+
+      if (shouldDisplay(makerDAOVaultSummary)) {
+        summary[DefiProtocol.MAKERDAO_VAULTS] = makerDAOVaultSummary;
+      }
+
+      const yearnV2Summary = protocolSummary(
+        DefiProtocol.YEARN_VAULTS_V2,
+        Section.DEFI_YEARN_VAULTS_V2_BALANCES,
+        YEARN_FINANCE_VAULTS_V2,
+        true
+      );
+      if (yearnV2Summary && shouldDisplay(yearnV2Summary)) {
+        summary[DefiProtocol.YEARN_VAULTS_V2] = yearnV2Summary;
+      }
     }
 
-    return sortBy(Object.values(summary), 'protocol.name');
+    return sortBy(Object.values(summary), 'protocol.name').filter(
+      value => value.balanceUsd || value.deposits || value.liabilities
+    );
   },
 
   compoundRewards: ({ compoundHistory }): ProfitLossModel[] => {
@@ -1122,353 +1370,299 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
     return toProfitLossModel(compoundHistory.liquidationProfit);
   },
 
-  yearnVaultsProfit: ({ yearnVaultsHistory }) => (
-    addresses: string[]
-  ): YearnVaultProfitLoss[] => {
-    const yearnVaultsProfit: { [vault: string]: YearnVaultProfitLoss } = {};
-    const allAddresses = addresses.length === 0;
-    for (const address in yearnVaultsHistory) {
-      if (!allAddresses && !addresses.includes(address)) {
-        continue;
-      }
-      const history = yearnVaultsHistory[address];
-      for (const key in history) {
-        const vault = key as SupportedYearnVault;
-        const data = history[vault];
-        if (!data) {
+  yearnVaultsProfit:
+    (
+      { yearnVaultsHistory, yearnVaultsV2History },
+      _dg,
+      _rs,
+      { 'balances/assetSymbol': assetSymbol }
+    ) =>
+    (
+      addresses: string[],
+      version: ProtocolVersion = ProtocolVersion.V1
+    ): YearnVaultProfitLoss[] => {
+      const vaultsHistory =
+        version === ProtocolVersion.V1
+          ? yearnVaultsHistory
+          : yearnVaultsV2History;
+      const yearnVaultsProfit: { [vault: string]: YearnVaultProfitLoss } = {};
+      const allAddresses = addresses.length === 0;
+      for (const address in vaultsHistory) {
+        if (!allAddresses && !addresses.includes(address)) {
           continue;
         }
-
-        const events = data.events.filter(event => event.eventType === DEPOSIT);
-        const asset = events && events.length > 0 ? events[0].fromAsset : '';
-
-        if (!yearnVaultsProfit[vault]) {
-          yearnVaultsProfit[vault] = {
-            value: data.profitLoss,
-            vault,
-            asset
-          };
-        } else {
-          yearnVaultsProfit[vault] = {
-            ...yearnVaultsProfit[vault],
-            value: balanceSum(yearnVaultsProfit[vault].value, data.profitLoss)
-          };
-        }
-      }
-    }
-    return Object.values(yearnVaultsProfit);
-  },
-
-  yearnVaultsAssets: ({ yearnVaultsBalances }) => (
-    addresses: string[]
-  ): YearnVaultBalance[] => {
-    const balances: { [vault: string]: YearnVaultBalance[] } = {};
-    const allAddresses = addresses.length === 0;
-    for (const address in yearnVaultsBalances) {
-      if (!allAddresses && !addresses.includes(address)) {
-        continue;
-      }
-
-      const vaults = yearnVaultsBalances[address];
-      for (const key in vaults) {
-        const vault = key as SupportedYearnVault;
-        const balance = vaults[vault];
-        if (!balance) {
-          continue;
-        }
-
-        if (!balances[vault]) {
-          balances[vault] = [balance];
-        } else {
-          balances[vault].push(balance);
-        }
-      }
-    }
-
-    const vaultBalances: YearnVaultAsset[] = [];
-    for (const key in balances) {
-      const allBalances = balances[key];
-      const { underlyingToken, vaultToken, roi } = allBalances[0];
-
-      const underlyingValue = { amount: Zero, usdValue: Zero };
-      const vaultValue = { amount: Zero, usdValue: Zero };
-      const values = { underlyingValue, vaultValue };
-      const summary = allBalances.reduce((sum, current) => {
-        return {
-          vaultValue: balanceSum(sum.vaultValue, current.vaultValue),
-          underlyingValue: balanceSum(
-            sum.underlyingValue,
-            current.underlyingValue
-          )
-        };
-      }, values);
-      vaultBalances.push({
-        vault: key as SupportedYearnVault,
-        underlyingToken,
-        underlyingValue: summary.underlyingValue,
-        vaultToken,
-        vaultValue: summary.vaultValue,
-        roi
-      });
-    }
-
-    return vaultBalances;
-  },
-
-  aaveTotalEarned: ({ aaveHistory }) => (
-    addresses: string[]
-  ): ProfitLossModel[] => {
-    const earned: ProfitLossModel[] = [];
-
-    for (const address in aaveHistory) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
-      }
-      const totalEarned = aaveHistory[address].totalEarnedInterest;
-      for (const asset in totalEarned) {
-        const index = earned.findIndex(e => e.asset === asset);
-        if (index < 0) {
-          earned.push({
-            address: '',
-            asset,
-            value: totalEarned[asset]
-          });
-        } else {
-          earned[index] = {
-            ...earned[index],
-            value: balanceSum(earned[index].value, totalEarned[asset])
-          };
-        }
-      }
-    }
-    return earned;
-  },
-
-  uniswapBalances: ({ uniswapBalances }) => (
-    addresses: string[]
-  ): UniswapBalance[] => {
-    const balances: { [poolAddress: string]: Writeable<UniswapBalance> } = {};
-    for (const account in uniswapBalances) {
-      if (addresses.length > 0 && !addresses.includes(account)) {
-        continue;
-      }
-      const accountBalances = uniswapBalances[account];
-      if (!accountBalances || accountBalances.length === 0) {
-        continue;
-      }
-      for (const {
-        userBalance,
-        totalSupply,
-        assets,
-        address
-      } of accountBalances) {
-        const balance = balances[address];
-        if (balance) {
-          const oldBalance = balance.userBalance;
-          balance.userBalance = {
-            amount: oldBalance.amount.plus(userBalance.amount),
-            usdValue: oldBalance.usdValue.plus(userBalance.usdValue)
-          };
-
-          if (balance.totalSupply !== null && totalSupply !== null) {
-            balance.totalSupply = balance.totalSupply.plus(totalSupply);
+        const history = vaultsHistory[address];
+        for (const vault in history) {
+          const data = history[vault];
+          if (!data) {
+            continue;
           }
-        } else {
-          balances[address] = {
-            account,
-            userBalance,
-            totalSupply,
-            assets,
-            poolAddress: address
-          };
+
+          const events = data.events.filter(
+            event => event.eventType === DEPOSIT
+          );
+          const asset = events && events.length > 0 ? events[0].fromAsset : '';
+
+          if (!yearnVaultsProfit[vault]) {
+            let vaultName = vault;
+            if (vault.startsWith('_ceth_')) {
+              vaultName = `${assetSymbol(vault)} Vault`;
+            }
+
+            yearnVaultsProfit[vault] = {
+              value: data.profitLoss,
+              vault: vaultName,
+              asset
+            };
+          } else {
+            yearnVaultsProfit[vault] = {
+              ...yearnVaultsProfit[vault],
+              value: balanceSum(yearnVaultsProfit[vault].value, data.profitLoss)
+            };
+          }
         }
       }
-    }
-    return Object.values(balances);
-  },
-  basicDexTrades: ({ uniswapTrades, balancerTrades }) => (
-    addresses
-  ): Trade[] => {
-    function transform(
-      trades: DexTrades,
-      location: 'uniswap' | 'balancer'
-    ): Trade[] {
-      const simpleTrades: Trade[] = [];
-      for (const address in trades) {
+      return Object.values(yearnVaultsProfit);
+    },
+
+  yearnVaultsAssets:
+    (
+      { yearnVaultsBalances, yearnVaultsV2Balances },
+      _dg,
+      _rs,
+      { 'balances/assetSymbol': assetSymbol }
+    ) =>
+    (
+      addresses: string[],
+      version: ProtocolVersion = ProtocolVersion.V1
+    ): YearnVaultAsset[] => {
+      const vaultsBalances =
+        version === ProtocolVersion.V1
+          ? yearnVaultsBalances
+          : yearnVaultsV2Balances;
+      const balances: { [vault: string]: YearnVaultBalance[] } = {};
+      const allAddresses = addresses.length === 0;
+      for (const address in vaultsBalances) {
+        if (!allAddresses && !addresses.includes(address)) {
+          continue;
+        }
+
+        const vaults = vaultsBalances[address];
+        for (const vault in vaults) {
+          let vaultName = vault;
+
+          if (vault.startsWith('0x')) {
+            const tokenSymbol = assetSymbol(vaults[vault].vaultToken);
+            vaultName = `${tokenSymbol} Vault`;
+          }
+
+          const balance = vaults[vault];
+          if (!balance) {
+            continue;
+          }
+
+          if (!balances[vaultName]) {
+            balances[vaultName] = [balance];
+          } else {
+            balances[vaultName].push(balance);
+          }
+        }
+      }
+
+      const vaultBalances: YearnVaultAsset[] = [];
+      for (const key in balances) {
+        const allBalances = balances[key];
+        const { underlyingToken, vaultToken, roi } = allBalances[0];
+
+        const underlyingValue = { amount: Zero, usdValue: Zero };
+        const vaultValue = { amount: Zero, usdValue: Zero };
+        const values = { underlyingValue, vaultValue };
+        const summary = allBalances.reduce((sum, current) => {
+          return {
+            vaultValue: balanceSum(sum.vaultValue, current.vaultValue),
+            underlyingValue: balanceSum(
+              sum.underlyingValue,
+              current.underlyingValue
+            )
+          };
+        }, values);
+        vaultBalances.push({
+          vault: key,
+          version,
+          underlyingToken,
+          underlyingValue: summary.underlyingValue,
+          vaultToken,
+          vaultValue: summary.vaultValue,
+          roi
+        });
+      }
+
+      return vaultBalances;
+    },
+
+  aaveTotalEarned:
+    ({ aaveHistory }) =>
+    (addresses: string[]): ProfitLossModel[] => {
+      const earned: ProfitLossModel[] = [];
+
+      for (const address in aaveHistory) {
         if (addresses.length > 0 && !addresses.includes(address)) {
           continue;
         }
-        const dexTrade = trades[address];
-        const convertedTrades: Trade[] = dexTrade.map(trade => ({
-          tradeId: trade.tradeId,
-          location: location,
-          amount: trade.amount,
-          fee: trade.fee,
-          feeCurrency: trade.feeCurrency,
-          timestamp: trade.timestamp,
-          baseAsset: trade.baseAsset,
-          quoteAsset: trade.quoteAsset,
-          rate: trade.rate,
-          tradeType: 'buy',
-          link: '',
-          notes: '',
-          ignoredInAccounting: false
-        }));
-        simpleTrades.push(...convertedTrades);
-      }
-      return simpleTrades;
-    }
-
-    const trades: Trade[] = [];
-    trades.push(...transform(uniswapTrades, 'uniswap'));
-    trades.push(...transform(balancerTrades, 'balancer'));
-    return sortBy(trades, 'timestamp').reverse();
-  },
-  uniswapPoolProfit: ({ uniswapEvents }) => (
-    addresses: string[]
-  ): UniswapPoolProfit[] => {
-    const perPoolProfit: {
-      [poolAddress: string]: Writeable<UniswapPoolProfit>;
-    } = {};
-    for (const address in uniswapEvents) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
-      }
-
-      const details = uniswapEvents[address];
-      for (const detail of details) {
-        const { poolAddress } = detail;
-        const profit = perPoolProfit[poolAddress];
-        if (profit) {
-          perPoolProfit[poolAddress] = {
-            ...profit,
-            profitLoss0: profit.profitLoss0.plus(detail.profitLoss0),
-            profitLoss1: profit.profitLoss1.plus(detail.profitLoss1),
-            usdProfitLoss: profit.usdProfitLoss.plus(detail.usdProfitLoss)
-          };
-        } else {
-          const { events: _, address, ...poolProfit } = detail;
-          perPoolProfit[poolAddress] = poolProfit;
+        const totalEarned = aaveHistory[address].totalEarnedInterest;
+        for (const asset in totalEarned) {
+          const index = earned.findIndex(e => e.asset === asset);
+          if (index < 0) {
+            earned.push({
+              address: '',
+              asset,
+              value: totalEarned[asset]
+            });
+          } else {
+            earned[index] = {
+              ...earned[index],
+              value: balanceSum(earned[index].value, totalEarned[asset])
+            };
+          }
         }
       }
-    }
-    return Object.values(perPoolProfit);
-  },
-  uniswapEvents: ({ uniswapEvents }) => (addresses): UniswapEventDetails[] => {
-    const eventDetails: UniswapEventDetails[] = [];
-    for (const address in uniswapEvents) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
-      }
-      const details = uniswapEvents[address];
-      for (const { events, poolAddress, token0, token1 } of details) {
-        for (const event of events) {
-          eventDetails.push({
-            ...event,
-            address,
-            poolAddress: poolAddress,
-            token0: token0,
-            token1: token1
-          });
+      return earned;
+    },
+
+  uniswapBalances:
+    ({ uniswapBalances }) =>
+    (addresses: string[]): XswapBalance[] => {
+      return getBalances(uniswapBalances, addresses);
+    },
+  basicDexTrades:
+    ({ uniswapTrades, balancerTrades, sushiswap }, _r, { settings, history }) =>
+    (addresses): Trade[] => {
+      const ignoredTrades = history!.ignored.trades ?? [];
+      const {
+        explorers: { ETH }
+      }: SettingsState = settings!;
+      const txUrl = ETH?.transaction ?? explorerUrls.ETH.transaction;
+      function transform(
+        trades: DexTrades,
+        location: 'uniswap' | 'balancer' | 'sushiswap'
+      ): Trade[] {
+        const simpleTrades: Trade[] = [];
+        for (const address in trades) {
+          if (addresses.length > 0 && !addresses.includes(address)) {
+            continue;
+          }
+          const dexTrade = trades[address];
+          const linkUrl = txUrl.endsWith('/')
+            ? `${txUrl}${dexTrade[0].txHash}`
+            : `${txUrl}/${dexTrade[0].txHash}`;
+          const convertedTrades: Trade[] = dexTrade.map(trade => ({
+            tradeId: trade.tradeId,
+            location: location,
+            amount: trade.amount,
+            fee: trade.fee,
+            feeCurrency: trade.feeCurrency,
+            timestamp: trade.timestamp,
+            baseAsset: trade.baseAsset,
+            quoteAsset: trade.quoteAsset,
+            rate: trade.rate,
+            tradeType: 'buy',
+            link: linkUrl,
+            notes: '',
+            ignoredInAccounting: ignoredTrades.includes(trade.tradeId)
+          }));
+          simpleTrades.push(...convertedTrades);
         }
+        return simpleTrades;
       }
-    }
-    return eventDetails;
-  },
+
+      const trades: Trade[] = [];
+      trades.push(...transform(uniswapTrades, 'uniswap'));
+      trades.push(...transform(balancerTrades, 'balancer'));
+      if (sushiswap) {
+        trades.push(...transform(sushiswap.trades, 'sushiswap'));
+      }
+      return sortBy(trades, 'timestamp').reverse();
+    },
+  uniswapPoolProfit:
+    ({ uniswapEvents }) =>
+    (addresses: string[]): XswapPoolProfit[] => {
+      return getPoolProfit(uniswapEvents, addresses);
+    },
+  uniswapEvents:
+    ({ uniswapEvents }) =>
+    (addresses): XswapEventDetails[] => {
+      return getEventDetails(uniswapEvents, addresses);
+    },
   uniswapAddresses: ({ uniswapEvents, uniswapBalances }) => {
     return Object.keys(uniswapBalances)
       .concat(Object.keys(uniswapEvents))
       .filter(uniqueStrings);
   },
-  dexTrades: ({ uniswapTrades, balancerTrades }) => (addresses): DexTrade[] => {
-    const trades: DexTrade[] = [];
-    for (const address in uniswapTrades) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
+  dexTrades:
+    ({ uniswapTrades, balancerTrades, sushiswap }) =>
+    (addresses): DexTrade[] => {
+      const trades: DexTrade[] = [];
+      const addTrades = (
+        dexTrades: DexTrades,
+        addresses: string[],
+        trades: DexTrade[]
+      ) => {
+        for (const address in dexTrades) {
+          if (addresses.length > 0 && !addresses.includes(address)) {
+            continue;
+          }
+          trades.push(...dexTrades[address]);
+        }
+      };
+      addTrades(uniswapTrades, addresses, trades);
+      addTrades(balancerTrades, addresses, trades);
+      if (sushiswap) {
+        addTrades(sushiswap.trades, addresses, trades);
       }
-      trades.push(...uniswapTrades[address]);
-    }
 
-    for (const address in balancerTrades) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
-      }
-      trades.push(...balancerTrades[address]);
-    }
-    return sortBy(trades, 'timestamp').reverse();
-  },
-  airdrops: ({ airdrops }) => (addresses): Airdrop[] => {
-    const data: Airdrop[] = [];
-    for (const address in airdrops) {
-      if (addresses.length > 0 && !addresses.includes(address)) {
-        continue;
-      }
-      const airdrop = airdrops[address];
-      for (const source in airdrop) {
-        const element = airdrop[source as AirdropType];
-        if (source === AIRDROP_POAP) {
-          const details = element as PoapDelivery[];
-          data.push({
-            address,
-            source: source as AirdropType,
-            details: details.map(value => ({
-              amount: '1',
-              link: value.link,
-              name: value.name,
-              event: value.event
-            }))
-          });
-        } else {
-          const { amount, asset, link } = element as AirdropDetail;
-          data.push({
-            address,
-            amount,
-            link,
-            source: source as AirdropType,
-            asset
-          });
+      return sortBy(trades, 'timestamp').reverse();
+    },
+  airdrops:
+    ({ airdrops }) =>
+    (addresses): Airdrop[] => {
+      const data: Airdrop[] = [];
+      for (const address in airdrops) {
+        if (addresses.length > 0 && !addresses.includes(address)) {
+          continue;
+        }
+        const airdrop = airdrops[address];
+        for (const source in airdrop) {
+          const element = airdrop[source as AirdropType];
+          if (source === AIRDROP_POAP) {
+            const details = element as PoapDelivery[];
+            data.push({
+              address,
+              source: source as AirdropType,
+              details: details.map(value => ({
+                amount: '1',
+                link: value.link,
+                name: value.name,
+                event: value.event
+              }))
+            });
+          } else {
+            const { amount, asset, link } = element as AirdropDetail;
+            data.push({
+              address,
+              amount,
+              link,
+              source: source as AirdropType,
+              asset
+            });
+          }
         }
       }
-    }
-    return data;
-  },
+      return data;
+    },
   airdropAddresses: ({ airdrops }) => Object.keys(airdrops),
   [GETTER_UNISWAP_ASSETS]: ({ uniswapEvents, uniswapBalances }) => {
-    const pools: UniswapPool[] = [];
-    const known: { [address: string]: boolean } = {};
-    for (const account in uniswapBalances) {
-      const accountBalances = uniswapBalances[account];
-      if (!accountBalances || accountBalances.length === 0) {
-        continue;
-      }
-      for (const { assets, address } of accountBalances) {
-        if (known[address]) {
-          continue;
-        }
-        known[address] = true;
-        pools.push({
-          address,
-          assets: assets.map(({ asset }) => asset)
-        });
-      }
-    }
-
-    for (const address in uniswapEvents) {
-      const details = uniswapEvents[address];
-      for (const { poolAddress, token0, token1 } of details) {
-        if (known[poolAddress]) {
-          continue;
-        }
-        known[poolAddress] = true;
-        pools.push({
-          address: poolAddress,
-          assets: [token0, token1]
-        });
-      }
-    }
-    return pools;
+    return getPools(uniswapBalances, uniswapEvents);
   },
-
   [GETTER_BALANCER_BALANCES]: ({ balancerBalances }) => {
     const balances: BalancerBalanceWithOwner[] = [];
     for (const address in balancerBalances) {
@@ -1482,31 +1676,28 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
     return balances;
   },
   balancerAddresses: ({ balancerBalances }) => Object.keys(balancerBalances),
-  balancerEvents: (
-    { balancerEvents },
-    _dg,
-    _rs,
-    { 'balances/assetSymbol': assetSymbol }
-  ) => (addresses): BalancerEvent[] => {
-    const events: BalancerEvent[] = [];
-    filterAddresses(balancerEvents, addresses, item => {
-      for (let i = 0; i < item.length; i++) {
-        const poolDetail = item[i];
-        events.push(
-          ...poolDetail.events.map(value => ({
-            ...value,
-            pool: {
-              name: poolDetail.poolTokens
-                .map(pool => assetSymbol(pool.token))
-                .join('/'),
-              address: poolDetail.poolAddress
-            }
-          }))
-        );
-      }
-    });
-    return events;
-  },
+  balancerEvents:
+    ({ balancerEvents }, _dg, _rs, { 'balances/assetSymbol': assetSymbol }) =>
+    (addresses): BalancerEvent[] => {
+      const events: BalancerEvent[] = [];
+      filterAddresses(balancerEvents, addresses, item => {
+        for (let i = 0; i < item.length; i++) {
+          const poolDetail = item[i];
+          events.push(
+            ...poolDetail.events.map(value => ({
+              ...value,
+              pool: {
+                name: poolDetail.poolTokens
+                  .map(pool => assetSymbol(pool.token))
+                  .join('/'),
+                address: poolDetail.poolAddress
+              }
+            }))
+          );
+        }
+      });
+      return events;
+    },
   balancerPools: (
     _,
     { balancerBalances, balancerEvents },
@@ -1538,31 +1729,28 @@ export const getters: Getters<DefiState, DefiGetters, RotkehlchenState, any> = {
     }
     return Object.values(pools);
   },
-  balancerProfitLoss: (
-    { balancerEvents },
-    _dg,
-    _rs,
-    { 'balances/assetSymbol': assetSymbol }
-  ) => addresses => {
-    const balancerProfitLoss: { [pool: string]: BalancerProfitLoss } = {};
-    filterAddresses(balancerEvents, addresses, item => {
-      for (let i = 0; i < item.length; i++) {
-        const entry = item[i];
-        if (!balancerProfitLoss[entry.poolAddress]) {
-          balancerProfitLoss[entry.poolAddress] = {
-            pool: {
-              address: entry.poolAddress,
-              name: entry.poolTokens
-                .map(token => assetSymbol(token.token))
-                .join('/')
-            },
-            tokens: entry.poolTokens.map(token => assetIdentifier(token.token)),
-            profitLossAmount: entry.profitLossAmounts,
-            usdProfitLoss: entry.usdProfitLoss
-          };
+  balancerProfitLoss:
+    ({ balancerEvents }, _dg, _rs, { 'balances/assetSymbol': assetSymbol }) =>
+    addresses => {
+      const balancerProfitLoss: { [pool: string]: BalancerProfitLoss } = {};
+      filterAddresses(balancerEvents, addresses, item => {
+        for (let i = 0; i < item.length; i++) {
+          const entry = item[i];
+          if (!balancerProfitLoss[entry.poolAddress]) {
+            balancerProfitLoss[entry.poolAddress] = {
+              pool: {
+                address: entry.poolAddress,
+                name: entry.poolTokens
+                  .map(token => assetSymbol(token.token))
+                  .join('/')
+              },
+              tokens: entry.poolTokens.map(token => token.token),
+              profitLossAmount: entry.profitLossAmounts,
+              usdProfitLoss: entry.usdProfitLoss
+            };
+          }
         }
-      }
-    });
-    return Object.values(balancerProfitLoss);
-  }
+      });
+      return Object.values(balancerProfitLoss);
+    }
 };

@@ -22,6 +22,7 @@ import requests
 from requests.adapters import Response
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_bitstamp
@@ -42,12 +43,14 @@ from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount,
     deserialize_fee,
+    deserialize_int_from_str,
     deserialize_timestamp_from_bitstamp_date,
 )
 from rotkehlchen.typing import ApiKey, ApiSecret, AssetAmount, Location, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_dict, jsonloads_list
 
 if TYPE_CHECKING:
@@ -122,12 +125,19 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     """
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
     ):
-        super().__init__('bitstamp', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.BITSTAMP,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.base_uri = 'https://www.bitstamp.net/api'
         self.msg_aggregator = msg_aggregator
         # NB: X-Auth-Signature, X-Auth-Nonce, X-Auth-Timestamp & Content-Type change per request
@@ -139,6 +149,17 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def first_connection(self) -> None:
         self.first_connection_made = True
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'X-Auth': f'BITSTAMP {api_key}'})
+        return changed
 
     @protect_with_lock()
     @cache_response_timewise()
@@ -230,14 +251,15 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             'offset': 0,
         }
         if start_ts != Timestamp(0):
-            db_asset_movements = self.db.get_asset_movements(
-                to_ts=start_ts,
-                location=Location.BITSTAMP,
-            )
-            # NB: sort asset_movements by int(link) in asc mode
-            db_asset_movements.sort(key=lambda asset_movement: int(asset_movement.link))
-            if db_asset_movements:
-                options.update({'since_id': int(db_asset_movements[-1].link) + 1})
+            # Get latest link from the DB to know where to resume from
+            cursor = self.db.conn.cursor()
+            query_result = cursor.execute(
+                'SELECT link FROM asset_movements WHERE location=? AND time <= ? ORDER BY time DESC LIMIT 1',  # noqa: E501
+                (Location.BITSTAMP.serialize_for_db(), start_ts),
+            ).fetchone()
+            if query_result is not None:
+                since_id = int(query_result[0]) + 1
+                options.update({'since_id': since_id})
 
         asset_movements: List[AssetMovement] = self._api_query_paginated(
             start_ts=start_ts,
@@ -251,7 +273,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         """Return the account trades on Bitstamp.
 
         NB: when `since_id` is used, the Bitstamp API v2 will return by default
@@ -266,14 +288,15 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             'offset': 0,
         }
         if start_ts != Timestamp(0):
-            db_trades = self.db.get_trades(
-                to_ts=start_ts,
-                location=Location.BITSTAMP,
-            )
-            # NB: sort trades by int(link) in asc mode. Type ignore is since we always got a link
-            db_trades.sort(key=lambda trade: int(trade.link))  # type: ignore
-            if db_trades:
-                options.update({'since_id': int(db_trades[-1].link) + 1})  # type: ignore
+            # Get latest link from the DB to know where to resume from
+            cursor = self.db.conn.cursor()
+            query_result = cursor.execute(
+                'SELECT link FROM trades WHERE location=? AND time <= ? ORDER BY time DESC LIMIT 1',  # noqa: E501
+                (Location.BITSTAMP.serialize_for_db(), start_ts),
+            ).fetchone()
+            if query_result is not None:
+                since_id = int(query_result[0]) + 1
+                options.update({'since_id': since_id})
 
         trades: List[Trade] = self._api_query_paginated(
             start_ts=start_ts,
@@ -281,10 +304,10 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             options=options,
             case='trades',
         )
-        return trades
+        return trades, (start_ts, end_ts)
 
     def validate_api_key(self) -> Tuple[bool, str]:
-        """Validates that the Bitstamp API key is good for usage in Rotki
+        """Validates that the Bitstamp API key is good for usage in rotki
 
         Makes sure that the following permissions are given to the key:
         - Account balance
@@ -345,7 +368,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         else:
             self.session.headers.pop('Content-Type', None)
 
-        log.debug('Bitstamp API request', request_url=request_url)
+        log.debug('Bitstamp API request', request_url=request_url, options=options)
         try:
             response = self.session.request(
                 method=method,
@@ -450,18 +473,20 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 return no_results
 
             has_results = False
-            is_result_timesamp_gt_end_ts = False
+            is_result_timestamp_gt_end_ts = False
             result: Union[Trade, AssetMovement]
             for raw_result in response_list:
-                if raw_result['type'] not in raw_result_type_filter:
-                    continue
                 try:
+                    entry_type = deserialize_int_from_str(raw_result['type'], 'bitstamp event')
+                    if entry_type not in raw_result_type_filter:
+                        log.debug(f'Skipping entry {raw_result} due to type mismatch')
+                        continue
                     result_timestamp = deserialize_timestamp_from_bitstamp_date(
                         raw_result['datetime'],
                     )
 
                     if result_timestamp > end_ts:
-                        is_result_timesamp_gt_end_ts = True  # prevent extra request
+                        is_result_timestamp_gt_end_ts = True  # prevent extra request
                         break
 
                     log.debug(f'Attempting to deserialize bitstamp {case_pretty}: {raw_result}')
@@ -483,7 +508,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 results.append(result)  # type: ignore
                 has_results = True  # NB: endpoint agnostic
 
-            if len(response_list) < limit or is_result_timesamp_gt_end_ts:
+            if len(response_list) < limit or is_result_timestamp_gt_end_ts:
                 break
 
             # NB: update pagination params per endpoint
@@ -515,7 +540,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         Endpoint docs:
         https://www.bitstamp.net/api/#user-transactions
         """
-        type_ = raw_movement['type']
+        type_ = deserialize_int_from_str(raw_movement['type'], 'bitstamp asset movement')
         category: AssetMovementCategory
         if type_ == 0:
             category = AssetMovementCategory.DEPOSIT
@@ -530,7 +555,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         for symbol in BITSTAMP_ASSET_MOVEMENT_SYMBOLS:
             amount = deserialize_asset_amount(raw_movement.get(symbol, '0'))
             if amount != ZERO:
-                fee_asset = Asset(symbol)
+                fee_asset = asset_from_bitstamp(symbol)
                 break
 
         if amount == ZERO:
@@ -698,7 +723,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             raise AssertionError(f'Unexpected Bitstamp response_case: {case}.') from e
 
         error_code = response_dict.get('code', None)
-        if error_code in set(API_KEY_ERROR_CODE_ACTION.keys()):
+        if error_code in API_KEY_ERROR_CODE_ACTION:
             msg = API_KEY_ERROR_CODE_ACTION[error_code]
         else:
             reason = response_dict.get('reason', None) or response.text
@@ -723,4 +748,11 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for bitstamp
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for bitstamp

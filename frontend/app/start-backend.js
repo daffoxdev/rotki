@@ -13,7 +13,7 @@ if (!fs.existsSync(tempPath)) {
 } else {
   const contents = fs.readdirSync(tempPath);
   for (const name of contents) {
-    if (['assets', 'icons', 'price_history'].includes(name)) {
+    if (['icons', 'price_history', 'global_data'].includes(name)) {
       continue;
     }
 
@@ -24,17 +24,25 @@ if (!fs.existsSync(tempPath)) {
   }
 }
 
+const logDir = path.join(os.homedir(), 'rotki-e2e-logs');
+
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir);
+}
+
 const args = [
   '-m',
   'rotkehlchen',
-  '--api-port',
+  '--rest-api-port',
   '22221',
+  '--websockets-api-port',
+  '22222',
   '--api-cors',
   'http://localhost:*',
   '--data-dir',
   tempPath,
   '--logfile',
-  `${path.join(os.homedir(), 'rotkehlchen-e2e.log')}`
+  `${path.join(logDir, 'rotkehlchen-e2e.log')}`
 ];
 
 spawn('python', args, {

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 from contextlib import ExitStack, contextmanager
@@ -8,9 +9,11 @@ from unittest.mock import patch
 import pytest
 
 from rotkehlchen.accounting.structures import BalanceType
-from rotkehlchen.assets.asset import Asset
+from rotkehlchen.assets.asset import Asset, EthereumToken
+from rotkehlchen.assets.typing import AssetType
 from rotkehlchen.data_handler import DataHandler
 from rotkehlchen.db.dbhandler import DBHandler
+from rotkehlchen.db.filtering import AssetMovementsFilterQuery
 from rotkehlchen.db.old_create import OLD_DB_SCRIPT_CREATE_TABLES
 from rotkehlchen.db.settings import ROTKEHLCHEN_DB_VERSION
 from rotkehlchen.db.upgrade_manager import UPGRADES_LIST
@@ -26,8 +29,15 @@ from rotkehlchen.db.upgrades.v7_v8 import (
 )
 from rotkehlchen.db.upgrades.v13_v14 import REMOVED_ASSETS, REMOVED_ETH_TOKENS
 from rotkehlchen.errors import DBUpgradeError
-from rotkehlchen.tests.utils.database import mock_dbhandler_update_owned_assets
+from rotkehlchen.tests.utils.database import (
+    _init_prepared_db,
+    _use_prepared_db,
+    mock_dbhandler_add_globaldb_assetids,
+    mock_dbhandler_ensura_data_integrity,
+    mock_dbhandler_update_owned_assets,
+)
 from rotkehlchen.tests.utils.factories import make_ethereum_address
+from rotkehlchen.typing import ChecksumEthAddress
 from rotkehlchen.user_messages import MessagesAggregator
 
 creation_patch = patch(
@@ -56,9 +66,17 @@ def target_patch(target_version: int):
         'rotkehlchen.db.upgrade_manager.UPGRADES_LIST',
         new=new_upgrades_list,
     )
+    if target_version <= 5:
+        # For tests where no old DB exists we need to first create tables
+        d = patch(
+            'rotkehlchen.db.dbhandler.PASSWORDCHECK_STATEMENT',
+            new=OLD_DB_SCRIPT_CREATE_TABLES,
+        )
+    else:
+        d = contextlib.nullcontext()  # type: ignore
 
-    with a, b, c:
-        yield (a, b, c)
+    with a, b, c, d:
+        yield (a, b, c, d)
 
 
 def _init_db_with_target_version(
@@ -77,14 +95,6 @@ def _init_db_with_target_version(
             initial_settings=None,
         )
     return db
-
-
-def _use_prepared_db(user_data_dir: Path, filename: str) -> None:
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-    copyfile(
-        os.path.join(os.path.dirname(dir_path), 'data', filename),
-        user_data_dir / 'rotkehlchen.db',
-    )
 
 
 def populate_db_and_check_for_asset_renaming(
@@ -306,7 +316,7 @@ def test_upgrade_db_1_to_2(data_dir, username):
     ethereum accounts are now checksummed"""
     msg_aggregator = MessagesAggregator()
     data = DataHandler(data_dir, msg_aggregator)
-    with creation_patch, target_patch(1), mock_dbhandler_update_owned_assets():
+    with creation_patch, target_patch(1), mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         data.unlock(username, '123', create_new=True)
     # Manually input a non checksummed account
     data.db.conn.commit()
@@ -318,7 +328,7 @@ def test_upgrade_db_1_to_2(data_dir, username):
     data.db.conn.commit()
 
     # now relogin and check that the account has been re-saved as checksummed
-    with mock_dbhandler_update_owned_assets():
+    with creation_patch, target_patch(1), mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         del data
         data = DataHandler(data_dir, msg_aggregator)
         with target_patch(target_version=2):
@@ -335,14 +345,14 @@ def test_upgrade_db_1_to_2(data_dir, username):
 def test_upgrade_db_2_to_3(user_data_dir):
     """Test upgrading the DB from version 2 to version 3, rename BCHSV to BSV"""
     msg_aggregator = MessagesAggregator()
-    with creation_patch:
+    with creation_patch, mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         db = _init_db_with_target_version(
             target_version=2,
             user_data_dir=user_data_dir,
             msg_aggregator=msg_aggregator,
         )
 
-    with mock_dbhandler_update_owned_assets():
+    with mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         populate_db_and_check_for_asset_renaming(
             db=db,
             user_data_dir=user_data_dir,
@@ -359,7 +369,7 @@ def test_upgrade_db_3_to_4(data_dir, username):
     the eth_rpc_port setting is changed to eth_rpc_endpoint"""
     msg_aggregator = MessagesAggregator()
     data = DataHandler(data_dir, msg_aggregator)
-    with creation_patch, target_patch(3), mock_dbhandler_update_owned_assets():
+    with creation_patch, target_patch(3), mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         data.unlock(username, '123', create_new=True)
     # Manually set version and input the old rpcport setting
     cursor = data.db.conn.cursor()
@@ -374,7 +384,7 @@ def test_upgrade_db_3_to_4(data_dir, username):
     data.db.conn.commit()
 
     # now relogin and check that the setting has been changed and the version bumped
-    with mock_dbhandler_update_owned_assets():
+    with mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         del data
         data = DataHandler(data_dir, msg_aggregator)
         with target_patch(target_version=4):
@@ -396,14 +406,14 @@ def test_upgrade_db_3_to_4(data_dir, username):
 def test_upgrade_db_4_to_5(user_data_dir):
     """Test upgrading the DB from version 4 to version 5, rename BCC to BCH"""
     msg_aggregator = MessagesAggregator()
-    with creation_patch:
+    with creation_patch, mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         db = _init_db_with_target_version(
             target_version=4,
             user_data_dir=user_data_dir,
             msg_aggregator=msg_aggregator,
         )
 
-    with mock_dbhandler_update_owned_assets():
+    with mock_dbhandler_update_owned_assets(), mock_dbhandler_add_globaldb_assetids(), mock_dbhandler_ensura_data_integrity():  # noqa: E501
         populate_db_and_check_for_asset_renaming(
             db=db,
             user_data_dir=user_data_dir,
@@ -836,11 +846,12 @@ def test_upgrade_db_11_to_12(user_data_dir):
     Deleting all bittrex data from the DB"""
     msg_aggregator = MessagesAggregator()
     _use_prepared_db(user_data_dir, 'v11_rotkehlchen.db')
-    db = _init_db_with_target_version(
-        target_version=12,
-        user_data_dir=user_data_dir,
-        msg_aggregator=msg_aggregator,
-    )
+    with mock_dbhandler_ensura_data_integrity():
+        db = _init_db_with_target_version(
+            target_version=12,
+            user_data_dir=user_data_dir,
+            msg_aggregator=msg_aggregator,
+        )
 
     # Make sure that only one trade is left
     cursor = db.conn.cursor()
@@ -871,7 +882,6 @@ def test_upgrade_db_12_to_13(user_data_dir):
 
     # Make sure that current balances table is deleted
     cursor = db.conn.cursor()
-    # with pytest.raises(sqlcipher.IntegrityError):  # pylint: disable=no-member
     query = cursor.execute(
         'SELECT COUNT(*) FROM sqlite_master WHERE type="table" and name="current_balances"',
     )
@@ -1124,7 +1134,7 @@ def test_upgrade_db_20_to_21(user_data_dir):
         # Check the last 3 entries to make sure no data is lost during upgrade
         if length == 1297:
             assert entry == (
-                BalanceType.ASSET.serialize_for_db(),
+                BalanceType.ASSET.serialize_for_db(),  # pylint: disable=no-member
                 1605194428,
                 'yaLINK',
                 '444.562307846438094287',
@@ -1132,7 +1142,7 @@ def test_upgrade_db_20_to_21(user_data_dir):
             )
         elif length == 1298:
             assert entry == (
-                BalanceType.ASSET.serialize_for_db(),
+                BalanceType.ASSET.serialize_for_db(),  # pylint: disable=no-member
                 1605194428,
                 'ypaxCrv',
                 '211.750728445895069118',
@@ -1140,7 +1150,7 @@ def test_upgrade_db_20_to_21(user_data_dir):
             )
         elif length == 1299:
             assert entry == (
-                BalanceType.ASSET.serialize_for_db(),
+                BalanceType.ASSET.serialize_for_db(),  # pylint: disable=no-member
                 1605194428,
                 'yyDAI+yUSDC+yUSDT+yBUSD',
                 '167.18639752015697023',
@@ -1149,7 +1159,7 @@ def test_upgrade_db_20_to_21(user_data_dir):
         length += 1
     assert length == 1300
     assert entry == (
-        BalanceType.ASSET.serialize_for_db(),
+        BalanceType.ASSET.serialize_for_db(),  # pylint: disable=no-member
         1605194428,
         'yyDAI+yUSDC+yUSDT+yBUSD',
         '167.18639752015697023',
@@ -1433,12 +1443,12 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
     """
     msg_aggregator = MessagesAggregator()
     _use_prepared_db(user_data_dir, 'v24_rotkehlchen.db')
-    db_v24 = _init_db_with_target_version(
-        target_version=24,
-        user_data_dir=user_data_dir,
-        msg_aggregator=msg_aggregator,
-
-    )
+    with mock_dbhandler_ensura_data_integrity():
+        db_v24 = _init_db_with_target_version(
+            target_version=24,
+            user_data_dir=user_data_dir,
+            msg_aggregator=msg_aggregator,
+        )
     # copy some test icons in the test directory
     icons_dir = user_data_dir.parent / 'icons'
     custom_icons_dir = icons_dir / 'custom'
@@ -1628,7 +1638,10 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
     ]
     assert len(raw_upgraded) == asset_movements_count - 2, 'coinbase/pro movements should have been deleted'  # noqa: E501
     # Check that identifiers match with what is expected. This may need amendment if the upgrade test stays around while the code changes.  # noqa: E501
-    movements = db.get_asset_movements()
+    movements = db.get_asset_movements(
+        filter_query=AssetMovementsFilterQuery.make(),
+        has_premium=True,
+    )
     assert all(x.identifier == raw_upgraded[idx][0] for idx, x in enumerate(movements))
 
     # check that the timed balances had the currency properly changed
@@ -1730,8 +1743,9 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
         ('7aae102d9240f7d5f7f0669d6eefb47f2d1cf5bba462b0cee267719e9272ffde', 1612302374, 'A', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', 'ETH', 'A', '1', '0.01241', '0', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', None, None),  # noqa: E501
     ]
     # Check that identifiers match with what is expected. This may need amendment if the upgrade test stays around while the code changes.  # noqa: E501
-    trades = db.get_trades()
-    assert all(x.identifier == trades_query[idx][0] for idx, x in enumerate(trades))
+    cursor = db.conn.cursor()
+    result = cursor.execute('SELECT id from trades ORDER BY time ASC').fetchall()
+    assert all(x[0] == trades_query[idx][0] for idx, x in enumerate(result))
 
     # Check that cached icons were purged but custom icons were not
     assert (custom_icons_dir / custom_icon_filename).is_file()
@@ -1744,19 +1758,648 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
 
     # Check errors/warnings
     warnings = msg_aggregator.consume_warnings()
-    assert len(warnings) == 13
+    assert len(warnings) == 11
     for idx in (0, 1, 3, 5, 7):
         assert "During v24 -> v25 DB upgrade could not find key '_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94'" in warnings[idx]  # noqa: E501
     for idx in (2, 4, 6):
         assert "During v24 -> v25 DB upgrade could not find key '_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e'" in warnings[idx]  # noqa: E501
-    for idx in (9, 11):
-        assert 'Unknown/unsupported asset _ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94' in warnings[idx]  # noqa: E501
-    for idx in (10, 12):
-        assert 'Unknown/unsupported asset _ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e' in warnings[idx]  # noqa: E501
+    assert 'Unknown/unsupported asset _ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94' in warnings[9]  # noqa: E501
+    assert 'Unknown/unsupported asset _ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e' in warnings[10]  # noqa: E501
     errors = msg_aggregator.consume_errors()
     assert len(errors) == 0
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 25
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+@pytest.mark.parametrize('have_kraken', [True, False])
+@pytest.mark.parametrize('have_kraken_setting', [True, False])
+def test_upgrade_db_25_to_26(globaldb, user_data_dir, have_kraken, have_kraken_setting):  # pylint: disable=unused-argument  # noqa: E501
+    """Test upgrading the DB from version 25 to version 26"""
+    msg_aggregator = MessagesAggregator()
+    with mock_dbhandler_ensura_data_integrity():
+        v25_conn = _init_prepared_db(user_data_dir, 'v25_rotkehlchen.db')
+    cursor = v25_conn.cursor()
+
+    # make sure the globaldb has a custom token used in the DB
+    globaldb.add_asset(
+        asset_id='_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94',
+        asset_type=AssetType.ETHEREUM_TOKEN,
+        data=EthereumToken.initialize(
+            address=ChecksumEthAddress('0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94'),
+            decimals=18,
+            name='foo',
+            symbol='FOO',
+        ),
+    )
+
+    # Checks before migration
+    credentials = cursor.execute(
+        'SELECT name, api_key, api_secret, passphrase from user_credentials',
+    ).fetchall()
+    expected_credentials_before = [
+        ('rotkehlchen', 'key', 'secret', ''),
+        ('kraken', 'key', 'secret', ''),
+        ('poloniex', 'key', 'secret', ''),
+        ('bittrex', 'key', 'secret', ''),
+        ('bitmex', 'key', 'secret', ''),
+        ('binance', 'key', 'secret', ''),
+        ('coinbase', 'key', 'secret', ''),
+        ('coinbasepro', 'key', 'secret', 'phrase'),
+        ('gemini', 'key', 'secret', ''),
+        ('bitstamp', 'key', 'secret', ''),
+        ('binance_us', 'key', 'secret', ''),
+        ('bitfinex', 'key', 'secret', ''),
+        ('bitcoinde', 'key', 'secret', ''),
+        ('iconomi', 'key', 'secret', ''),
+        ('kucoin', 'key', 'secret', ''),
+        ('ftx', 'key', 'secret', ''),
+    ]
+    if have_kraken:
+        expected_credentials_before.append(('kraken', 'key', 'secret', ''))
+    else:  # Make sure the credentials are not in the DB
+        cursor.execute('DELETE from user_credentials WHERE name="kraken";')
+
+    if have_kraken_setting is False:
+        # Make sure it's not there
+        cursor.execute('DELETE from settings WHERE name="kraken_account_type";')
+
+    assert set(credentials) == set(expected_credentials_before)
+    settings = cursor.execute(
+        'SELECT name, value from settings WHERE name="kraken_account_type";',
+    ).fetchone()
+    if have_kraken_setting:
+        assert settings == ('kraken_account_type', 'pro')
+    else:
+        assert settings is None
+    settings = cursor.execute(
+        'SELECT name, value from settings WHERE name="anonymized_logs";',
+    ).fetchone()
+    assert settings == ('anonymized_logs', 'True')
+
+    # check all tables are there before the upgrade
+    assert cursor.execute('SELECT COUNT(*) from timed_balances;').fetchone()[0] == 392
+    trades_query = cursor.execute(
+        'SELECT id, time, location, base_asset, quote_asset, type, amount, rate, fee,'
+        'fee_currency, link, notes from trades ORDER BY time ASC;',
+    ).fetchall()
+    assert trades_query == [
+        ('foo1', 1, 'S', 'ETH', 'BTC', 'A', '1', '1', '1', 'ETH', '', ''),
+        ('foo2', 1, 'B', 'ETH', 'BTC', 'A', '1', '1', '1', 'ETH', '', ''),
+        ('fac279d109466a908119816d2ee7af90fba28f1ae60437bcbfab10e40a62bbc7', 1493227049, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '867.46673624', '0.00114990', '0.00249374', 'BTC', 'l1', None),  # noqa: E501
+        ('56775b4b80f46d1dfc1b53fc0f6b61573c14142499bfe3a62e3371f7afc166db', 1493228252, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'A', '11348.12286689', '0.00008790', '0.00249374', 'BTC', 'l2', None),  # noqa: E501
+        ('d38687c92fd4b56f7241b38653390a72022709ef8835c289f6d49cc436b8e05a', 1498949799, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '150.00000000', '0.00091705', '0.00034389', 'BTC', 'l3', None),  # noqa: E501
+        ('cc31283b6e723f4a7364496b349869564b06b4320da3a14d95dcda1801369361', 1498966605, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '1000.00000000', '0.00091409', '0.00228521', 'BTC', 'l4', None),  # noqa: E501
+        ('c76a42bc8b32407b7444da89cc9f73c22fd6a1bc0055b7d4112e3e59709b2b5b', 1499011364, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '200.00000000', '0.00092401', '0.00046200', 'BTC', 'l5', None),  # noqa: E501
+        ('18810df423b24bb438360b23b50bd0fc11ed2d3701420651ef716f4840367894', 1499051024, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '120.00000000', '0.00091603', '0.00027480', 'BTC', 'l6', None),  # noqa: E501
+        ('27bb15dfc1a008c2efa2c5510b30808d8246ab903cf9f950ea7a175f0779925d', 1499675187, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '200.00000000', '0.00091747', '0.00045869', 'BTC', 'l7', None),  # noqa: E501
+        ('b0c4d1d816fa3448ba1ab1a285a35d71a42ff27d68438626eacecc4bf927ab07', 1499677638, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '1135.00000000', '0.00088101', '0.00249985', 'BTC', 'l8', None),  # noqa: E501
+        ('6b91fc81d40c121af7397c5f3351547de4bd3f288fe483ace14b7b7922cfcd36', 1500494329, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'B', '10490.34064784', '0.00024385', '0.00639521', 'BTC', 'l9', None),  # noqa: E501
+        ('59ea4f98a815467122d201d737b97f910c8918cfe8f476a74d51a4006ef1aaa8', 1500501003, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'B', '857.78221905', '0.00018099', '0.00038812', 'BTC', 'l10', None),  # noqa: E501
+        ('dc4a8a1dd3ef78b6eae5ee69f24bed73196ba3677150015f80d28a70b963253c', 1501194075, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '510.21713000', '0.00039101', '0.00049875', 'BTC', 'l11', None),  # noqa: E501
+        ('8ba98869f1398d9d64d974a13bc1e686746c7068b765223a46f886ef9c100722', 1501585385, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '731.28354007', '0.00034101', '0.00062343', 'BTC', 'l12', None),  # noqa: E501
+        ('6f583c1297a86beadb46e8876db9589bb2ca60c603a4eca77b331611a49cd482', 1599751485, 'A', 'ETH', 'EUR', 'A', '150', '210.15', '0.2', 'EUR', None, None),  # noqa: E501
+        ('3fc94b6b91de61d98b21bdba9a6e449b3ff25756f34a14d17dcf3979d08c4ee3', 1607172606, 'D', 'MAID', 'BTC', 'B', '15515.00000000', '0.00001299', '0.00040305', 'BTC', 'l13', None),  # noqa: E501
+        ('ecd64dba4367a42292988abb34ed46b3dda0d48728c629f9727706d198023d6c', 1610915040, 'A', 'ETH', 'EUR', 'A', '5', '0.1', '0.001', '_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'dsad', 'ads'),  # noqa: E501c
+        ('7aae102d9240f7d5f7f0669d6eefb47f2d1cf5bba462b0cee267719e9272ffde', 1612302374, 'A', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', 'ETH', 'A', '1', '0.01241', '0', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', None, None),  # noqa: E501
+    ]
+    asset_movements_query = cursor.execute('SELECT id, location, category, address, transaction_id, time, asset, amount, fee_asset, fee, link from asset_movements ORDER BY time ASC;').fetchall()  # noqa: E501
+    assert asset_movements_query == [
+        ('foo1', 'S', 'B', '0xaddy', '0xtxid', 1, 'ETH', '1', 'BTC', '1', 'customlink'),
+        ('foo2', 'B', 'B', '0xaddy', '0xtxid', 1, 'ETH', '1', '_ceth_0x6B175474E89094C44Da98b954EedeAC495271d0F', '1', 'customlink'),  # noqa: E501
+        ('822511b6035c5d2a7a7ff82c21b61381016e76764e84f656aedcfbc3b7a2e2f4', 'L', 'B', '0xaddy', '0xtxid', 1, '_ceth_0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e', '1', '_ceth_0x6810e776880C02933D47DB1b9fc05908e5386b96', '1', 'customlink'),  # noqa: E501
+        ('98c8378892955d3c95cc24277188ad33504d2e668441ba23a270b6c65f00be43', 'D', 'A', '0xaddress', '0xtxid', 1493226738, 'BTC', '2.00000000', 'BTC', '0', 'link3'),  # noqa: E501
+        ('9713d2c2f90edfc375bfea1d014599e9f3a20eded94625c0a2483c4ab2692ff9', 'D', 'A', '0xaddress', '0xtxid', 1498941726, 'BTC', '4.20000000', 'BTC', '0', 'link2'),  # noqa: E501
+        ('86f6cda4bcd36e2fd0e8938fd3b31ebe895af2df6d8b60479c401cd846a3ccf8', 'D', 'B', '0xaddress', '0xtxid', 1501161076, 'BTC', '3.91944853', 'BTC', '0.00100000', 'link5'),  # noqa: E501
+        ('9a3ab62aea2892e9000c868ce29a471e34f57d3bbae7691b920bcf58fbea10ce', 'D', 'A', '0xaddress', '0xtxid', 1577666912, 'MAID', '15515.00000000', 'MAID', '0', 'link1'),  # noqa: E501
+        ('79d6d91d1fd2acf02a9d244e33ff340c04a938faaf0d1ba10aba9d8ae55b11cc', 'D', 'B', '0xaddress', '0xtxid', 1607094370, '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', '4753.96740631', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', '160.00000000', 'link4'),  # noqa: E501
+    ]
+    # Check manually tracked balances before upgrade
+    query = cursor.execute('SELECT asset, label, amount, location from manually_tracked_balances;')  # noqa: E501
+    assert query.fetchall() == [
+        ('EUR', 'test eur balance', '1', 'A'),
+        ('USD', 'test usd balance', '1', 'A'),
+        ('CNY', 'test CNY balance', '1', 'A'),
+        ('_ceth_0x8Ab7404063Ec4DBcfd4598215992DC3F8EC853d7', 'exotic asset', '1500', 'A'),
+        ('_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'test for duplication', '100000', 'J'),  # noqa: E501
+        ('_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94', 'test custom token balance', '65', 'A'),  # noqa: E501
+        ('_ceth_0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9', 'test_asset_with_same_symbol', '85', 'A'),  # noqa: E501
+        ('_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e', 'test_custom_token', '25', 'A'),  # this token is not known but will still be here after the upgrade  # noqa: E501
+    ]
+    # Check ledger actions before upgrade
+    query = cursor.execute('SELECT identifier, timestamp, type, location, amount, asset, rate, rate_asset, link, notes from ledger_actions;')  # noqa: E501
+    assert query.fetchall() == [
+        (1, 1611260690, 'A', 'A', '1', '_ceth_0x0E8d6b471e332F140e7d9dbB99E5E3822F728DA6', None, None, None, None),  # noqa: E501
+        (2, 1610483475, 'A', 'A', '1', '_ceth_0xB6eD7644C69416d67B522e20bC294A9a9B405B31', None, None, 'sad', 'asdsad'),  # noqa: E501
+    ]
+    # Check margin positions before upgrade
+    query = cursor.execute('SELECT id, location, open_time, close_time, profit_loss, pl_currency, fee, fee_currency, link, notes from margin_positions;')  # noqa: E501
+    raw_upgraded = query.fetchall()
+    assert raw_upgraded == [
+        ("3ebd1ff33f6b6431778db56393e6105b94b0b23d0976462d70279e6f82db9924", "C", 1, 5, "500", "ETH", "1", "_ceth_0x6810e776880C02933D47DB1b9fc05908e5386b96", "", ""),  # noqa: E501
+        ("2ecdf50622f0ad6277b2c4b28954118753db195c9ae2005ce7da7b30d4a873c4", "A", 1, 5, "1", "BTC", "1", "_ceth_0x255Aa6DF07540Cb5d3d297f0D0D4D84cb52bc8e6", "", ""),  # noqa: E501
+        ("bec34827cd9ce879e91d45dfe11942752f810504439701ff7f3d005850f458a8", "A", 0, 5, "1", "_ceth_0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e", "1", "_ceth_0x1494CA1F11D487c2bBe4543E90080AeBa4BA3C2b", "", ""),  # noqa: E501
+    ]
+    # Check the tables that are just gonna get deleted have data before the upgrade
+    assert cursor.execute('SELECT COUNT(*) from adex_events;').fetchone()[0] == 1
+    assert cursor.execute('SELECT COUNT(*) from aave_events;').fetchone()[0] == 1
+    assert cursor.execute('SELECT COUNT(*) from yearn_vaults_events;').fetchone()[0] == 1
+    assert cursor.execute('SELECT COUNT(*) from ethereum_accounts_details;').fetchone()[0] == 1
+    # Check used query ranges before upgrade
+    used_query_ranges = cursor.execute('SELECT * from used_query_ranges').fetchall()
+    assert used_query_ranges == [
+        ('binance_us_trades', 0, 1),
+        ('binance_us_asset_movements', 0, 1),
+        ('kraken_trades', 0, 1),
+        ('kraken_asset_movements', 0, 1),
+    ]
+
+    v25_conn.commit()  # for changes done depending on test params
+    v25_conn.close()
+
+    # Migrate to v26
+    with mock_dbhandler_ensura_data_integrity():
+        db = _init_db_with_target_version(
+            target_version=26,
+            user_data_dir=user_data_dir,
+            msg_aggregator=msg_aggregator,
+        )
+    cursor = db.conn.cursor()
+
+    # Make sure that the user credentials have been upgraded
+    credentials = cursor.execute(
+        'SELECT name, location, api_key, api_secret, passphrase from user_credentials',
+    ).fetchall()
+    expected_credentials = [
+        ('rotkehlchen', 'A', 'key', 'secret', ''),
+        ('poloniex', 'C', 'key', 'secret', ''),
+        ('bittrex', 'D', 'key', 'secret', ''),
+        ('bitmex', 'F', 'key', 'secret', ''),
+        ('binance', 'E', 'key', 'secret', ''),
+        ('coinbase', 'G', 'key', 'secret', ''),
+        ('coinbasepro', 'K', 'key', 'secret', 'phrase'),
+        ('gemini', 'L', 'key', 'secret', ''),
+        ('bitstamp', 'R', 'key', 'secret', ''),
+        ('binance_us', 'S', 'key', 'secret', ''),
+        ('bitfinex', 'T', 'key', 'secret', ''),
+        ('bitcoinde', 'U', 'key', 'secret', ''),
+        ('iconomi', 'V', 'key', 'secret', ''),
+        ('kucoin', 'W', 'key', 'secret', ''),
+        ('ftx', 'Z', 'key', 'secret', ''),
+    ]
+    if have_kraken:
+        expected_credentials.append(('kraken', 'B', 'key', 'secret', ''))
+    assert set(credentials) == set(expected_credentials)
+    # Make sure settings is no longer there
+    settings = cursor.execute(
+        'SELECT name, value from settings WHERE name="kraken_account_type";',
+    ).fetchone()
+    assert settings is None
+    settings = cursor.execute(
+        'SELECT name, value from settings WHERE name="anonymized_logs";',
+    ).fetchone()
+    assert settings is None
+    mapping = cursor.execute(
+        'SELECT credential_name, credential_location, setting_name, setting_value '
+        'FROM user_credentials_mappings;',
+    ).fetchone()
+    if have_kraken and have_kraken_setting:
+        assert mapping == ('kraken', 'B', 'kraken_account_type', 'pro')
+    else:
+        assert mapping is None
+
+    # check trades/assets movements and used query ranges of binanceus were purged
+    # Also check tables were properly migrated and we lost no data
+    trades_query = cursor.execute(
+        'SELECT id, time, location, base_asset, quote_asset, type, amount, rate, fee,'
+        'fee_currency, link, notes from trades ORDER BY time ASC;',
+    ).fetchall()
+    assert trades_query == [
+        ('foo2', 1, 'B', 'ETH', 'BTC', 'A', '1', '1', '1', 'ETH', '', ''),
+        ('fac279d109466a908119816d2ee7af90fba28f1ae60437bcbfab10e40a62bbc7', 1493227049, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '867.46673624', '0.00114990', '0.00249374', 'BTC', 'l1', None),  # noqa: E501
+        ('56775b4b80f46d1dfc1b53fc0f6b61573c14142499bfe3a62e3371f7afc166db', 1493228252, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'A', '11348.12286689', '0.00008790', '0.00249374', 'BTC', 'l2', None),  # noqa: E501
+        ('d38687c92fd4b56f7241b38653390a72022709ef8835c289f6d49cc436b8e05a', 1498949799, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '150.00000000', '0.00091705', '0.00034389', 'BTC', 'l3', None),  # noqa: E501
+        ('cc31283b6e723f4a7364496b349869564b06b4320da3a14d95dcda1801369361', 1498966605, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '1000.00000000', '0.00091409', '0.00228521', 'BTC', 'l4', None),  # noqa: E501
+        ('c76a42bc8b32407b7444da89cc9f73c22fd6a1bc0055b7d4112e3e59709b2b5b', 1499011364, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '200.00000000', '0.00092401', '0.00046200', 'BTC', 'l5', None),  # noqa: E501
+        ('18810df423b24bb438360b23b50bd0fc11ed2d3701420651ef716f4840367894', 1499051024, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '120.00000000', '0.00091603', '0.00027480', 'BTC', 'l6', None),  # noqa: E501
+        ('27bb15dfc1a008c2efa2c5510b30808d8246ab903cf9f950ea7a175f0779925d', 1499675187, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '200.00000000', '0.00091747', '0.00045869', 'BTC', 'l7', None),  # noqa: E501
+        ('b0c4d1d816fa3448ba1ab1a285a35d71a42ff27d68438626eacecc4bf927ab07', 1499677638, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '1135.00000000', '0.00088101', '0.00249985', 'BTC', 'l8', None),  # noqa: E501
+        ('6b91fc81d40c121af7397c5f3351547de4bd3f288fe483ace14b7b7922cfcd36', 1500494329, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'B', '10490.34064784', '0.00024385', '0.00639521', 'BTC', 'l9', None),  # noqa: E501
+        ('59ea4f98a815467122d201d737b97f910c8918cfe8f476a74d51a4006ef1aaa8', 1500501003, 'D', '_ceth_0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c', 'BTC', 'B', '857.78221905', '0.00018099', '0.00038812', 'BTC', 'l10', None),  # noqa: E501
+        ('dc4a8a1dd3ef78b6eae5ee69f24bed73196ba3677150015f80d28a70b963253c', 1501194075, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '510.21713000', '0.00039101', '0.00049875', 'BTC', 'l11', None),  # noqa: E501
+        ('8ba98869f1398d9d64d974a13bc1e686746c7068b765223a46f886ef9c100722', 1501585385, 'D', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', 'BTC', 'A', '731.28354007', '0.00034101', '0.00062343', 'BTC', 'l12', None),  # noqa: E501
+        ('6f583c1297a86beadb46e8876db9589bb2ca60c603a4eca77b331611a49cd482', 1599751485, 'A', 'ETH', 'EUR', 'A', '150', '210.15', '0.2', 'EUR', None, None),  # noqa: E501
+        ('3fc94b6b91de61d98b21bdba9a6e449b3ff25756f34a14d17dcf3979d08c4ee3', 1607172606, 'D', 'MAID', 'BTC', 'B', '15515.00000000', '0.00001299', '0.00040305', 'BTC', 'l13', None),  # noqa: E501
+        ('ecd64dba4367a42292988abb34ed46b3dda0d48728c629f9727706d198023d6c', 1610915040, 'A', 'ETH', 'EUR', 'A', '5', '0.1', '0.001', '_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'dsad', 'ads'),  # noqa: E501c
+        ('7aae102d9240f7d5f7f0669d6eefb47f2d1cf5bba462b0cee267719e9272ffde', 1612302374, 'A', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', 'ETH', 'A', '1', '0.01241', '0', '_ceth_0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', None, None),  # noqa: E501
+    ]
+    asset_movements_query = cursor.execute('SELECT id, location, category, address, transaction_id, time, asset, amount, fee_asset, fee, link from asset_movements ORDER BY time ASC;').fetchall()  # noqa: E501
+    assert asset_movements_query == [
+        ('foo2', 'B', 'B', '0xaddy', '0xtxid', 1, 'ETH', '1', '_ceth_0x6B175474E89094C44Da98b954EedeAC495271d0F', '1', 'customlink'),  # noqa: E501
+        ('822511b6035c5d2a7a7ff82c21b61381016e76764e84f656aedcfbc3b7a2e2f4', 'L', 'B', '0xaddy', '0xtxid', 1, '_ceth_0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e', '1', '_ceth_0x6810e776880C02933D47DB1b9fc05908e5386b96', '1', 'customlink'),  # noqa: E501
+        ('98c8378892955d3c95cc24277188ad33504d2e668441ba23a270b6c65f00be43', 'D', 'A', '0xaddress', '0xtxid', 1493226738, 'BTC', '2.00000000', 'BTC', '0', 'link3'),  # noqa: E501
+        ('9713d2c2f90edfc375bfea1d014599e9f3a20eded94625c0a2483c4ab2692ff9', 'D', 'A', '0xaddress', '0xtxid', 1498941726, 'BTC', '4.20000000', 'BTC', '0', 'link2'),  # noqa: E501
+        ('86f6cda4bcd36e2fd0e8938fd3b31ebe895af2df6d8b60479c401cd846a3ccf8', 'D', 'B', '0xaddress', '0xtxid', 1501161076, 'BTC', '3.91944853', 'BTC', '0.00100000', 'link5'),  # noqa: E501
+        ('9a3ab62aea2892e9000c868ce29a471e34f57d3bbae7691b920bcf58fbea10ce', 'D', 'A', '0xaddress', '0xtxid', 1577666912, 'MAID', '15515.00000000', 'MAID', '0', 'link1'),  # noqa: E501
+        ('79d6d91d1fd2acf02a9d244e33ff340c04a938faaf0d1ba10aba9d8ae55b11cc', 'D', 'B', '0xaddress', '0xtxid', 1607094370, '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', '4753.96740631', '_ceth_0xB9e7F8568e08d5659f5D29C4997173d84CdF2607', '160.00000000', 'link4'),  # noqa: E501
+    ]  # noqa: E501
+    query = cursor.execute('SELECT identifier, timestamp, type, location, amount, asset, rate, rate_asset, link, notes from ledger_actions;')  # noqa: E501
+    assert query.fetchall() == [
+        (1, 1611260690, 'A', 'A', '1', '_ceth_0x0E8d6b471e332F140e7d9dbB99E5E3822F728DA6', None, None, None, None),  # noqa: E501
+        (2, 1610483475, 'A', 'A', '1', '_ceth_0xB6eD7644C69416d67B522e20bC294A9a9B405B31', None, None, 'sad', 'asdsad'),  # noqa: E501
+    ]
+    # Check manually tracked balances after upgrades
+    query = cursor.execute('SELECT asset, label, amount, location from manually_tracked_balances;')  # noqa: E501
+    assert query.fetchall() == [
+        ('EUR', 'test eur balance', '1', 'A'),
+        ('USD', 'test usd balance', '1', 'A'),
+        ('CNY', 'test CNY balance', '1', 'A'),
+        ('_ceth_0x8Ab7404063Ec4DBcfd4598215992DC3F8EC853d7', 'exotic asset', '1500', 'A'),
+        ('_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'test for duplication', '100000', 'J'),  # noqa: E501
+        ('_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94', 'test custom token balance', '65', 'A'),  # noqa: E501
+        ('_ceth_0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9', 'test_asset_with_same_symbol', '85', 'A'),  # noqa: E501
+        ('_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e', 'test_custom_token', '25', 'A'),  # this token is not known but will still be here after the upgrade  # noqa: E501
+    ]
+    # Check margin positions after upgrade
+    query = cursor.execute('SELECT id, location, open_time, close_time, profit_loss, pl_currency, fee, fee_currency, link, notes from margin_positions;')  # noqa: E501
+    raw_upgraded = query.fetchall()
+    assert raw_upgraded == [
+        ("3ebd1ff33f6b6431778db56393e6105b94b0b23d0976462d70279e6f82db9924", "C", 1, 5, "500", "ETH", "1", "_ceth_0x6810e776880C02933D47DB1b9fc05908e5386b96", "", ""),  # noqa: E501
+        ("2ecdf50622f0ad6277b2c4b28954118753db195c9ae2005ce7da7b30d4a873c4", "A", 1, 5, "1", "BTC", "1", "_ceth_0x255Aa6DF07540Cb5d3d297f0D0D4D84cb52bc8e6", "", ""),  # noqa: E501
+        ("bec34827cd9ce879e91d45dfe11942752f810504439701ff7f3d005850f458a8", "A", 0, 5, "1", "_ceth_0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e", "1", "_ceth_0x1494CA1F11D487c2bBe4543E90080AeBa4BA3C2b", "", ""),  # noqa: E501
+    ]
+    used_query_ranges = cursor.execute('SELECT * from used_query_ranges').fetchall()
+    assert used_query_ranges == [
+        ('kraken_trades', 0, 1),
+        ('kraken_asset_movements', 0, 1),
+    ]
+    # Check the tables that should have had their data deleted had them
+    assert cursor.execute('SELECT COUNT(*) from adex_events;').fetchone()[0] == 0
+    assert cursor.execute('SELECT COUNT(*) from aave_events;').fetchone()[0] == 0
+    assert cursor.execute('SELECT COUNT(*) from yearn_vaults_events;').fetchone()[0] == 0
+    assert cursor.execute('SELECT COUNT(*) from ethereum_accounts_details;').fetchone()[0] == 0
+    # check that the timed balances are still there and have not changed
+    assert cursor.execute('SELECT COUNT(*) from timed_balances;').fetchone()[0] == 392
+    query = cursor.execute('SELECT category, time, currency, amount, usd_value from timed_balances;')  # noqa: E501
+    for idx, entry in enumerate(query):
+        # the test DB also has some custom tokens which are not in the globalDB as of this writing
+        # 1st one is random fake address, 2nd one is vBNT
+        if entry[2] in ('_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e', '_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94'):  # noqa: E501
+            continue
+
+        # make sure the asset is understood
+        _ = Asset(entry[2])
+        # check some specific entries
+        if idx == 388:
+            assert entry == (
+                'A',
+                1616766011,
+                'CNY',
+                '1',
+                '0.1528360528',
+            )
+        elif idx == 384:
+            assert entry == (
+                'A',
+                1616766011,
+                '_ceth_0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643',
+                '1711.44952226',
+                '36.3901575584242602',
+            )
+        elif idx == 2:
+            assert entry == (
+                'A',
+                1610559319,
+                '_ceth_0x6B175474E89094C44Da98b954EedeAC495271d0F',
+                '90.5639',
+                '90.54578722',
+            )
+        elif idx == 1:
+            assert entry == (
+                'A',
+                1610559319,
+                '_ceth_0x4DC3643DbC642b72C158E7F3d2ff232df61cb6CE',
+                '0.1',
+                '0.001504',
+            )
+    userdb_assets_num = cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0]
+    globaldb_cursor = globaldb._conn.cursor()
+    globaldb_assets_num = globaldb_cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0]
+    msg = 'User DB should contain 1 extra asset that is moved over without existing in the global DB'  # noqa: E501
+    assert globaldb_assets_num == userdb_assets_num - 1, msg
+
+    # Check errors/warnings
+    warnings = msg_aggregator.consume_warnings()
+    assert len(warnings) == 2
+    assert 'During v25 -> v26 DB upgrade found timed_balances entry of unknown asset _ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e' in warnings[0]  # noqa: E501
+    assert 'Unknown/unsupported asset _ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e found in the database' in warnings[1]  # noqa: E501
+    errors = msg_aggregator.consume_errors()
+    assert len(errors) == 0
+
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 26
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_26_to_27(user_data_dir):  # pylint: disable=unused-argument
+    """Test upgrading the DB from version 26 to version 27.
+
+    - Recreates balancer events, uniswap events, amm_swaps. Deletes balancer pools
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v26_rotkehlchen.db')
+    db_v26 = _init_db_with_target_version(
+        target_version=26,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    # Checks before migration
+    cursor = db_v26.conn.cursor()
+    assert cursor.execute(
+        'SELECT COUNT(*) from used_query_ranges WHERE name LIKE "uniswap%";',
+    ).fetchone()[0] == 2
+    assert cursor.execute(
+        'SELECT COUNT(*) from used_query_ranges WHERE name LIKE "balancer%";',
+    ).fetchone()[0] == 2
+    assert cursor.execute('SELECT COUNT(*) from used_query_ranges;').fetchone()[0] == 6
+    assert cursor.execute('SELECT COUNT(*) from amm_swaps;').fetchone()[0] == 2
+    assert cursor.execute('SELECT COUNT(*) from balancer_pools;').fetchone()[0] == 1
+    assert cursor.execute('SELECT COUNT(*) from balancer_events;').fetchone()[0] == 1
+
+    # Migrate to v27
+    db = _init_db_with_target_version(
+        target_version=27,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+    assert cursor.execute('SELECT COUNT(*) from used_query_ranges;').fetchone()[0] == 2
+    assert cursor.execute('SELECT COUNT(*) from amm_swaps;').fetchone()[0] == 0
+    assert cursor.execute('SELECT COUNT(*) from balancer_events;').fetchone()[0] == 0
+
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 27
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_27_to_28(user_data_dir):  # pylint: disable=unused-argument
+    """Test upgrading the DB from version 27 to version 28.
+
+    - Adds a new column 'version' to the 'yearn_vaults_events' table
+    - Delete aave events
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v27_rotkehlchen.db')
+    db_v27 = _init_db_with_target_version(
+        target_version=27,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db_v27.conn.cursor()
+
+    # Checks before migration
+    assert cursor.execute('SELECT COUNT(*) FROM aave_events;').fetchone()[0] == 1
+    assert cursor.execute('SELECT COUNT(*) from yearn_vaults_events;').fetchone()[0] == 1
+    # Migrate to v28
+    db = _init_db_with_target_version(
+        target_version=28,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+
+    cursor.execute(
+        'SELECT COUNT(*) FROM pragma_table_info("yearn_vaults_events") '
+        'WHERE name="version"',
+    )
+    assert cursor.fetchone()[0] == 1
+
+    cursor.execute('SELECT count(*) from yearn_vaults_events;')
+    assert cursor.fetchone()[0] == 1
+
+    # Check that the version is correct for the event in db
+    cursor.execute('SELECT version from yearn_vaults_events;')
+    assert cursor.fetchone()[0] == 1
+
+    # Check that aave_events got deleted
+    assert cursor.execute('SELECT COUNT(*) FROM aave_events;').fetchone()[0] == 0
+
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 28
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_28_to_29(user_data_dir):  # pylint: disable=unused-argument
+    """Test upgrading the DB from version 28 to version 29.
+
+    - Updates the primary key of blockchain accounts to take into account chain type
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v28_rotkehlchen.db')
+    db_v28 = _init_db_with_target_version(
+        target_version=28,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db_v28.conn.cursor()
+
+    expected_accounts = [
+        ('AVAX', '0x84D34f4f83a87596Cd3FB6887cFf8F17Bf5A7B83', ''),
+        ('BTC', '39bAC3Mr6RfT2V3Z8qShD7mA9JT1Phmvap', ''),
+        ('ETH', '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', 'Address with internal txs'),
+        ('ETH', '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', 'address that sends'),
+        ('ETH', '0x902CAe163C2B222285035aAEB9A25e6BA02Fa27B', 'address that receives'),
+    ]
+    expected_xpubs = [('xpub68V4ZQQ62mea7ZUKn2urQu47Bdn2Wr7SxrBxBDDwE3kjytj361YBGSKDT4WoBrE5htrSB8eAMe59NPnKrcAbiv2veN5GQUmfdjRddD1Hxrk', '/m/0/0', 'label1')]  # noqa: E501
+    expected_xpub_mappings = [
+        ('39bAC3Mr6RfT2V3Z8qShD7mA9JT1Phmvap', 'xpub68V4ZQQ62mea7ZUKn2urQu47Bdn2Wr7SxrBxBDDwE3kjytj361YBGSKDT4WoBrE5htrSB8eAMe59NPnKrcAbiv2veN5GQUmfdjRddD1Hxrk', '/m/0/0', 0, 1),  # noqa: E501
+    ]
+    # Checks before migration
+    assert cursor.execute('SELECT * FROM blockchain_accounts;').fetchall() == expected_accounts
+    assert cursor.execute('SELECT * FROM xpubs;').fetchall() == expected_xpubs
+    assert cursor.execute('SELECT * FROM xpub_mappings;').fetchall() == expected_xpub_mappings
+    expected_transactions_before = [
+        ('0xbf5a8870576098c23fb2736ad4832db401a04a52000e6064294711acddb1dac5', 12690344, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 0),  # noqa: E501
+        ('0x67884a2e791e3d93f5dc1a57019f3ac612693c7fe70fbb74d5e6e61b307cf5d9', 12691582, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 1),  # noqa: E501
+        ('0xfb90c1e3f50016d95c8b6d37b7f85aa9a9d4e6f2da0caf9abaa2e25395e53e57', 12719998, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 2),  # noqa: E501
+        ('0x49783d098aa710e05d6fc37f5aa28cf4743c0c8cee57a65f2d66fd7a869e06ac', 12773277, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 3),  # noqa: E501
+        ('0x5107cd6fa8c62435ab223134a3eecb94c2feea3084962421c73416329bc5ac49', 12817184, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 4),  # noqa: E501
+        ('0xe4d7486814e50aa11af7e8034bb1d48fa04cde6051fb557324a5001e36426f31', 12856423, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 5),  # noqa: E501
+        ('0x7c293ef356957263f164c16fe38730cd7bd6b1ffef0b2f5cc21851a9b43ca5cf', 12895650, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 6),  # noqa: E501
+        ('0xc8141b1260613f1281ea375402be9291f2330b240cf16bcdb0dc1dfe70a02722', 12931687, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 7),  # noqa: E501
+        ('0x841e78e62ad89c5de0100d27acce3593b52f0a2880366144ddfffc622e99c559', 12978963, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 8),  # noqa: E501
+        ('0x3617e90dae481ebd5f906d2f325940ba334a1a37f966f9945926fb36d518a5a3', 13030277, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 9),  # noqa: E501
+        ('0xff76780c18b8e8b1cae08af25ffe571d9862eb3587b0e8a705effadb3c9dfce2', 13047542, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 10),  # noqa: E501
+        ('0x8342dbd4b0befe23f5d0da0ef5e5aeb52c323fb939e242de8a8afeaae16e0f1c', 13087523, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 11),  # noqa: E501
+        ('0x07c51405f1046d85c6bb534fd8e8b9822935d33f7c96cf840611f719f4de8b52', 13145936, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 12),  # noqa: E501
+        ('0xf88c83f6c5725fbeff1969dc1b26c1d29c1435d457d092c14bee349ecc04781a', 12689445, '0x2602669a92fCCF44e5319fF51B0F453aAb9Db021', '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', -1),  # noqa: E501
+        ('0x548d45b53482ad22e7d8f0ae81a8b52e99d9582f3dad38bdf1fadc7911c99201', 13086898, '0x2602669a92fCCF44e5319fF51B0F453aAb9Db021', '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', -1),  # noqa: E501
+        ('0xa32075632ea2fa55c52dfe6ab361b4b9bf33ece75e78ae5f113aba8a91c20a28', 13145936, '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', '0x902CAe163C2B222285035aAEB9A25e6BA02Fa27B', 1),  # noqa: E501
+        ('0x53d2205f3f4e4d4f083878253c1b6c1cf9476fb70a53f97255425837cf472b9f', 12096043, '0x85b931A32a0725Be14285B66f1a22178c672d69B', '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', 650479),  # noqa: E501
+        ('0x04fb485b37b0a6107613ac6a9df403037ef41c523e562559bbfaa773f23c0ff8', 12096288, '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', '0x3E66B66Fd1d0b02fDa6C811Da9E0547970DB2f21', 0),  # noqa: E501
+    ]
+    transactions_before = []
+    transactions_before_query = cursor.execute('SELECT tx_hash, block_number, from_address, to_address, nonce from ethereum_transactions;')  # noqa: E501
+    for entry in transactions_before_query:
+        transactions_before.append((
+            '0x' + entry[0].hex(),
+            entry[1],
+            entry[2],
+            entry[3],
+            entry[4],
+        ))
+    assert transactions_before == expected_transactions_before
+    # Migrate to v29
+    db = _init_db_with_target_version(
+        target_version=29,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+
+    # check same data is there
+    assert cursor.execute('SELECT * FROM blockchain_accounts;').fetchall() == expected_accounts
+    assert cursor.execute('SELECT * FROM xpubs;').fetchall() == expected_xpubs
+    assert cursor.execute(
+        'SELECT address, xpub, derivation_path, account_index, derived_index FROM xpub_mappings;',
+    ).fetchall() == expected_xpub_mappings
+    # Check transactions are migrated and internal ones removed
+    expected_transactions_after = [
+        ('0xbf5a8870576098c23fb2736ad4832db401a04a52000e6064294711acddb1dac5', 12690344, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 0),  # noqa: E501
+        ('0x67884a2e791e3d93f5dc1a57019f3ac612693c7fe70fbb74d5e6e61b307cf5d9', 12691582, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 1),  # noqa: E501
+        ('0xfb90c1e3f50016d95c8b6d37b7f85aa9a9d4e6f2da0caf9abaa2e25395e53e57', 12719998, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 2),  # noqa: E501
+        ('0x49783d098aa710e05d6fc37f5aa28cf4743c0c8cee57a65f2d66fd7a869e06ac', 12773277, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 3),  # noqa: E501
+        ('0x5107cd6fa8c62435ab223134a3eecb94c2feea3084962421c73416329bc5ac49', 12817184, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 4),  # noqa: E501
+        ('0xe4d7486814e50aa11af7e8034bb1d48fa04cde6051fb557324a5001e36426f31', 12856423, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 5),  # noqa: E501
+        ('0x7c293ef356957263f164c16fe38730cd7bd6b1ffef0b2f5cc21851a9b43ca5cf', 12895650, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 6),  # noqa: E501
+        ('0xc8141b1260613f1281ea375402be9291f2330b240cf16bcdb0dc1dfe70a02722', 12931687, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 7),  # noqa: E501
+        ('0x841e78e62ad89c5de0100d27acce3593b52f0a2880366144ddfffc622e99c559', 12978963, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 8),  # noqa: E501
+        ('0x3617e90dae481ebd5f906d2f325940ba334a1a37f966f9945926fb36d518a5a3', 13030277, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 9),  # noqa: E501
+        ('0xff76780c18b8e8b1cae08af25ffe571d9862eb3587b0e8a705effadb3c9dfce2', 13047542, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 10),  # noqa: E501
+        ('0x8342dbd4b0befe23f5d0da0ef5e5aeb52c323fb939e242de8a8afeaae16e0f1c', 13087523, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 11),  # noqa: E501
+        ('0x07c51405f1046d85c6bb534fd8e8b9822935d33f7c96cf840611f719f4de8b52', 13145936, '0xb99Db59b12d43465848B11478AccBe491F4c6A4E', '0x9B9647431632AF44be02ddd22477Ed94d14AacAa', 12),  # noqa: E501
+        ('0xa32075632ea2fa55c52dfe6ab361b4b9bf33ece75e78ae5f113aba8a91c20a28', 13145936, '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', '0x902CAe163C2B222285035aAEB9A25e6BA02Fa27B', 1),  # noqa: E501
+        ('0x53d2205f3f4e4d4f083878253c1b6c1cf9476fb70a53f97255425837cf472b9f', 12096043, '0x85b931A32a0725Be14285B66f1a22178c672d69B', '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', 650479),  # noqa: E501
+        ('0x04fb485b37b0a6107613ac6a9df403037ef41c523e562559bbfaa773f23c0ff8', 12096288, '0xbd96cDCc6Ae1ffB73ace84E16601E1CF909D5749', '0x3E66B66Fd1d0b02fDa6C811Da9E0547970DB2f21', 0),    # noqa: E501
+    ]
+    transactions_after = []
+    transactions_after_query = cursor.execute('SELECT tx_hash, block_number, from_address, to_address, nonce from ethereum_transactions;')  # noqa: E501
+    for entry in transactions_after_query:
+        transactions_after.append((
+            '0x' + entry[0].hex(),
+            entry[1],
+            entry[2],
+            entry[3],
+            entry[4],
+        ))
+    assert transactions_after == expected_transactions_after
+
+    # check that uniswap_events table was renamed
+    cursor.execute(
+        'SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name="uniswap_events";',
+    )
+    assert cursor.fetchone()[0] == 0
+    cursor.execute('SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name="amm_events";')
+    assert cursor.fetchone()[0] == 1
+
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 29
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_29_to_30(user_data_dir):  # pylint: disable=unused-argument
+    """Test upgrading the DB from version 29 to version 30.
+
+    - Updates the primary key of blockchain accounts to take into account chain type
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v29_rotkehlchen.db')
+    db = _init_db_with_target_version(
+        target_version=30,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 30
+    cursor = db.conn.cursor()
+    # Check that existing balances are not considered as liabilities after migration
+    cursor.execute('SELECT category FROM manually_tracked_balances;')
+    assert cursor.fetchone() == ('A',)
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+@pytest.mark.parametrize('db_with_set_version', [True, False])
+def test_upgrade_db_30_to_31(user_data_dir, db_with_set_version):  # pylint: disable=unused-argument  # noqa: E501
+    """Test upgrading the DB from version 30 to version 31.
+
+    Also checks that this code upgrade works even if the DB is affected by
+    https://github.com/rotki/rotki/issues/3744 and does not have a version
+    setting set. Checks that the version is detected as at least v30 by missing
+    the eth2_validators table.
+
+    - Upgrades the ETH2 tables
+    - Deletes ignored ethereum transactions ids
+    - Deletes kraken trades and used query ranges
+    """
+    msg_aggregator = MessagesAggregator()
+    # Check we have data in the eth2 tables before the DB upgrade
+    _use_prepared_db(user_data_dir, 'v30_rotkehlchen.db')
+    db_v30 = _init_db_with_target_version(
+        target_version=30,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db_v30.conn.cursor()
+    result = cursor.execute('SELECT COUNT(*) FROM eth2_deposits;')
+    assert result.fetchone()[0] == 1
+    result = cursor.execute('SELECT COUNT(*) FROM eth2_daily_staking_details;')
+    assert result.fetchone()[0] == 356
+    result = cursor.execute('SELECT * FROM ignored_actions;')
+    assert result.fetchall() == [('C', '0x1'), ('C', '0x2'), ('A', '0x3'), ('B', '0x4')]
+    result = cursor.execute('SELECT COUNT(*) FROM trades;')
+    assert result.fetchone()[0] == 2
+    result = cursor.execute('SELECT COUNT(*) FROM asset_movements;')
+    assert result.fetchone()[0] == 1
+    result = cursor.execute('SELECT * FROM used_query_ranges;')
+    assert result.fetchall() == [
+        ('ethtxs_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 0, 1637575118),
+        ('eth2_deposits_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 1602667372, 1637575118),
+        ('kraken_trades_kraken1', 0, 1634850532),
+        ('kraken_asset_movements_kraken1', 0, 1634850532),
+    ]
+
+    if db_with_set_version:
+        db_name = 'v30_rotkehlchen.db'
+    else:
+        db_name = 'v30_rotkehlchen_without_setversion.db'
+    _use_prepared_db(user_data_dir, db_name)
+    db = _init_db_with_target_version(
+        target_version=31,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    # Finally also make sure that we have updated to the target version
+    assert db.get_version() == 31
+    cursor = db.conn.cursor()
+    # Check that the new table is created
+    result = cursor.execute('SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name="eth2_validators"')  # noqa: E501
+    assert result.fetchone()[0] == 1
+    result = cursor.execute('SELECT COUNT(*) FROM eth2_deposits;')
+    assert result.fetchone()[0] == 0
+    result = cursor.execute('SELECT COUNT(*) FROM eth2_daily_staking_details;')
+    assert result.fetchone()[0] == 0
+    result = cursor.execute('SELECT * FROM ignored_actions;')
+    assert result.fetchall() == [('A', '0x3'), ('B', '0x4')]
+    result = cursor.execute('SELECT COUNT(*) FROM trades;')
+    assert result.fetchone()[0] == 0
+    result = cursor.execute('SELECT COUNT(*) FROM asset_movements;')
+    assert result.fetchone()[0] == 1
+    result = cursor.execute('SELECT * FROM used_query_ranges;')
+    assert result.fetchall() == [
+        ('ethtxs_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 0, 1637575118),
+        ('eth2_deposits_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 1602667372, 1637575118),
+        ('kraken_asset_movements_kraken1', 0, 1634850532),
+    ]
 
 
 def test_db_newer_than_software_raises_error(data_dir, username):

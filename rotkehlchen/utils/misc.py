@@ -1,26 +1,30 @@
 import calendar
 import datetime
 import functools
-import logging
 import operator
 import platform
 import re
 import sys
 import time
-from typing import Any, Callable, DefaultDict, Dict, Iterator, List, TypeVar, Union, overload
+from typing import (
+    Any,
+    Callable,
+    DefaultDict,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    TypeVar,
+    Union,
+    overload,
+)
 
 import pkg_resources
 from eth_utils.address import to_checksum_address
-from rlp.sedes import big_endian_int
 
-from rotkehlchen.constants import ZERO
 from rotkehlchen.errors import ConversionError, DeserializationError
 from rotkehlchen.fval import FVal
-from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import ChecksumEthAddress, Fee, Timestamp, TimestampMS
-
-logger = logging.getLogger(__name__)
-log = RotkehlchenLogsAdapter(logger)
 
 
 def ts_now() -> Timestamp:
@@ -164,13 +168,6 @@ def combine_stat_dicts(list_of_dicts: List[Dict]) -> Dict:
     return combined_dict
 
 
-def dict_get_sumof(d: Dict[str, Dict[str, FVal]], attribute: str) -> FVal:
-    sum_ = ZERO
-    for _, value in d.items():
-        sum_ += value[attribute]
-    return sum_
-
-
 def convert_to_int(
         val: Union[FVal, bytes, str, int, float],
         accept_only_exact: bool = True,
@@ -188,6 +185,8 @@ def convert_to_int(
         # Since float string are not converted to int we have to first convert
         # to float and try to convert to int afterwards
         try:
+            if isinstance(val, str) and val.startswith('0x'):
+                return int(val, 16)
             return int(val)
         except ValueError:
             # else also try to turn it into a float
@@ -216,12 +215,12 @@ def taxable_gain_for_sell(
     )
 
 
-def int_to_big_endian(x: int) -> bytes:
-    return big_endian_int.serialize(x)
-
-
 def hexstring_to_bytes(hexstr: str) -> bytes:
-    return bytes.fromhex(hexstr.replace("0x", ""))
+    """May raise DeserializationError if it can't convert"""
+    try:
+        return bytes.fromhex(hexstr.replace("0x", ""))
+    except ValueError as e:
+        raise DeserializationError(f'Failed to turn {hexstr} to bytes') from e
 
 
 def get_system_spec() -> Dict[str, str]:
@@ -254,13 +253,13 @@ def hexstr_to_int(value: str) -> int:
     """Turns a hexstring into an int
 
     May raise:
-    - ConversionError if it can't convert a value to an int or if an unexpected
+    - DeserializationError if it can't convert a value to an int or if an unexpected
     type is given.
     """
     try:
         int_value = int(value, 16)
     except ValueError as e:
-        raise ConversionError(f'Could not convert string "{value}" to an int') from e
+        raise DeserializationError(f'Could not convert string "{value}" to an int') from e
 
     return int_value
 
@@ -296,10 +295,13 @@ def hex_or_bytes_to_address(value: Union[bytes, str]) -> ChecksumEthAddress:
     """Turns a 32bit bytes/HexBytes or a hexstring into an address
 
     May raise:
-    - ConversionError if it can't convert a value to an int or if an unexpected
+    - DeserializationError if it can't convert a value to an int or if an unexpected
     type is given.
     """
-    hexstr = hex_or_bytes_to_str(value)
+    try:
+        hexstr = hex_or_bytes_to_str(value)
+    except ConversionError as e:
+        raise DeserializationError(f'Could not turn {value!r} to an ethereum address') from e
     return ChecksumEthAddress(to_checksum_address('0x' + hexstr[26:]))
 
 
@@ -316,15 +318,6 @@ def get_chunks(lst: List[T], n: int) -> Iterator[List[T]]:
         yield lst[i:i + n]
 
 
-def rsetattr(obj: Any, attr: str, val: Any) -> None:
-    """
-    Recursive setattr for nested hierarchies. Taken from:
-    https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-subobjects-chained-properties
-    """
-    pre, _, post = attr.rpartition('.')
-    return setattr(rgetattr(obj, pre) if pre else obj, post, val)
-
-
 def rgetattr(obj: Any, attr: str, *args: Any) -> Any:
     """
     Recursive getattr for nested hierarchies. Taken from:
@@ -333,3 +326,9 @@ def rgetattr(obj: Any, attr: str, *args: Any) -> Any:
     def _getattr(obj: Any, attr: str) -> Any:
         return getattr(obj, attr, *args)
     return functools.reduce(_getattr, [obj] + attr.split('.'))
+
+
+def pairwise(iterable: Iterable[Any]) -> Iterator:
+    "s -> (s0, s1), (s2, s3), (s4, s5), ..."
+    a = iter(iterable)
+    return zip(a, a)

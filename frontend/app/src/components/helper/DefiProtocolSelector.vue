@@ -4,7 +4,7 @@
       <v-autocomplete
         :value="value"
         :search-input.sync="search"
-        :items="supportedProtocols"
+        :items="protocols"
         hide-details
         hide-selected
         hide-no-data
@@ -36,20 +36,14 @@
 </template>
 
 <script lang="ts">
+import { DefiProtocol } from '@rotki/common/lib/blockchain';
 import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
 import DefiProtocolDetails from '@/components/helper/DefiProtocolDetails.vue';
-import {
-  DEFI_AAVE,
-  DEFI_COMPOUND,
-  DEFI_MAKERDAO,
-  DEFI_YEARN_VAULTS
-} from '@/services/defi/consts';
-import { SupportedDefiProtocols } from '@/services/defi/types';
 
 export interface Protocol {
   name: string;
   icon: string;
-  identifier: SupportedDefiProtocols;
+  identifier: DefiProtocol;
 }
 
 @Component({
@@ -57,27 +51,57 @@ export interface Protocol {
 })
 export default class DefiProtocolSelector extends Vue {
   @Prop({ required: true })
-  value!: SupportedDefiProtocols | null;
+  value!: DefiProtocol | null;
+  @Prop({ required: false, type: Boolean, default: false })
+  liabilities!: boolean;
 
-  readonly supportedProtocols: Protocol[] = [
+  get protocols(): Protocol[] {
+    if (this.liabilities) {
+      return [...this.dual, ...this.borrowing];
+    }
+    return [...this.dual, ...this.lending];
+  }
+
+  private readonly dual: Protocol[] = [
     {
-      identifier: DEFI_AAVE,
+      identifier: DefiProtocol.AAVE,
       name: 'Aave',
       icon: require('@/assets/images/defi/aave.svg')
     },
     {
-      identifier: DEFI_MAKERDAO,
-      name: 'MakerDAO',
+      identifier: DefiProtocol.COMPOUND,
+      name: 'Compound',
+      icon: require('@/assets/images/defi/compound.svg')
+    }
+  ];
+
+  private readonly borrowing: Protocol[] = [
+    {
+      identifier: DefiProtocol.MAKERDAO_VAULTS,
+      name: 'MakerDAO Vaults',
       icon: require('@/assets/images/defi/makerdao.svg')
     },
     {
-      identifier: DEFI_COMPOUND,
-      name: 'Compound',
-      icon: require('@/assets/images/defi/compound.svg')
+      identifier: DefiProtocol.LIQUITY,
+      name: 'Liquity',
+      icon: require('@/assets/images/defi/liquity.svg')
+    }
+  ];
+
+  private readonly lending: Protocol[] = [
+    {
+      identifier: DefiProtocol.MAKERDAO_DSR,
+      name: 'MakerDAO DSR',
+      icon: require('@/assets/images/defi/makerdao.svg')
     },
     {
-      identifier: DEFI_YEARN_VAULTS,
+      identifier: DefiProtocol.YEARN_VAULTS,
       name: 'yearn.finance',
+      icon: require('@/assets/images/defi/yearn_vaults.svg')
+    },
+    {
+      identifier: DefiProtocol.YEARN_VAULTS_V2,
+      name: 'yearn.finance v2',
       icon: require('@/assets/images/defi/yearn_vaults.svg')
     }
   ];
@@ -85,6 +109,6 @@ export default class DefiProtocolSelector extends Vue {
   search: string = '';
 
   @Emit()
-  input(_selectedProtocols: SupportedDefiProtocols | null) {}
+  input(_selectedProtocols: DefiProtocol | null) {}
 }
 </script>

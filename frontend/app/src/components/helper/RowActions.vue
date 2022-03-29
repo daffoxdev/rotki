@@ -1,5 +1,5 @@
 <template>
-  <span>
+  <span :class="$style.actions">
     <v-tooltip top>
       <template #activator="{ on, attrs }">
         <v-btn
@@ -7,7 +7,8 @@
           v-bind="attrs"
           icon
           :disabled="disabled"
-          class="mx-1"
+          class="mx-1 account-balances-list__actions__edit"
+          data-cy="row-edit"
           v-on="on"
           @click="editClick"
         >
@@ -22,8 +23,9 @@
           small
           v-bind="attrs"
           icon
-          :disabled="disabled"
-          class="mx-1"
+          :disabled="disabled || deleteDisabled"
+          class="mx-1 account-balances-list__actions__delete"
+          data-cy="row-delete"
           v-on="on"
           @click="deleteClick"
         >
@@ -32,27 +34,36 @@
       </template>
       <span>{{ deleteTooltip }}</span>
     </v-tooltip>
+    <slot />
   </span>
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
+import { defineComponent } from '@vue/composition-api';
 
-@Component({})
-export default class RowActions extends Vue {
-  @Prop({ required: false, type: Boolean })
-  disabled!: boolean;
-  @Prop({ required: true, type: String })
-  editTooltip!: string;
-  @Prop({ required: false, type: String, default: '' })
-  deleteTooltip!: string;
-  @Prop({ required: false, type: Boolean, default: false })
-  noDelete!: boolean;
-
-  @Emit()
-  editClick() {}
-
-  @Emit()
-  deleteClick() {}
-}
+export default defineComponent({
+  name: 'RowAction',
+  props: {
+    disabled: { required: false, type: Boolean, default: false },
+    deleteDisabled: { required: false, type: Boolean, default: false },
+    editTooltip: { required: true, type: String },
+    deleteTooltip: { required: false, type: String, default: '' },
+    noDelete: { required: false, type: Boolean, default: false }
+  },
+  emits: ['edit-click', 'delete-click'],
+  setup(_, { emit }) {
+    return {
+      editClick: () => emit('edit-click'),
+      deleteClick: () => emit('delete-click')
+    };
+  }
+});
 </script>
+
+<style module lang="scss">
+.actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+}
+</style>

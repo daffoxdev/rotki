@@ -6,10 +6,10 @@ import stream from 'stream';
 import { app, App, BrowserWindow, ipcMain } from 'electron';
 import tasklist from 'tasklist';
 import { BackendCode } from '@/electron-main/backend-code';
+import { BackendOptions } from '@/electron-main/ipc';
 import { DEFAULT_PORT, selectPort } from '@/electron-main/port-utils';
 import { assert } from '@/utils/assertions';
 import { wait } from '@/utils/backoff';
-import { Level } from '@/utils/log-level';
 import Task = tasklist.Task;
 
 async function streamToString(givenStream: stream.Readable): Promise<string> {
@@ -28,7 +28,7 @@ async function streamToString(givenStream: stream.Readable): Promise<string> {
       if (bufferChunks.length > 0) {
         try {
           stringChunks.push(Buffer.concat(bufferChunks).toString('utf8'));
-        } catch (e) {
+        } catch (e: any) {
           stringChunks.push(e.message);
         }
       }
@@ -38,38 +38,91 @@ async function streamToString(givenStream: stream.Readable): Promise<string> {
   });
 }
 
+function getBackendArguments(options: Partial<BackendOptions>): string[] {
+  const args: string[] = [];
+  if (options.loglevel) {
+    args.push('--loglevel', options.loglevel);
+  }
+  if (options.logFromOtherModules) {
+    args.push('--logfromothermodules');
+  }
+  if (options.dataDirectory) {
+    args.push('--data-dir', options.dataDirectory);
+  }
+  if (options.sleepSeconds) {
+    args.push('--sleep-secs', options.sleepSeconds.toString());
+  }
+  if (options.maxLogfilesNum) {
+    args.push('--max-logfiles-num', options.maxLogfilesNum.toString());
+  }
+  if (options.maxSizeInMbAllLogs) {
+    args.push(
+      '--max-size-in-mb-all-logs',
+      options.maxSizeInMbAllLogs.toString()
+    );
+  }
+  return args;
+}
+
+const PY_DIST_FOLDER = 'rotkehlchen_py_dist';
+
 export default class PyHandler {
-  private static PY_DIST_FOLDER = 'rotkehlchen_py_dist';
+  readonly defaultLogDirectory: string;
   private rpcFailureNotifier?: any;
   private childProcess?: ChildProcess;
-  private _port?: number;
-  private _serverUrl: string;
+  private _websocketPort?: number;
   private executable?: string;
-  private readonly logsPath: string;
-  private readonly ELECTRON_LOG_PATH: string;
   private _corsURL?: string;
   private backendOutput: string = '';
   private onChildError?: (err: Error) => void;
   private onChildExit?: (code: number, signal: any) => void;
+  private logDirectory?: string;
+
+  constructor(private app: App) {
+    app.setAppLogsPath(path.join(app.getPath('appData'), 'rotki', 'logs'));
+    this.defaultLogDirectory = app.getPath('logs');
+    this._serverUrl = '';
+    this._websocketUrl = '';
+    this.logToFile('\nStarting rotki\n');
+  }
+
+  private _port?: number;
 
   get port(): number {
     assert(this._port);
     return this._port;
   }
 
+  private _serverUrl: string;
+
   get serverUrl(): string {
     return this._serverUrl;
   }
 
-  constructor(private app: App) {
-    app.setAppLogsPath(path.join(app.getPath('appData'), 'rotki', 'logs'));
-    this.logsPath = app.getPath('logs');
-    this.ELECTRON_LOG_PATH = path.join(this.logsPath, 'rotki_electron.log');
-    fs.writeFileSync(
-      this.ELECTRON_LOG_PATH,
-      'Rotki Electron Log initialization\n'
-    );
-    this._serverUrl = '';
+  private _websocketUrl: string;
+
+  get websocketUrl(): string {
+    return this._websocketUrl;
+  }
+
+  get logDir(): string {
+    return this.logDirectory ?? this.defaultLogDirectory;
+  }
+
+  get electronLogFile(): string {
+    return path.join(this.logDir, 'rotki_electron.log');
+  }
+
+  get backendLogFile(): string {
+    return path.join(this.logDir, 'rotkehlchen.log');
+  }
+
+  private static packagedBackendPath() {
+    const resources = process.resourcesPath ? process.resourcesPath : __dirname;
+    if (os.platform() === 'darwin') {
+      return path.join(resources, PY_DIST_FOLDER, 'rotkehlchen');
+    }
+    return path.join(resources, PY_DIST_FOLDER);
   }
 
   logToFile(msg: string | Error) {
@@ -78,12 +131,10 @@ export default class PyHandler {
     }
     const message = `${new Date(Date.now()).toISOString()}: ${msg}`;
     console.log(message);
-    fs.appendFileSync(this.ELECTRON_LOG_PATH, `${message}\n`);
-  }
-
-  private logBackendOutput(msg: string | Error) {
-    this.logToFile(msg);
-    this.backendOutput += msg;
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir);
+    }
+    fs.appendFileSync(this.electronLogFile, `${message}\n`);
   }
 
   setCorsURL(url: string) {
@@ -110,7 +161,11 @@ export default class PyHandler {
     this.app.quit();
   }
 
-  async createPyProc(window: BrowserWindow, level?: Level) {
+  async createPyProc(window: BrowserWindow, options: Partial<BackendOptions>) {
+    if (options.logDirectory && !fs.existsSync(options.logDirectory)) {
+      fs.mkdirSync(options.logDirectory);
+    }
+    this.logDirectory = options.logDirectory;
     if (process.env.SKIP_PYTHON_BACKEND) {
       this.logToFile('Skipped starting python sub-process');
       return;
@@ -130,12 +185,17 @@ export default class PyHandler {
 
     const port = await selectPort();
     const backendUrl = process.env.VUE_APP_BACKEND_URL;
-    if (port !== DEFAULT_PORT && backendUrl && typeof backendUrl === 'string') {
-      const portSeparator = backendUrl.lastIndexOf(':');
-      const oldPort = backendUrl.substring(portSeparator + 1);
-      const host = backendUrl.substr(0, portSeparator);
+
+    assert(backendUrl);
+    const regExp = /(.*):\/\/(.*):(.*)/;
+    const match = backendUrl.match(regExp);
+    assert(match && match.length === 4);
+    const [, scheme, host, oldPort] = match;
+    assert(host);
+
+    if (port !== DEFAULT_PORT) {
       if (parseInt(oldPort) !== port) {
-        this._serverUrl = `${host}:${port}`;
+        this._serverUrl = `${scheme}://${host}:${port}`;
         this.logToFile(
           `Default port ${oldPort} was in use. Starting backend at ${port}`
         );
@@ -143,17 +203,14 @@ export default class PyHandler {
     }
 
     this._port = port;
-    const args: string[] = [];
-    this.loadArgumentsFromFile(args);
-
-    if (level) {
-      args.push('--loglevel', level);
-    }
+    this._websocketPort = await selectPort(port + 1);
+    this._websocketUrl = `${host}:${this._websocketPort}`;
+    const args: string[] = getBackendArguments(options);
 
     if (this.guessPackaged()) {
-      this.startProcessPackaged(port, args);
+      this.startProcessPackaged(port, this._websocketPort, args, window);
     } else {
-      this.startProcess(port, args);
+      this.startProcess(port, this._websocketPort, args);
     }
 
     const childProcess = this.childProcess;
@@ -231,6 +288,11 @@ export default class PyHandler {
     }
   }
 
+  private logBackendOutput(msg: string | Error) {
+    this.logToFile(msg);
+    this.backendOutput += msg;
+  }
+
   private terminateBackend = (client: ChildProcess) =>
     new Promise<void>((resolve, reject) => {
       client.on('exit', () => {
@@ -255,14 +317,6 @@ export default class PyHandler {
     return fs.existsSync(path);
   }
 
-  private static packagedBackendPath() {
-    const resources = process.resourcesPath ? process.resourcesPath : __dirname;
-    if (os.platform() === 'darwin') {
-      return path.join(resources, PyHandler.PY_DIST_FOLDER, 'rotkehlchen');
-    }
-    return path.join(resources, PyHandler.PY_DIST_FOLDER);
-  }
-
   private setFailureNotification(
     window: Electron.BrowserWindow | null,
     backendOutput: string | Error,
@@ -276,19 +330,21 @@ export default class PyHandler {
     }, 2000);
   }
 
-  private startProcess(port: number, args: string[]) {
+  private startProcess(port: number, websocketPort: number, args: string[]) {
     const defaultArgs: string[] = [
       '-m',
       'rotkehlchen',
-      '--api-port',
-      port.toString()
+      '--rest-api-port',
+      port.toString(),
+      '--websockets-api-port',
+      websocketPort.toString()
     ];
 
     if (this._corsURL) {
       defaultArgs.push('--api-cors', this._corsURL);
     }
 
-    defaultArgs.push('--logfile', path.join(this.logsPath, 'rotkehlchen.log'));
+    defaultArgs.push('--logfile', this.backendLogFile);
 
     if (process.env.ROTKEHLCHEN_ENVIRONMENT === 'test') {
       const tempPath = path.join(this.app.getPath('temp'), 'rotkehlchen');
@@ -324,11 +380,29 @@ export default class PyHandler {
     this.childProcess = spawn('python', allArgs);
   }
 
-  private startProcessPackaged(port: number, args: string[]) {
-    const dist_dir = PyHandler.packagedBackendPath();
-    const files = fs.readdirSync(dist_dir);
+  private startProcessPackaged(
+    port: number,
+    websocketPort: number,
+    args: string[],
+    window: BrowserWindow
+  ) {
+    const distDir = PyHandler.packagedBackendPath();
+    const files = fs.readdirSync(distDir);
     if (files.length === 0) {
       this.logAndQuit('ERROR: No files found in the dist directory');
+      return;
+    }
+
+    const binaries = files.filter(file => file.startsWith('rotkehlchen-'));
+
+    if (binaries.length > 1) {
+      const names = files.join(', ');
+      const error = `Expected only one backend binary but found multiple ones
+       in directory: ${names}.\nThis might indicate a problematic upgrade.\n\n
+       Please make sure only one binary file exists that matches the app version`;
+      this.logToFile(`ERROR: ${error}`);
+      this.setFailureNotification(window, error, BackendCode.TERMINATED);
+      return;
     }
 
     const exe = files.find(file => file.startsWith('rotkehlchen-'));
@@ -338,12 +412,17 @@ export default class PyHandler {
     }
 
     this.executable = exe;
-    const executable = path.join(dist_dir, exe);
+    const executable = path.join(distDir, exe);
     if (this._corsURL) {
       args.push('--api-cors', this._corsURL);
     }
-    args.push('--logfile', path.join(this.logsPath, 'rotkehlchen.log'));
-    args = ['--api-port', port.toString()].concat(args);
+    args.push('--logfile', this.backendLogFile);
+    args = [
+      '--rest-api-port',
+      port.toString(),
+      '--websockets-api-port',
+      websocketPort.toString()
+    ].concat(args);
     this.logToFile(
       `Starting packaged python subprocess: ${executable} ${args.join(' ')}`
     );
@@ -432,43 +511,6 @@ export default class PyHandler {
       running = stillRunning();
       if (stillRunning.length === 0) {
         break;
-      }
-    }
-  }
-
-  private loadArgumentsFromFile(args: string[]) {
-    // try to see if there is a configfile
-    if (fs.existsSync('rotki_config.json')) {
-      const raw_data: Buffer = fs.readFileSync('rotki_config.json');
-
-      try {
-        const jsondata = JSON.parse(raw_data.toString());
-        if (Object.prototype.hasOwnProperty.call(jsondata, 'loglevel')) {
-          args.push('--loglevel', jsondata['loglevel']);
-        }
-        if (
-          Object.prototype.hasOwnProperty.call(jsondata, 'logfromothermodules')
-        ) {
-          if (jsondata['logfromothermodules'] === true) {
-            args.push('--logfromothermodules');
-          }
-        }
-        if (Object.prototype.hasOwnProperty.call(jsondata, 'logfile')) {
-          args.push('--logfile', jsondata['logfile']);
-        }
-        if (Object.prototype.hasOwnProperty.call(jsondata, 'data-dir')) {
-          args.push('--data-dir', jsondata['data-dir']);
-        }
-        if (Object.prototype.hasOwnProperty.call(jsondata, 'sleep-secs')) {
-          args.push('--sleep-secs', jsondata['sleep-secs']);
-        }
-      } catch (e) {
-        // do nothing, act as if there is no config given
-        // TODO: Perhaps in the future warn the user inside
-        // the app that there is a config file with invalid json
-        this.logToFile(
-          `Could not read the rotki_config.json file due to: "${e}". Proceeding normally without a config file ...`
-        );
       }
     }
   }

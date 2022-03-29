@@ -1,86 +1,33 @@
 import logging
 from json.decoder import JSONDecodeError
-from typing import Any, Dict, List, Optional, Union, overload
+from typing import Any, Dict, List, Optional, Tuple, Union, overload
 
 import gevent
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.constants.timing import (
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_READ_TIMEOUT,
+    DEFAULT_TIMEOUT_TUPLE,
+)
 from rotkehlchen.db.dbhandler import DBHandler
-from rotkehlchen.errors import ConversionError, DeserializationError, RemoteError
+from rotkehlchen.errors import DeserializationError, RemoteError
 from rotkehlchen.externalapis.interface import ExternalServiceWithApiKey
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.serialization.deserialize import (
-    deserialize_ethereum_address,
+    deserialize_ethereum_transaction,
     deserialize_int_from_str,
-    deserialize_timestamp,
 )
 from rotkehlchen.typing import ChecksumEthAddress, EthereumTransaction, ExternalService, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
-from rotkehlchen.utils.misc import convert_to_int, hex_or_bytes_to_int, hexstring_to_bytes
+from rotkehlchen.utils.misc import hex_or_bytes_to_int
 from rotkehlchen.utils.serialization import jsonloads_dict
 
 ETHERSCAN_TX_QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
-
-
-def read_hash(data: Dict[str, Any], key: str) -> bytes:
-    try:
-        result = hexstring_to_bytes(data[key])
-    except ValueError as e:
-        raise DeserializationError(
-            f'Failed to read {key} as a hash during etherscan transaction query',
-        ) from e
-    return result
-
-
-def read_integer(data: Dict[str, Any], key: str) -> int:
-    try:
-        result = convert_to_int(data[key])
-    except ConversionError as e:
-        raise DeserializationError(
-            f'Failed to read {key} as an integer during etherscan transaction query',
-        ) from e
-    return result
-
-
-def deserialize_transaction_from_etherscan(
-        data: Dict[str, Any],
-        internal: bool,
-) -> EthereumTransaction:
-    """Reads dict data of a transaction from etherscan and deserializes it
-
-    Can raise DeserializationError if something is wrong
-    """
-    try:
-        # internal tx list contains no gasprice
-        gas_price = -1 if internal else read_integer(data, 'gasPrice')
-        tx_hash = read_hash(data, 'hash')
-        input_data = read_hash(data, 'input')
-        timestamp = deserialize_timestamp(data['timeStamp'])
-
-        block_number = read_integer(data, 'blockNumber')
-        nonce = -1 if internal else read_integer(data, 'nonce')
-
-        return EthereumTransaction(
-            timestamp=timestamp,
-            block_number=block_number,
-            tx_hash=tx_hash,
-            from_address=deserialize_ethereum_address(data['from']),
-            to_address=deserialize_ethereum_address(data['to']) if data['to'] != '' else None,
-            value=read_integer(data, 'value'),
-            gas=read_integer(data, 'gas'),
-            gas_price=gas_price,
-            gas_used=read_integer(data, 'gasUsed'),
-            input_data=input_data,
-            nonce=nonce,
-        )
-    except KeyError as e:
-        raise DeserializationError(
-            f'Etherscan ethereum transaction missing expected key {str(e)}',
-        ) from e
 
 
 class Etherscan(ExternalServiceWithApiKey):
@@ -103,6 +50,7 @@ class Etherscan(ExternalServiceWithApiKey):
                 'getLogs',
             ],
             options: Optional[Dict[str, Any]] = None,
+            timeout: Optional[Tuple[int, int]] = None,
     ) -> List[Dict[str, Any]]:
         ...
 
@@ -110,8 +58,13 @@ class Etherscan(ExternalServiceWithApiKey):
     def _query(  # pylint: disable=no-self-use
             self,
             module: str,
-            action: Literal['eth_getBlockByNumber', 'eth_getTransactionReceipt'],
+            action: Literal[
+                'eth_getBlockByNumber',
+                'eth_getTransactionReceipt',
+                'eth_getTransactionByHash',
+            ],
             options: Optional[Dict[str, Any]] = None,
+            timeout: Optional[Tuple[int, int]] = None,
     ) -> Dict[str, Any]:
         ...
 
@@ -128,6 +81,7 @@ class Etherscan(ExternalServiceWithApiKey):
                 'getblocknobytime',
             ],
             options: Optional[Dict[str, Any]] = None,
+            timeout: Optional[Tuple[int, int]] = None,
     ) -> str:
         ...
 
@@ -136,6 +90,7 @@ class Etherscan(ExternalServiceWithApiKey):
             module: str,
             action: str,
             options: Optional[Dict[str, Any]] = None,
+            timeout: Optional[Tuple[int, int]] = None,
     ) -> Union[List[Dict[str, Any]], str, List[EthereumTransaction], Dict[str, Any]]:
         """Queries etherscan
 
@@ -152,11 +107,11 @@ class Etherscan(ExternalServiceWithApiKey):
         if api_key is None:
             if not self.warning_given:
                 self.msg_aggregator.add_warning(
-                    'You do not have an Etherscan API key configured. Rotki '
+                    'You do not have an Etherscan API key configured. rotki '
                     'etherscan queries will still work but will be very slow. '
                     'If you are not using your own ethereum node, it is recommended '
                     'to go to https://etherscan.io/register, create an API '
-                    'key and then input it in the external service credentials setting of Rotki',
+                    'key and then input it in the external service credentials setting of rotki',
                 )
                 self.warning_given = True
         else:
@@ -165,9 +120,9 @@ class Etherscan(ExternalServiceWithApiKey):
         backoff = 1
         backoff_limit = 33
         while backoff < backoff_limit:
-            logger.debug(f'Querying etherscan: {query_str}')
+            log.debug(f'Querying etherscan: {query_str}')
             try:
-                response = self.session.get(query_str)
+                response = self.session.get(query_str, timeout=timeout if timeout else DEFAULT_TIMEOUT_TUPLE)  # noqa: E501
             except requests.exceptions.RequestException as e:
                 if 'Max retries exceeded with url' in str(e):
                     log.debug(
@@ -255,7 +210,6 @@ class Etherscan(ExternalServiceWithApiKey):
     def get_transactions(
             self,
             account: ChecksumEthAddress,
-            internal: bool,
             from_ts: Optional[Timestamp] = None,
             to_ts: Optional[Timestamp] = None,
     ) -> List[EthereumTransaction]:
@@ -272,14 +226,13 @@ class Etherscan(ExternalServiceWithApiKey):
         if to_ts is not None:
             to_block = self.get_blocknumber_by_time(to_ts)
             options['endBlock'] = str(to_block)
-        action: Literal['txlistinternal', 'txlist'] = 'txlistinternal' if internal else 'txlist'
 
         transactions = []
         while True:
-            result = self._query(module='account', action=action, options=options)
+            result = self._query(module='account', action='txlist', options=options)
             for entry in result:
                 try:
-                    tx = deserialize_transaction_from_etherscan(data=entry, internal=internal)
+                    tx = deserialize_ethereum_transaction(data=entry, ethereum=None)
                 except DeserializationError as e:
                     self.msg_aggregator.add_warning(f'{str(e)}. Skipping transaction')
                     continue
@@ -292,7 +245,7 @@ class Etherscan(ExternalServiceWithApiKey):
             # block we got. There may be duplicate entries if there are more than one
             # transactions for that last block but they should be filtered
             # out when we input all of these in the DB
-            last_block = result[-1]['blockNumber']
+            last_block = result[-1]['blockNumber']  # pylint: disable=unsubscriptable-object
             options['startBlock'] = last_block
 
         return transactions
@@ -319,10 +272,22 @@ class Etherscan(ExternalServiceWithApiKey):
         options = {'tag': hex(block_number), 'boolean': 'true'}
         block_data = self._query(module='proxy', action='eth_getBlockByNumber', options=options)
         # We need to convert some data from hex here
-        block_data['timestamp'] = hex_or_bytes_to_int(block_data['timestamp'])
-        block_data['number'] = hex_or_bytes_to_int(block_data['number'])
+        # https://github.com/PyCQA/pylint/issues/4739
+        block_data['timestamp'] = hex_or_bytes_to_int(block_data['timestamp'])  # pylint: disable=unsubscriptable-object  # noqa: E501
+        block_data['number'] = hex_or_bytes_to_int(block_data['number'])  # pylint: disable=unsubscriptable-object  # noqa: E501
 
         return block_data
+
+    def get_transaction_by_hash(self, tx_hash: str) -> Dict[str, Any]:
+        """
+        Gets a transaction object by hash
+
+        May raise:
+        - RemoteError due to self._query().
+        """
+        options = {'txhash': tx_hash}
+        transaction_data = self._query(module='proxy', action='eth_getTransactionByHash', options=options)  # noqa: E501
+        return transaction_data
 
     def get_code(self, account: ChecksumEthAddress) -> str:
         """Gets the deployment bytecode at the given address
@@ -366,25 +331,6 @@ class Etherscan(ExternalServiceWithApiKey):
         )
         return result
 
-    def get_token_transfers(
-            self,
-            from_address: ChecksumEthAddress,
-            token_address: ChecksumEthAddress,
-    ) -> List[Dict[str, Any]]:
-        """Gets the token transfers associated with from_address
-
-        May raise:
-        - RemoteError if there are any problems with reaching Etherscan or if
-        an unexpected response is returned
-        """
-        options = {'address': from_address, 'contractaddress': token_address, 'sort': 'asc'}
-        result = self._query(
-            module='account',
-            action='tokentx',
-            options=options,
-        )
-        return result
-
     def get_logs(
             self,
             contract_address: ChecksumEthAddress,
@@ -409,6 +355,7 @@ class Etherscan(ExternalServiceWithApiKey):
             module='logs',
             action='getLogs',
             options=options,
+            timeout=(DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT * 2),
         )
         return result
 

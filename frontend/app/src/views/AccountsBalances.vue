@@ -1,37 +1,40 @@
 <template>
-  <v-container class="accounts-balances">
-    <base-page-header :text="$t('accounts_balances.title')" />
-    <tab-navigation :tab-contents="accountsBalancesTabs" />
-  </v-container>
+  <tab-navigation :tab-contents="tabs" data-cy="accounts-balances-tab" />
 </template>
 
 <script lang="ts">
-import { Component, Vue } from 'vue-property-decorator';
-import BasePageHeader from '@/components/base/BasePageHeader.vue';
+import { defineComponent } from '@vue/composition-api';
 import TabNavigation, {
   TabContent
 } from '@/components/helper/TabNavigation.vue';
+import i18n from '@/i18n';
+import { Routes } from '@/router/routes';
 
-@Component({
-  components: {
-    BasePageHeader,
-    TabNavigation
+const tabs: TabContent[] = [
+  {
+    name: 'Blockchain Balances',
+    routeTo: '/accounts-balances/blockchain-balances'
+  },
+  {
+    name: 'Exchange Balances',
+    routeTo: '/accounts-balances/exchange-balances/'
+  },
+  {
+    name: 'Manual Balances',
+    routeTo: '/accounts-balances/manual-balances'
+  },
+  {
+    name: i18n.t('account_balances.tabs.nonfungible').toString(),
+    routeTo: Routes.NON_FUNGIBLE
   }
-})
-export default class AccountsBalances extends Vue {
-  readonly accountsBalancesTabs: TabContent[] = [
-    {
-      name: 'Blockchain Balances',
-      routeTo: '/accounts-balances/blockchain-balances'
-    },
-    {
-      name: 'Exchange Balances',
-      routeTo: '/accounts-balances/exchange-balances/'
-    },
-    {
-      name: 'Manual Balances',
-      routeTo: '/accounts-balances/manual-balances'
-    }
-  ];
-}
+];
+
+export default defineComponent({
+  components: {
+    TabNavigation
+  },
+  setup() {
+    return { tabs };
+  }
+});
 </script>

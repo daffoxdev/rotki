@@ -7,12 +7,13 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.assets.asset import WORLD_TO_BITFINEX
 from rotkehlchen.assets.converters import (
     BITFINEX_EXCHANGE_TEST_ASSETS,
     UNSUPPORTED_BITFINEX_ASSETS,
     asset_from_bitfinex,
 )
-from rotkehlchen.constants.assets import A_BTC, A_ETH, A_LINK, A_USD, A_USDT, A_WBTC
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR, A_LINK, A_USD, A_USDT, A_WBTC
 from rotkehlchen.errors import UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.bitfinex import (
     API_ERR_AUTH_NONCE_CODE,
@@ -24,19 +25,23 @@ from rotkehlchen.exchanges.bitfinex import (
 )
 from rotkehlchen.exchanges.data_structures import AssetMovement, Trade, TradeType
 from rotkehlchen.fval import FVal
-from rotkehlchen.tests.utils.constants import A_EUR, A_GLM, A_NEO
+from rotkehlchen.tests.utils.constants import A_GLM, A_NEO
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.typing import AssetAmount, AssetMovementCategory, Fee, Location, Price, Timestamp
 
 
 def test_name():
-    exchange = Bitfinex('a', b'a', object(), object())
-    assert exchange.name == str(Location.BITFINEX)
+    exchange = Bitfinex('bitfinex1', 'a', b'a', object(), object())
+    assert exchange.location == Location.BITFINEX
+    assert exchange.name == 'bitfinex1'
 
 
 def test_assets_are_known(mock_bitfinex):
     """This tests only exchange (trades) assets (not margin, nor futures ones).
     """
+    unsupported_assets = set(UNSUPPORTED_BITFINEX_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_BITFINEX.values()))
+    assert not common_items, f'Bitfinex assets {common_items} should not be unsupported'
     currencies_response = mock_bitfinex._query_currencies()
     if currencies_response.success is False:
         response = currencies_response.response
@@ -89,8 +94,8 @@ def test_assets_are_known(mock_bitfinex):
             assert symbol in unsupported_assets
         except UnknownAsset as e:
             test_warnings.warn(UserWarning(
-                f'Found unknown asset {e.asset_name} in {mock_bitfinex.name}. '
-                f'Support for it has to be added',
+                f'Found unknown asset {e.asset_name} with symbol {symbol} in '
+                f'{mock_bitfinex.name}. Support for it has to be added',
             ))
 
 
@@ -134,7 +139,7 @@ def test_api_key_err_auth_nonce(mock_bitfinex):
         assert len(errors) == 1
         assert API_ERR_AUTH_NONCE_MESSAGE in errors[0]
 
-        trades = mock_bitfinex.query_online_trade_history(0, 1)
+        trades, _ = mock_bitfinex.query_online_trade_history(0, 1)
         assert trades == []
         errors = mock_bitfinex.msg_aggregator.consume_errors()
         assert len(errors) == 1
@@ -546,7 +551,7 @@ def test_query_online_trade_history_case_1(mock_bitfinex):
     with ExitStack() as stack:
         stack.enter_context(api_limit_patch)
         api_query_mock = stack.enter_context(api_query_patch)
-        trades = mock_bitfinex.query_online_trade_history(
+        trades, _ = mock_bitfinex.query_online_trade_history(
             start_ts=Timestamp(0),
             end_ts=Timestamp(int(datetime.now().timestamp())),
         )
@@ -725,7 +730,7 @@ def test_query_online_trade_history_case_2(mock_bitfinex):
     with ExitStack() as stack:
         stack.enter_context(api_limit_patch)
         stack.enter_context(api_query_patch)
-        trades = mock_bitfinex.query_online_trade_history(
+        trades, _ = mock_bitfinex.query_online_trade_history(
             start_ts=Timestamp(0),
             end_ts=Timestamp(int(datetime.now().timestamp())),
         )

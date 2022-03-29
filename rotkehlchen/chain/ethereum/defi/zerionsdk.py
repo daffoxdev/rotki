@@ -19,6 +19,7 @@ from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
 from rotkehlchen.fval import FVal
 from rotkehlchen.inquirer import Inquirer, get_underlying_asset_price
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.serialization.deserialize import deserialize_ethereum_address
 from rotkehlchen.typing import ChecksumEthAddress, Price
 from rotkehlchen.user_messages import MessagesAggregator
@@ -27,16 +28,17 @@ from rotkehlchen.utils.misc import get_chunks
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 PROTOCOLS_QUERY_NUM = 40  # number of protocols to query in a single call
 KNOWN_ZERION_PROTOCOL_NAMES = (
     'Curve • Vesting',
     'Curve • Liquidity Gauges',
+    'Curve • Vote Escrowed CRV',
     'ygov.finance (v1)',
     'ygov.finance (v2)',
-    'mStable • Staking',
     'Swerve • Liquidity Gauges',
     'Pickle Finance • Farms',
     'Pickle Finance • Staking',
@@ -49,6 +51,8 @@ KNOWN_ZERION_PROTOCOL_NAMES = (
     'DODO',
     'Berezka',
     'bZx',
+    'bZx • Staking',
+    'bZx • Vested Staking',
     'C.R.E.A.M.',
     'Swerve',
     'SashimiSwap',
@@ -62,9 +66,13 @@ KNOWN_ZERION_PROTOCOL_NAMES = (
     'Matic',
     'Aragon',
     'Melon',
+    'Enzyme',
     'yearn.finance • Vaults',
+    'Yearn Token Vaults',
     'KeeperDAO',
     'mStable',
+    'mStable • Staking',
+    'mStable V2',
     'KyberDAO',
     'DDEX • Spot',
     'DDEX • Margin',
@@ -74,6 +82,7 @@ KNOWN_ZERION_PROTOCOL_NAMES = (
     'Gnosis Protocol',
     'Chi Gastoken by 1inch',
     '1inch Liquidity Protocol',
+    '1inch LP • Staking',
     'Idle • Risk-Adjusted',
     'Aave • Uniswap Market',
     'Uniswap V2',
@@ -89,6 +98,7 @@ KNOWN_ZERION_PROTOCOL_NAMES = (
     'Uniswap V1',
     'Synthetix',
     'PoolTogether',
+    'PoolTogether V3',
     'Dai Savings Rate',
     'Chai',
     'iearn.finance (v3)',
@@ -108,6 +118,22 @@ KNOWN_ZERION_PROTOCOL_NAMES = (
     'Mushrooms Finance • Staking',
     'Akropolis • AKRO Staking',
     'Akropolis • ADEL Staking',
+    'Liquity',
+    'Alpha Homora',
+    'Alpha Homora V2',
+    'Stake DAO',
+    'Saddle',
+    'Reflexer',
+    'Cometh • Tube',
+    'Cometh • Staking',
+    'Livepeer',
+    'Cozy',
+    'Cozy • Yearn',
+    'Cozy • Compound',
+    'Unagii',
+    'Origin Protocol • OGN Staking',
+    'TimeWarp • Staking',
+    'Gelato Network • Locked GEL',
 )
 
 

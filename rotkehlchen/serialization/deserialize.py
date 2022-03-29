@@ -1,12 +1,10 @@
-from typing import Callable, Tuple, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Tuple, TypeVar, Union
 
 from eth_utils import to_checksum_address
 
-from rotkehlchen.accounting.structures import ActionType
+from rotkehlchen.accounting.structures import HistoryEventType
 from rotkehlchen.assets.asset import Asset, EthereumToken
-from rotkehlchen.assets.unknown_asset import UnknownEthereumToken
 from rotkehlchen.assets.utils import get_asset_by_symbol
-from rotkehlchen.chain.ethereum.typing import string_to_ethereum_address
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.errors import (
     ConversionError,
@@ -14,20 +12,23 @@ from rotkehlchen.errors import (
     UnknownAsset,
     UnprocessableTradePair,
 )
+from rotkehlchen.externalapis.utils import read_hash, read_integer
 from rotkehlchen.fval import AcceptableFValInitInput, FVal
 from rotkehlchen.typing import (
     AssetAmount,
     AssetMovementCategory,
     ChecksumEthAddress,
+    EthereumTransaction,
     Fee,
     HexColorCode,
-    Location,
     Optional,
     Timestamp,
     TradePair,
-    TradeType,
 )
 from rotkehlchen.utils.misc import convert_to_int, create_timestamp, iso8601ts_to_timestamp
+
+if TYPE_CHECKING:
+    from rotkehlchen.chain.ethereum.manager import EthereumManager
 
 
 def deserialize_fee(fee: Optional[str]) -> Fee:
@@ -114,7 +115,7 @@ def deserialize_timestamp_from_date(
     if skip_milliseconds:
         # Seems that poloniex added milliseconds in their timestamps.
         # https://github.com/rotki/rotki/issues/1631
-        # We don't deal with milliseconds in Rotki times so we can safely remove it
+        # We don't deal with milliseconds in rotki times so we can safely remove it
         splits = date.split('.', 1)
         if len(splits) == 2:
             date = splits[0]
@@ -122,6 +123,7 @@ def deserialize_timestamp_from_date(
     if formatstr == 'iso8601':
         return iso8601ts_to_timestamp(date)
 
+    date = date.rstrip('Z')
     try:
         return Timestamp(create_timestamp(datestr=date, formatstr=formatstr))
     except ValueError as e:
@@ -215,7 +217,20 @@ def deserialize_timestamp_from_binance(time: int) -> Timestamp:
     return Timestamp(int(time / 1000))
 
 
-def deserialize_optional_fval(
+def deserialize_fval(
+        value: AcceptableFValInitInput,
+        name: str,
+        location: str,
+) -> FVal:
+    try:
+        result = FVal(value)
+    except ValueError as e:
+        raise DeserializationError(f'Failed to deserialize value entry: {str(e)} for {name} during {location}') from e  # noqa: E501
+
+    return result
+
+
+def deserialize_optional_to_fval(
         value: Optional[AcceptableFValInitInput],
         name: str,
         location: str,
@@ -228,12 +243,21 @@ def deserialize_optional_fval(
             f'Failed to deserialize value entry for {name} during {location} since null was given',
         )
 
-    try:
-        result = FVal(value)
-    except ValueError as e:
-        raise DeserializationError(f'Failed to deserialize value entry: {str(e)}') from e
+    return deserialize_fval(value=value, name=name, location=location)
 
-    return result
+
+def deserialize_optional_to_optional_fval(
+        value: Optional[AcceptableFValInitInput],
+        name: str,
+        location: str,
+) -> Optional[FVal]:
+    """
+    Deserializes an FVal from a field that was optional and if None returns None
+    """
+    if value is None:
+        return None
+
+    return deserialize_fval(value=value, name=name, location=location)
 
 
 def deserialize_asset_amount(amount: AcceptableFValInitInput) -> AssetAmount:
@@ -254,173 +278,6 @@ def deserialize_asset_amount_force_positive(amount: AcceptableFValInitInput) -> 
     if result < ZERO:
         result = AssetAmount(abs(result))
     return result
-
-
-def deserialize_trade_type(symbol: str) -> TradeType:
-    """Takes a string and attempts to turn it into a TradeType
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize trade type symbol from {type(symbol)} entry',
-        )
-
-    if symbol in ('buy', 'LIMIT_BUY', 'BUY', 'Buy'):
-        return TradeType.BUY
-    if symbol in ('sell', 'LIMIT_SELL', 'SELL', 'Sell'):
-        return TradeType.SELL
-    if symbol == 'settlement_buy':
-        return TradeType.SETTLEMENT_BUY
-    if symbol == 'settlement_sell':
-        return TradeType.SETTLEMENT_SELL
-
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize trade type symbol. Unknown symbol {symbol} for trade type',
-    )
-
-
-def deserialize_trade_type_from_db(symbol: str) -> TradeType:
-    """Takes a string from the DB and attempts to turn it into a TradeType
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize trade type symbol from {type(symbol)} entry',
-        )
-
-    if symbol == 'A':
-        return TradeType.BUY
-    if symbol == 'B':
-        return TradeType.SELL
-    if symbol == 'C':
-        return TradeType.SETTLEMENT_BUY
-    if symbol == 'D':
-        return TradeType.SETTLEMENT_SELL
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize trade type symbol. Unknown DB symbol {symbol} for trade type',
-    )
-
-
-ACTION_TYPE_MAPPING = {str(x): x for x in ActionType}
-
-
-def deserialize_action_type(symbol: str) -> ActionType:
-    """Takes a string and attempts to turn it into an ActionType
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize action type symbol from {type(symbol)} entry',
-        )
-
-    value = ACTION_TYPE_MAPPING.get(symbol, None)
-    if value is None:
-        raise DeserializationError(
-            f'Failed to deserialize action symbol. Unknown symbol '
-            f'{symbol} for an action',
-        )
-
-    return value
-
-
-def deserialize_action_type_from_db(symbol: str) -> ActionType:
-    """Takes a string from the DB and attempts to turn it into an ActionType
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize action type symbol from {type(symbol)} entry',
-        )
-
-    if symbol == 'A':
-        return ActionType.TRADE
-    if symbol == 'B':
-        return ActionType.ASSET_MOVEMENT
-    if symbol == 'C':
-        return ActionType.ETHEREUM_TX
-    if symbol == 'D':
-        return ActionType.LEDGER_ACTION
-
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize action type symbol. Unknown DB '
-        f'symbol {symbol} for trade type',
-    )
-
-
-def deserialize_location(symbol: str) -> Location:
-    """Takes a string and attempts to turn it into a Location enum class
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize location symbol from {type(symbol)} entry',
-        )
-
-    if symbol == 'external':
-        return Location.EXTERNAL
-    if symbol == 'kraken':
-        return Location.KRAKEN
-    if symbol == 'poloniex':
-        return Location.POLONIEX
-    if symbol == 'bittrex':
-        return Location.BITTREX
-    if symbol == 'binance':
-        return Location.BINANCE
-    if symbol == 'bitmex':
-        return Location.BITMEX
-    if symbol == 'coinbase':
-        return Location.COINBASE
-    if symbol == 'total':
-        return Location.TOTAL
-    if symbol == 'banks':
-        return Location.BANKS
-    if symbol == 'blockchain':
-        return Location.BLOCKCHAIN
-    if symbol == 'coinbasepro':
-        return Location.COINBASEPRO
-    if symbol == 'gemini':
-        return Location.GEMINI
-    if symbol == 'equities':
-        return Location.EQUITIES
-    if symbol == 'realestate':
-        return Location.REALESTATE
-    if symbol == 'commodities':
-        return Location.COMMODITIES
-    if symbol == 'crypto.com':
-        return Location.CRYPTOCOM
-    if symbol == 'uniswap':
-        return Location.UNISWAP
-    if symbol == 'bitstamp':
-        return Location.BITSTAMP
-    if symbol == 'binance_us':
-        return Location.BINANCE_US
-    if symbol == 'bitfinex':
-        return Location.BITFINEX
-    if symbol == 'bitcoinde':
-        return Location.BITCOINDE
-    if symbol == 'iconomi':
-        return Location.ICONOMI
-    if symbol == 'kucoin':
-        return Location.KUCOIN
-    if symbol == 'balancer':
-        return Location.BALANCER
-    if symbol == 'loopring':
-        return Location.LOOPRING
-    if symbol == 'ftx':
-        return Location.FTX
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize location symbol. Unknown symbol {symbol} for location',
-    )
 
 
 def _split_pair(pair: TradePair) -> Tuple[str, str]:
@@ -474,116 +331,34 @@ def deserialize_trade_pair(pair: str) -> TradePair:
     return TradePair(pair)
 
 
-def deserialize_location_from_db(symbol: str) -> Location:
-    """Takes a DB enum string and attempts to turn it into a Location enum class
-
-    Can throw DeserializationError if the symbol is not as expected
-    """
-
-    if not isinstance(symbol, str):
-        raise DeserializationError(
-            f'Failed to deserialize location symbol from {type(symbol)} entry',
-        )
-
-    if symbol == 'A':
-        return Location.EXTERNAL
-    if symbol == 'B':
-        return Location.KRAKEN
-    if symbol == 'C':
-        return Location.POLONIEX
-    if symbol == 'D':
-        return Location.BITTREX
-    if symbol == 'E':
-        return Location.BINANCE
-    if symbol == 'F':
-        return Location.BITMEX
-    if symbol == 'G':
-        return Location.COINBASE
-    if symbol == 'H':
-        return Location.TOTAL
-    if symbol == 'I':
-        return Location.BANKS
-    if symbol == 'J':
-        return Location.BLOCKCHAIN
-    if symbol == 'K':
-        return Location.COINBASEPRO
-    if symbol == 'L':
-        return Location.GEMINI
-    if symbol == 'M':
-        return Location.EQUITIES
-    if symbol == 'N':
-        return Location.REALESTATE
-    if symbol == 'O':
-        return Location.COMMODITIES
-    if symbol == 'P':
-        return Location.CRYPTOCOM
-    if symbol == 'Q':
-        return Location.UNISWAP
-    if symbol == 'R':
-        return Location.BITSTAMP
-    if symbol == 'S':
-        return Location.BINANCE_US
-    if symbol == 'T':
-        return Location.BITFINEX
-    if symbol == 'U':
-        return Location.BITCOINDE
-    if symbol == 'V':
-        return Location.ICONOMI
-    if symbol == 'W':
-        return Location.KUCOIN
-    if symbol == 'X':
-        return Location.BALANCER
-    if symbol == 'Y':
-        return Location.LOOPRING
-    if symbol == 'Z':
-        return Location.FTX
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize location symbol. Unknown symbol {symbol} for location',
-    )
-
-
-def deserialize_asset_movement_category(symbol: str) -> AssetMovementCategory:
+def deserialize_asset_movement_category(
+    value: Union[str, HistoryEventType],
+) -> AssetMovementCategory:
     """Takes a string and determines whether to accept it as an asset movement category
 
-    Can throw DeserializationError if symbol is not as expected
+    Can throw DeserializationError if value is not as expected
     """
-    if not isinstance(symbol, str):
+    if isinstance(value, str):
+        if value.lower() == 'deposit':
+            return AssetMovementCategory.DEPOSIT
+        if value.lower() in ('withdraw', 'withdrawal'):
+            return AssetMovementCategory.WITHDRAWAL
         raise DeserializationError(
-            f'Failed to deserialize asset movement category symbol from {type(symbol)} entry',
+            f'Failed to deserialize asset movement category symbol. Unknown {value}',
         )
 
-    if symbol.lower() == 'deposit':
-        return AssetMovementCategory.DEPOSIT
-    if symbol.lower() in ('withdraw', 'withdrawal'):
-        return AssetMovementCategory.WITHDRAWAL
-
-    # else
-    raise DeserializationError(
-        f'Failed to deserialize asset movement category symbol. Unknown symbol {symbol}',
-    )
-
-
-def deserialize_asset_movement_category_from_db(symbol: str) -> AssetMovementCategory:
-    """Takes a DB enum string and turns it into an asset movement category
-
-    Can throw DeserializationError if symbol is not as expected
-    """
-    if not isinstance(symbol, str):
+    if isinstance(value, HistoryEventType):
+        if value == HistoryEventType.DEPOSIT:
+            return AssetMovementCategory.DEPOSIT
+        if value == HistoryEventType.WITHDRAWAL:
+            return AssetMovementCategory.WITHDRAWAL
         raise DeserializationError(
-            f'Failed to deserialize asset movement category symbol from '
-            f'{type(symbol)} DB enum entry',
+            f'Failed to deserialize asset movement category from '
+            f'HistoryEventType and {value} entry',
         )
 
-    if symbol == 'A':
-        return AssetMovementCategory.DEPOSIT
-    if symbol == 'B':
-        return AssetMovementCategory.WITHDRAWAL
-
-    # else
     raise DeserializationError(
-        f'Failed to deserialize asset movement category symbol from DB enum entry.'
-        f'Unknown symbol {symbol}',
+        f'Failed to deserialize asset movement category from {type(value)} entry',
     )
 
 
@@ -709,32 +484,6 @@ def deserialize_ethereum_token_from_db(identifier: str) -> EthereumToken:
     return ethereum_token
 
 
-def deserialize_unknown_ethereum_token_from_db(
-        ethereum_address: str,
-        symbol: str,
-        name: Optional[str],
-        decimals: Optional[int],
-) -> UnknownEthereumToken:
-    """Takes at least an ethereum address and a symbol, and returns an
-    <UnknownEthereumToken>
-    """
-    try:
-        unknown_ethereum_token = UnknownEthereumToken(
-            ethereum_address=string_to_ethereum_address(ethereum_address),
-            symbol=symbol,
-            name=name,
-            decimals=decimals,
-        )
-    except Exception as e:
-        raise DeserializationError(
-            f'Failed deserializing an unknown ethereum token with '
-            f'address {ethereum_address}, symbol {symbol}, name {name}, '
-            f'decimals {decimals}.',
-        ) from e
-
-    return unknown_ethereum_token
-
-
 X = TypeVar('X')
 Y = TypeVar('Y')
 
@@ -745,3 +494,57 @@ def deserialize_optional(input_val: Optional[X], fn: Callable[[X], Y]) -> Option
         return None
 
     return fn(input_val)
+
+
+def deserialize_ethereum_transaction(
+        data: Dict[str, Any],
+        ethereum: Optional['EthereumManager'] = None,
+) -> EthereumTransaction:
+    """Reads dict data of a transaction and deserializes it.
+    If the transaction is not from etherscan then it's missing some data
+    so ethereum manager is used to fetch it.
+
+    Can raise DeserializationError if something is wrong
+    """
+    source = 'etherscan' if ethereum is None else 'web3'
+    try:
+        gas_price = read_integer(data=data, key='gasPrice', api=source)
+        tx_hash = read_hash(data=data, key='hash', api=source)
+
+        input_data = read_hash(data, 'input', source)
+        block_number = read_integer(data, 'blockNumber', source)
+        if 'timeStamp' not in data:
+            if ethereum is None:
+                raise DeserializationError('Got in deserialize ethereum transaction without timestamp and without ethereum manager')  # noqa: E501
+
+            block_data = ethereum.get_block_by_number(block_number)
+            timestamp = Timestamp(read_integer(block_data, 'timestamp', source))
+        else:
+            timestamp = deserialize_timestamp(data['timeStamp'])
+
+        if 'gasUsed' not in data:
+            if ethereum is None:
+                raise DeserializationError('Got in deserialize ethereum transaction without gasUsed and without ethereum manager')  # noqa: E501
+            receipt_data = ethereum.get_transaction_receipt(data['hash'])
+            gas_used = read_integer(receipt_data, 'gasUsed', source)
+        else:
+            gas_used = read_integer(data, 'gasUsed', source)
+
+        nonce = read_integer(data, 'nonce', source)
+        return EthereumTransaction(
+            timestamp=timestamp,
+            block_number=block_number,
+            tx_hash=tx_hash,
+            from_address=deserialize_ethereum_address(data['from']),
+            to_address=deserialize_ethereum_address(data['to']) if data['to'] != '' else None,
+            value=read_integer(data, 'value', source),
+            gas=read_integer(data, 'gas', source),
+            gas_price=gas_price,
+            gas_used=gas_used,
+            input_data=input_data,
+            nonce=nonce,
+        )
+    except KeyError as e:
+        raise DeserializationError(
+            f'ethereum transaction from {source} missing expected key {str(e)}',
+        ) from e

@@ -6,12 +6,18 @@ from unittest.mock import patch
 import pytest
 import requests
 
+from rotkehlchen.accounting.structures import BalanceType
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
-from rotkehlchen.constants.assets import A_BTC, A_ETH
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.fval import FVal
-from rotkehlchen.tests.utils.api import api_url_for, assert_error_response, assert_proper_response
+from rotkehlchen.tests.utils.api import (
+    api_url_for,
+    assert_error_response,
+    assert_proper_response,
+    assert_proper_response_with_result,
+)
 from rotkehlchen.tests.utils.balances import get_asset_balance_total
-from rotkehlchen.tests.utils.constants import A_EUR, A_RDN
+from rotkehlchen.tests.utils.constants import A_RDN
 from rotkehlchen.tests.utils.factories import UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.tests.utils.rotkehlchen import setup_balances
@@ -21,7 +27,7 @@ from rotkehlchen.utils.misc import ts_now
 
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 def test_query_statistics_netvalue(
         rotkehlchen_api_server_with_exchanges,
         ethereum_accounts,
@@ -52,17 +58,15 @@ def test_query_statistics_netvalue(
         ),
     )
 
-    assert_proper_response(response)
-    data = response.json()
-    assert data['message'] == ''
-    assert len(data['result']) == 2
-    assert len(data['result']['times']) == 1
-    assert len(data['result']['data']) == 1
+    result = assert_proper_response_with_result(response)
+    assert len(result) == 2
+    assert len(result['times']) == 1
+    assert len(result['data']) == 1
 
 
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 @pytest.mark.parametrize('start_with_valid_premium', [True, False])
 def test_query_statistics_asset_balance(
         rotkehlchen_api_server_with_exchanges,
@@ -97,11 +101,9 @@ def test_query_statistics_asset_balance(
         ),
     )
     if start_with_valid_premium:
-        assert_proper_response(response)
-        data = response.json()
-        assert data['message'] == ''
-        assert len(data['result']) == 1
-        entry = data['result'][0]
+        result = assert_proper_response_with_result(response)
+        assert len(result) == 1
+        entry = result[0]
         assert len(entry) == 4
         assert FVal(entry['amount']) == get_asset_balance_total(A_ETH, setup)
         assert entry['category'] == 'asset'
@@ -123,11 +125,9 @@ def test_query_statistics_asset_balance(
         ), json={'from_timestamp': 0, 'to_timestamp': start_time + 60000},
     )
     if start_with_valid_premium:
-        assert_proper_response(response)
-        data = response.json()
-        assert data['message'] == ''
-        assert len(data['result']) == 1
-        entry = data['result'][0]
+        result = assert_proper_response_with_result(response)
+        assert len(result) == 1
+        entry = result[0]
         assert len(entry) == 4
         assert FVal(entry['amount']) == get_asset_balance_total(A_BTC, setup)
         assert entry['time'] >= start_time
@@ -149,10 +149,8 @@ def test_query_statistics_asset_balance(
         ), json={'from_timestamp': 0, 'to_timestamp': start_time - 1},
     )
     if start_with_valid_premium:
-        assert_proper_response(response)
-        data = response.json()
-        assert data['message'] == ''
-        assert len(data['result']) == 0
+        result = assert_proper_response_with_result(response)
+        assert len(result) == 0
     else:
         assert_error_response(
             response=response,
@@ -162,12 +160,12 @@ def test_query_statistics_asset_balance(
 
 
 @pytest.mark.parametrize('start_with_valid_premium', [True])
-def test_query_statistics_asset_balance_errors(rotkehlchen_api_server, api_port):
+def test_query_statistics_asset_balance_errors(rotkehlchen_api_server, rest_api_port):
     """Test that errors at the statistics asset balance over time endpoint are hanled properly"""
     start_time = ts_now()
 
     # Check that no asset given is an error
-    response = requests.get(f'http://localhost:{api_port}/api/1/statistics/balance')
+    response = requests.get(f'http://localhost:{rest_api_port}/api/1/statistics/balance')
     assert_error_response(
         response=response,
         status_code=HTTPStatus.NOT_FOUND,
@@ -218,7 +216,7 @@ def test_query_statistics_asset_balance_errors(rotkehlchen_api_server, api_port)
 
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 @pytest.mark.parametrize('start_with_valid_premium', [True, False])
 def test_query_statistics_value_distribution(
         rotkehlchen_api_server_with_exchanges,
@@ -243,6 +241,7 @@ def test_query_statistics_value_distribution(
             amount=FVal('1550'),
             location=Location.BANKS,
             tags=None,
+            balance_type=BalanceType.ASSET,
         )],
     )
 
@@ -260,12 +259,10 @@ def test_query_statistics_value_distribution(
     def assert_okay_by_location(response):
         """Helper function to run next query and its assertion twice"""
         if start_with_valid_premium:
-            assert_proper_response(response)
-            data = response.json()
-            assert data['message'] == ''
-            assert len(data['result']) == 5
+            result = assert_proper_response_with_result(response)
+            assert len(result) == 5
             locations = {'poloniex', 'binance', 'banks', 'blockchain', 'total'}
-            for entry in data['result']:
+            for entry in result:
                 assert len(entry) == 3
                 assert entry['time'] >= start_time
                 assert entry['usd_value'] is not None
@@ -304,17 +301,15 @@ def test_query_statistics_value_distribution(
         ), json={'distribution_by': 'asset'},
     )
     if start_with_valid_premium:
-        assert_proper_response(response)
-        data = response.json()
-        assert data['message'] == ''
-        assert len(data['result']) == 4
+        result = assert_proper_response_with_result(response)
+        assert len(result) == 4
         totals = {
             'ETH': get_asset_balance_total(A_ETH, setup),
             'BTC': get_asset_balance_total(A_BTC, setup),
             'EUR': get_asset_balance_total(A_EUR, setup),
             A_RDN.identifier: get_asset_balance_total(A_RDN, setup),
         }
-        for entry in data['result']:
+        for entry in result:
             assert len(entry) == 5
             assert entry['time'] >= start_time
             assert entry['category'] == 'asset'
@@ -384,10 +379,8 @@ def test_query_statistics_renderer(rotkehlchen_api_server, start_with_valid_prem
             ),
         )
     if start_with_valid_premium:
-        assert_proper_response(response)
-        data = response.json()
-        assert data['message'] == ''
-        assert data['result'] == 'codegoeshere'
+        result = assert_proper_response_with_result(response)
+        assert result == 'codegoeshere'
     else:
         assert_error_response(
             response=response,

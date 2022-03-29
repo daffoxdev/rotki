@@ -4,7 +4,7 @@ import { GeneralSettingsPage } from '../pages/general-settings-page';
 import { RotkiApp } from '../pages/rotki-app';
 import { UserSecuritySettingsPage } from '../pages/user-security-settings-page';
 
-describe('Settings', () => {
+describe('settings', () => {
   let username: string;
   let password: string;
   let newPassword: string;
@@ -15,7 +15,6 @@ describe('Settings', () => {
 
   const settings = {
     floatingPrecision: '4',
-    anonymizedLogs: true,
     anonymousUsageStatistics: false,
     currency: 'JPY',
     balanceSaveFrequency: '48',
@@ -53,10 +52,6 @@ describe('Settings', () => {
         '.general-settings__fields__floating-precision',
         settings.floatingPrecision
       );
-    });
-
-    it('change anonymized switch & validate UI message', () => {
-      pageGeneral.changeAnonymizedLogs();
     });
 
     it('change anonymous statistics switch & validate UI message', () => {

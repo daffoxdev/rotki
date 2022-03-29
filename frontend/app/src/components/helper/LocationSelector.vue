@@ -1,11 +1,13 @@
 <template>
   <v-autocomplete
     v-bind="$attrs"
+    data-cy="location-input"
     :value="value"
     :disabled="pending"
     :items="locations"
     item-value="identifier"
     item-text="name"
+    auto-select-first
     @input="change"
     v-on="$listeners"
   >
@@ -15,11 +17,18 @@
         v-bind="attrs"
         horizontal
         :item="item"
+        no-padding
         v-on="on"
       />
     </template>
     <template #selection="{ item, attrs, on }">
-      <location-icon v-bind="attrs" horizontal :item="item" v-on="on" />
+      <location-icon
+        v-bind="attrs"
+        horizontal
+        :item="item"
+        no-padding
+        v-on="on"
+      />
     </template>
   </v-autocomplete>
 </template>
@@ -47,5 +56,3 @@ export default class LocationSelector extends Vue {
   }
 }
 </script>
-
-<style scoped lang="scss"></style>

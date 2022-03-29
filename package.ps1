@@ -1,5 +1,6 @@
+$PYINSTALLER_VERSION = if ($env:PYINSTALLER_VERSION) { $env:PYINSTALLER_VERSION } else { '3.5' }
 $SQLCIPHER_VERSION = if ($env:SQLCIPHER_VERSION) { $env:SQLCIPHER_VERSION } else { 'v4.4.0' }
-$PYSQLCIPHER3_VERSION = if ($env:PYSQLCIPHER3_VERSION) { $env:PYSQLCIPHER3_VERSION } else { 'fd1b547407bcb7198107fe3c458105286a060b0d' }
+$PYSQLCIPHER3_VERSION = if ($env:PYSQLCIPHER3_VERSION) { $env:PYSQLCIPHER3_VERSION } else { 'c01b3bda144073eb34412ae64702fa2362a778e7' }
 $BUILD_DEPENDENCIES = if ($env:BUILD_DEPENDENCIES) { $env:BUILD_DEPENDENCIES } else { 'rotki-build-dependencies' }
 
 # Setup constants
@@ -37,7 +38,7 @@ $BUILD_DEPS_DIR = $PWD
 
 if (-not (Test-Path $TCLTK -PathType Container)) {
     echo "Setting up TCL/TK $TCLTK"
-    curl.exe -L -O "https://bitbucket.org/tombert/tcltk/downloads/$TCLTK.tgz"
+    curl.exe -L -O "https://github.com/rotki/rotki-win-build/raw/main/$TCLTK.tgz"
     ExitOnFailure("Failed to download tcl/tk")
     tar -xf "$TCLTK.tgz"
     ExitOnFailure("Failed to untar tcl/tk")
@@ -155,7 +156,8 @@ if (-not (Test-Path pysqlcipher3 -PathType Container)) {
 cd pysqlcipher3
 $PYSQLCIPHER3_DIR = $PWD
 
-if (-not (git rev-parse HEAD) -match $PYSQLCIPHER3_VERSION) {
+if (-not ((git rev-parse HEAD) -match $PYSQLCIPHER3_VERSION)) {
+    echo "Checking out PySQLCipher3 $PYSQLCIPHER3_VERSION"
     git checkout $PYSQLCIPHER3_VERSION
     ExitOnFailure("Failed to checkout pysqlcipher3 $PYSQLCIPHER3_VERSION")
 }
@@ -186,9 +188,48 @@ if ((-not ($env:VIRTUAL_ENV)) -and (-not ($Env:CI))) {
     ExitOnFailure("Failed to activate rotki VirtualEnv")
 }
 
-cd $PROJECT_DIR
-$NPM_VERSION = (npm --version) | Out-String
+if ($Env:CI) {
+    echo "::group::Fetch Miniupnpc"
+}
 
+
+echo "Fetching miniupnpc for windows"
+$PYTHON_LOCATION = ((python -c "import os, sys; print(os.path.dirname(sys.executable))") | Out-String).trim()
+$PYTHON_DIRECTORY = Split-Path -Path $PYTHON_LOCATION -Leaf
+
+if (-not ($PYTHON_DIRECTORY -match 'Scripts')) {
+    $PYTHON_LOCATION = (Join-Path $PYTHON_LOCATION "Scripts")
+}
+
+$DLL_PATH = (Join-Path $PYTHON_LOCATION "miniupnpc.dll")
+$MINIUPNPC_ZIP = "miniupnpc_64bit_py37-2.2.24.zip"
+$ZIP_PATH = (Join-Path $BUILD_DEPS_DIR $MINIUPNPC_ZIP)
+
+if (-not ((Test-Path $ZIP_PATH -PathType Leaf) -and (Test-Path $DLL_PATH -PathType Leaf))) {
+    echo "miniupnpc.dll will be installled in $PYTHON_LOCATION"
+
+    cd $BUILD_DEPS_DIR
+    curl.exe -L -O "https://github.com/mrx23dot/miniupnp/releases/download/miniupnpd_2_2_24/$MINIUPNPC_ZIP"
+    ExitOnFailure("Failed to download miniupnpc")
+
+    echo "Downloaded miniupnpc.zip"
+
+    Expand-Archive -Force -Path ".\$MINIUPNPC_ZIP" -DestinationPath $PYTHON_LOCATION
+
+    ExitOnFailure("Failed to unzip miniupnpc")
+    echo "Unzipped miniupnpc to $PYTHON_LOCATION"
+    echo "Done with miniupnpc"    
+} else {
+    echo "miniupnpc.dll already installled in $PYTHON_LOCATION. skipping"
+}
+
+if ($Env:CI) {
+    echo "::endgroup::"
+}
+
+cd $PROJECT_DIR
+
+$NPM_VERSION = (npm --version) | Out-String
 if ([version]$NPM_VERSION -lt [version]$MINIMUM_NPM_VERSION) {
     echo "Please make sure you have npm version $MINIMUM_NPM_VERSION or newer installed"
     exit 1;
@@ -208,7 +249,7 @@ if ($Env:CI) {
     echo "::group::pip install"
 }
 
-pip install pyinstaller==3.5
+pip install pyinstaller==$PYINSTALLER_VERSION
 pip install -r requirements.txt
 pip install -e.
 
@@ -258,7 +299,7 @@ if ($Env:CI) {
     echo "::group::npm ci"
 }
 
-cd frontend\app
+cd frontend
 npm ci
 ExitOnFailure("Restoring the node dependencies with npm ci failed")
 
@@ -274,6 +315,7 @@ if ($Env:CI) {
     echo "::endgroup::"
 }
 
+cd app
 $BINARY_NAME = @(Get-ChildItem -Path $PWD\dist -Filter *.exe -Recurse -File -Name)[0]
 
 if (-not ($BINARY_NAME)) {
@@ -308,7 +350,7 @@ if ($Env:CI) {
     echo "::set-output name=backend_binary_checksum_name::$($BACKEND_BINARY_CHECKSUM_NAME)"
 }
 
-echo "Rotki $SETUP_VERSION was build successfully"
+echo "rotki $SETUP_VERSION was build successfully"
 
 if (($env:VIRTUAL_ENV) -and (-not ($Env:CI))) {
     deactivate

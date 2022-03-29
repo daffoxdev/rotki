@@ -3,23 +3,17 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from rotkehlchen.chain.ethereum.interfaces.ammswap import UNISWAP_TRADES_PREFIX
 from rotkehlchen.chain.ethereum.modules.adex.utils import ADEX_EVENTS_PREFIX
 from rotkehlchen.chain.ethereum.modules.balancer.typing import (
     BALANCER_EVENTS_PREFIX,
     BALANCER_TRADES_PREFIX,
 )
-from rotkehlchen.chain.ethereum.modules.uniswap.typing import (
-    UNISWAP_EVENTS_PREFIX,
-    UNISWAP_TRADES_PREFIX,
-)
+from rotkehlchen.chain.ethereum.modules.uniswap import UNISWAP_EVENTS_PREFIX
 from rotkehlchen.constants.ethereum import YEARN_VAULTS_PREFIX
 from rotkehlchen.constants.resolver import ETHEREUM_DIRECTIVE
 from rotkehlchen.exchanges.data_structures import hash_id
-from rotkehlchen.serialization.deserialize import (
-    deserialize_asset_movement_category_from_db,
-    deserialize_location_from_db,
-    deserialize_trade_type_from_db,
-)
+from rotkehlchen.typing import AssetMovementCategory, Location, TradeType
 from rotkehlchen.user_messages import MessagesAggregator
 
 if TYPE_CHECKING:
@@ -150,7 +144,7 @@ class V24V25UpgradeHelper():
             # formulate the new DB identifier primary key. Copy the identifier() functionality
             open_time_str = 'None' if entry[2] == 0 else str(entry[2])
             new_id_string = (
-                str(deserialize_location_from_db(entry[1])) +
+                str(Location.deserialize_from_db(entry[1])) +
                 open_time_str +
                 str(entry[3]) +
                 new_pl_currency +
@@ -198,8 +192,8 @@ class V24V25UpgradeHelper():
             new_fee_asset = self.get_new_asset_identifier_if_existing(entry[8])
             # formulate the new DB identifier primary key. Copy the identifier() functionality
             new_id_string = (
-                str(deserialize_location_from_db(entry[1])) +
-                str(deserialize_asset_movement_category_from_db(entry[2])) +
+                str(Location.deserialize_from_db(entry[1])) +
+                str(AssetMovementCategory.deserialize_from_db(entry[2])) +
                 str(entry[5]) +
                 new_asset +
                 new_fee_asset +
@@ -326,7 +320,7 @@ class V24V25UpgradeHelper():
                 self.msg_aggregator.add_warning(
                     f'During v24 -> v25 DB upgrade {str(e)}. This should not have happened.'
                     f' Removing the trade with id {entry[0]} at timestamp {entry[1]} '
-                    f'and location {str(deserialize_location_from_db(entry[2]))} that '
+                    f'and location {str(Location.deserialize_from_db(entry[2]))} that '
                     f'contained the offending pair from the DB.',
                 )
                 continue
@@ -345,9 +339,9 @@ class V24V25UpgradeHelper():
             notes = None if entry[10] == '' else entry[10]
             # Copy the identifier() functionality. This identifier does not sound like a good idea
             new_trade_id_string = (
-                str(deserialize_location_from_db(entry[2])) +
+                str(Location.deserialize_from_db(entry[2])) +
                 str(timestamp) +
-                str(deserialize_trade_type_from_db(entry[4])) +
+                str(TradeType.deserialize_from_db(entry[4])) +
                 new_base +
                 new_quote +
                 amount +
@@ -452,6 +446,85 @@ def upgrade_v24_to_v25(db: 'DBHandler') -> None:
     """
     helper = V24V25UpgradeHelper(db.msg_aggregator)
     cursor = db.conn.cursor()
+
+    # Create table misssing the creation statement in upgrades
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS balancer_pools (
+        address VARCHAR[42] NOT NULL PRIMARY KEY,
+        tokens_number INTEGER NOT NULL,
+        is_token0_unknown INTEGER NOT NULL,
+        token0_address VARCHAR[42] NOT NULL,
+        token0_symbol TEXT NOT NULL,
+        token0_name TEXT,
+        token0_decimals INTEGER,
+        token0_weight TEXT NOT NULL,
+        is_token1_unknown INTEGER NOT NULL,
+        token1_address VARCHAR[42] NOT NULL,
+        token1_symbol TEXT NOT NULL,
+        token1_name TEXT,
+        token1_decimals INTEGER,
+        token1_weight TEXT NOT NULL,
+        is_token2_unknown INTEGER,
+        token2_address VARCHAR[42],
+        token2_symbol TEXT,
+        token2_name TEXT,
+        token2_decimals INTEGER,
+        token2_weight TEXT,
+        is_token3_unknown INTEGER,
+        token3_address VARCHAR[42],
+        token3_symbol TEXT,
+        token3_name TEXT,
+        token3_decimals INTEGER,
+        token3_weight TEXT,
+        is_token4_unknown INTEGER,
+        token4_address VARCHAR[42],
+        token4_symbol TEXT,
+        token4_name TEXT,
+        token4_decimals INTEGER,
+        token4_weight TEXT,
+        is_token5_unknown INTEGER,
+        token5_address VARCHAR[42],
+        token5_symbol TEXT,
+        token5_name TEXT,
+        token5_decimals INTEGER,
+        token5_weight TEXT,
+        is_token6_unknown INTEGER,
+        token6_address VARCHAR[42],
+        token6_symbol TEXT,
+        token6_name TEXT,
+        token6_decimals INTEGER,
+        token6_weight TEXT,
+        is_token7_unknown INTEGER,
+        token7_address VARCHAR[42],
+        token7_symbol TEXT,
+        token7_name TEXT,
+        token7_decimals INTEGER,
+        token7_weight TEXT
+    );
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS balancer_events (
+        tx_hash VARCHAR[42] NOT NULL,
+        log_index INTEGER NOT NULL,
+        address VARCHAR[42] NOT NULL,
+        timestamp INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        pool_address VARCHAR[42] NOT NULL,
+        lp_amount TEXT NOT NULL,
+        usd_value TEXT NOT NULL,
+        amount0 TEXT NOT NULL,
+        amount1 TEXT NOT NULL,
+        amount2 TEXT,
+        amount3 TEXT,
+        amount4 TEXT,
+        amount5 TEXT,
+        amount6 TEXT,
+        amount7 TEXT,
+        FOREIGN KEY (pool_address) REFERENCES balancer_pools(address)
+        PRIMARY KEY (tx_hash, log_index)
+    );
+    """)
+
     # Firstly let's clear tables we can easily repopulate with new data
     cursor.execute('DELETE FROM amm_swaps;')
     cursor.execute(
@@ -461,7 +534,11 @@ def upgrade_v24_to_v25(db: 'DBHandler') -> None:
         f'DELETE FROM used_query_ranges WHERE name LIKE "{UNISWAP_TRADES_PREFIX}%";',
     )
     cursor.execute('DELETE FROM balancer_events;')
-    cursor.execute('DELETE FROM balancer_pools;')
+    have_balancer_pools = cursor.execute(
+        'SELECT COUNT(*) FROM sqlite_master WHERE type="table" and name="balancer_pools"',
+    ).fetchone()[0] == 1
+    if have_balancer_pools:
+        cursor.execute('DELETE FROM balancer_pools;')
     cursor.execute(
         f'DELETE FROM used_query_ranges WHERE name LIKE "{BALANCER_EVENTS_PREFIX}%";',
     )

@@ -7,10 +7,12 @@ import gevent
 import pytest
 import requests
 
+from rotkehlchen.accounting.structures import BalanceType
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
 from rotkehlchen.chain.bitcoin import get_bitcoin_addresses_balances
-from rotkehlchen.constants.assets import A_BTC, A_ETH
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.errors import RemoteError
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.api import (
     ASYNC_TASK_WAIT_TIMEOUT,
@@ -22,13 +24,17 @@ from rotkehlchen.tests.utils.api import (
     wait_for_async_task,
     wait_for_async_task_with_result,
 )
+from rotkehlchen.tests.utils.avalanche import AVALANCHE_ACC1_AVAX_ADDR, AVALANCHE_ACC2_AVAX_ADDR
 from rotkehlchen.tests.utils.balances import get_asset_balance_total
 from rotkehlchen.tests.utils.blockchain import (
     assert_btc_balances_result,
     assert_eth_balances_result,
 )
-from rotkehlchen.tests.utils.constants import A_EUR, A_RDN
-from rotkehlchen.tests.utils.exchanges import assert_binance_balances_result
+from rotkehlchen.tests.utils.constants import A_RDN
+from rotkehlchen.tests.utils.exchanges import (
+    assert_binance_balances_result,
+    try_get_first_exchange,
+)
 from rotkehlchen.tests.utils.factories import UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2
 from rotkehlchen.tests.utils.rotkehlchen import BalancesTestSetup, setup_balances
 from rotkehlchen.tests.utils.substrate import (
@@ -118,15 +124,15 @@ def assert_all_balances(
         assert len(location_data) == 0
     else:
         expected_locations = {
-            Location.POLONIEX.serialize_for_db(),
-            Location.BINANCE.serialize_for_db(),
-            Location.TOTAL.serialize_for_db(),
-            Location.BLOCKCHAIN.serialize_for_db(),
+            Location.POLONIEX.serialize_for_db(),  # pylint: disable=no-member
+            Location.BINANCE.serialize_for_db(),  # pylint: disable=no-member
+            Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
+            Location.BLOCKCHAIN.serialize_for_db(),  # pylint: disable=no-member
         }
         if got_external:
-            expected_locations.add(Location.EXTERNAL.serialize_for_db())
+            expected_locations.add(Location.EXTERNAL.serialize_for_db())  # pylint: disable=no-member  # noqa: E501
         if total_eur != ZERO:
-            expected_locations.add(Location.BANKS.serialize_for_db())
+            expected_locations.add(Location.BANKS.serialize_for_db())  # pylint: disable=no-member
         locations = {x.location for x in location_data}
         assert locations == expected_locations
 
@@ -136,7 +142,7 @@ def assert_all_balances(
 @pytest.mark.parametrize('should_mock_current_price_queries', [False])
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 def test_query_all_balances(
         rotkehlchen_api_server_with_exchanges,
         ethereum_accounts,
@@ -160,6 +166,7 @@ def test_query_all_balances(
             amount=FVal('1550'),
             location=Location.BANKS,
             tags=None,
+            balance_type=BalanceType.ASSET,
         )],
     )
     # Test that all balances request saves data on a fresh account
@@ -168,7 +175,7 @@ def test_query_all_balances(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ), json={'async_query': async_query},
         )
         if async_query:
@@ -198,7 +205,7 @@ def test_query_all_balances(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ),
         )
     assert_proper_response(response)
@@ -215,7 +222,7 @@ def test_query_all_balances(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ), json={'save_data': True},
         )
     assert_proper_response(response)
@@ -225,7 +232,7 @@ def test_query_all_balances(
 
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 def test_query_all_balances_ignore_cache(
         rotkehlchen_api_server_with_exchanges,
         ethereum_accounts,
@@ -234,8 +241,8 @@ def test_query_all_balances_ignore_cache(
     """Test that using the query all balances endpoint can ignore the cache"""
     rotki = rotkehlchen_api_server_with_exchanges.rest_api.rotkehlchen
     setup = setup_balances(rotki, ethereum_accounts, btc_accounts)
-    binance = rotki.exchange_manager.connected_exchanges['binance']
-    poloniex = rotki.exchange_manager.connected_exchanges['poloniex']
+    binance = try_get_first_exchange(rotki.exchange_manager, Location.BINANCE)
+    poloniex = try_get_first_exchange(rotki.exchange_manager, Location.POLONIEX)
     eth_query_patch = patch.object(
         rotki.chain_manager,
         'query_ethereum_balances',
@@ -273,7 +280,7 @@ def test_query_all_balances_ignore_cache(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ),
         )
         result = assert_proper_response_with_result(response)
@@ -294,7 +301,7 @@ def test_query_all_balances_ignore_cache(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ),
         )
         result = assert_proper_response_with_result(response)
@@ -317,7 +324,7 @@ def test_query_all_balances_ignore_cache(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ), json={'ignore_cache': True},
         )
         result = assert_proper_response_with_result(response)
@@ -347,7 +354,7 @@ def test_query_all_balances_ignore_cache(
 }]])
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 def test_query_all_balances_with_manually_tracked_balances(
         rotkehlchen_api_server_with_exchanges,
         ethereum_accounts,
@@ -364,30 +371,35 @@ def test_query_all_balances_with_manually_tracked_balances(
         amount=FVal('10'),
         location=Location.BLOCKCHAIN,
         tags=None,
+        balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
         asset=A_BTC,
         label='BTC in hardware wallet',
         amount=FVal('20'),
         location=Location.BLOCKCHAIN,
         tags=['private'],
+        balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
         asset=A_ETH,
         label='ETH in a not supported exchange wallet',
         amount=FVal('10'),
         location=Location.EXTERNAL,
         tags=['private'],
+        balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
         asset=A_EUR,
         label='N26 account',
         amount=FVal('12500.15'),
         location=Location.BANKS,
         tags=None,
+        balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
         asset=A_EUR,
         label='Deutsche Bank account',
         amount=FVal('1337.1337'),
         location=Location.BANKS,
         tags=None,
+        balance_type=BalanceType.ASSET,
     )]
     setup = setup_balances(
         rotki=rotki,
@@ -402,7 +414,7 @@ def test_query_all_balances_with_manually_tracked_balances(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ),
         )
     result = assert_proper_response_with_result(response)
@@ -420,7 +432,7 @@ def test_query_all_balances_errors(rotkehlchen_api_server):
     response = requests.get(
         api_url_for(
             rotkehlchen_api_server,
-            "allbalancesresource",
+            'allbalancesresource',
         ), json={'save_data': 14545},
     )
     assert_error_response(
@@ -432,7 +444,7 @@ def test_query_all_balances_errors(rotkehlchen_api_server):
     response = requests.get(
         api_url_for(
             rotkehlchen_api_server,
-            "allbalancesresource",
+            'allbalancesresource',
         ), json={'async_query': 14545},
     )
     assert_error_response(
@@ -442,10 +454,59 @@ def test_query_all_balances_errors(rotkehlchen_api_server):
     )
 
 
+@pytest.mark.parametrize('number_of_eth_accounts', [0])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE,)])
+@pytest.mark.parametrize('legacy_messages_via_websockets', [True])
+def test_balance_snapshot_error_message(
+        rotkehlchen_api_server_with_exchanges,
+        websocket_connection,
+):
+    """
+    Test that an error in the general balance snapshot is caught and a websocket message is sent
+    """
+    rotki = rotkehlchen_api_server_with_exchanges.rest_api.rotkehlchen
+    binance = try_get_first_exchange(rotki.exchange_manager, Location.BINANCE)
+
+    def mock_binance_method():
+        raise RemoteError('Made a booboo')
+
+    binance_patch = patch.object(binance, 'first_connection', side_effect=mock_binance_method)
+    with binance_patch:
+        response = requests.get(
+            api_url_for(
+                rotkehlchen_api_server_with_exchanges,
+                'allbalancesresource',
+            ),
+        )
+
+    result = assert_proper_response_with_result(response)
+    assert result == {'assets': {}, 'liabilities': {}, 'location': {}, 'net_usd': '0'}
+    websocket_connection.wait_until_messages_num(num=2, timeout=10)
+    assert websocket_connection.messages_num() == 2
+    msg = websocket_connection.pop_message()
+    assert msg == {
+        'type': 'legacy',
+        'data': {
+            'value': 'binance account API request failed. Could not reach binance due to Made a booboo',  # noqa: E501
+            'verbosity': 'error',
+        },
+    }
+    assert websocket_connection.messages_num() == 1
+    msg = websocket_connection.pop_message()
+    assert msg == {
+        'type': 'balance_snapshot_error',
+        'data': {
+            'location': 'binance',
+            'error': 'binance account API request failed. Could not reach binance due to Made a booboo',  # noqa: E501
+        },
+    }
+    assert websocket_connection.messages_num() == 0
+
+
 @pytest.mark.parametrize('number_of_eth_accounts', [2])
 @pytest.mark.parametrize('btc_accounts', [[UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2]])
 @pytest.mark.parametrize('separate_blockchain_calls', [True, False])
-@pytest.mark.parametrize('added_exchanges', [('binance', 'poloniex')])
+@pytest.mark.parametrize('added_exchanges', [(Location.BINANCE, Location.POLONIEX)])
 def test_multiple_balance_queries_not_concurrent(
         rotkehlchen_api_server_with_exchanges,
         ethereum_accounts,
@@ -471,7 +532,7 @@ def test_multiple_balance_queries_not_concurrent(
         'rotkehlchen.chain.manager.get_bitcoin_addresses_balances',
         wraps=get_bitcoin_addresses_balances,
     )
-    binance = rotki.exchange_manager.connected_exchanges['binance']
+    binance = try_get_first_exchange(rotki.exchange_manager, Location.BINANCE)
     binance_querydict_patch = patch.object(binance, 'api_query_dict', wraps=binance.api_query_dict)
 
     # Test all balances request by requesting to not save the data
@@ -483,31 +544,31 @@ def test_multiple_balance_queries_not_concurrent(
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "allbalancesresource",
+                'allbalancesresource',
             ), json={'async_query': True},
         )
         task_id_all = assert_ok_async_response(response)
         response = requests.get(api_url_for(
             rotkehlchen_api_server_with_exchanges,
-            "named_exchanges_balances_resource",
-            name='binance',
+            'named_exchanges_balances_resource',
+            location='binance',
         ), json={'async_query': True})
         task_id_one_exchange = assert_ok_async_response(response)
         if separate_blockchain_calls:
             response = requests.get(api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "blockchainbalancesresource",
+                'blockchainbalancesresource',
             ), json={'async_query': True, 'blockchain': 'ETH'})
             task_id_blockchain_eth = assert_ok_async_response(response)
             response = requests.get(api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "blockchainbalancesresource",
+                'blockchainbalancesresource',
             ), json={'async_query': True, 'blockchain': 'BTC'})
             task_id_blockchain_btc = assert_ok_async_response(response)
         else:
             response = requests.get(api_url_for(
                 rotkehlchen_api_server_with_exchanges,
-                "blockchainbalancesresource",
+                'blockchainbalancesresource',
             ), json={'async_query': True})
             task_id_blockchain = assert_ok_async_response(response)
 
@@ -594,12 +655,12 @@ def test_balances_caching_mixup(
         setup.enter_blockchain_patches(stack)
         response_btc = requests.get(api_url_for(
             rotkehlchen_api_server,
-            "named_blockchain_balances_resource",
+            'named_blockchain_balances_resource',
             blockchain='BTC',
         ), json={'async_query': True})
         response_eth = requests.get(api_url_for(
             rotkehlchen_api_server,
-            "named_blockchain_balances_resource",
+            'named_blockchain_balances_resource',
             blockchain='ETH',
         ), json={'async_query': True})
         task_id_btc = assert_ok_async_response(response_btc)
@@ -644,7 +705,7 @@ def test_query_ksm_balances(rotkehlchen_api_server):
         response = requests.get(
             api_url_for(
                 rotkehlchen_api_server,
-                "named_blockchain_balances_resource",
+                'named_blockchain_balances_resource',
                 blockchain=SupportedBlockchain.KUSAMA.value,
             ),
             json={'async_query': async_query},
@@ -673,3 +734,54 @@ def test_query_ksm_balances(rotkehlchen_api_server):
     total_ksm = result['totals']['assets']['KSM']
     assert FVal(total_ksm['amount']) >= ZERO
     assert FVal(total_ksm['usd_value']) >= ZERO
+
+
+@pytest.mark.parametrize('number_of_eth_accounts', [0])
+@pytest.mark.parametrize('avax_accounts', [[AVALANCHE_ACC1_AVAX_ADDR, AVALANCHE_ACC2_AVAX_ADDR]])
+def test_query_avax_balances(rotkehlchen_api_server):
+    """Test query the AVAX balances when multiple accounts are set up works as
+    expected.
+    """
+    async_query = random.choice([False, True])
+    setup = setup_balances(
+        rotki=rotkehlchen_api_server.rest_api.rotkehlchen,
+        ethereum_accounts=None,
+        btc_accounts=None,
+        eth_balances=None,
+        token_balances=None,
+        btc_balances=None,
+    )
+    with ExitStack() as stack:
+        setup.enter_blockchain_patches(stack)
+        response = requests.get(
+            api_url_for(
+                rotkehlchen_api_server,
+                'named_blockchain_balances_resource',
+                blockchain=SupportedBlockchain.AVALANCHE.value,
+            ),
+            json={'async_query': async_query},
+        )
+        if async_query:
+            task_id = assert_ok_async_response(response)
+            result = wait_for_async_task_with_result(rotkehlchen_api_server, task_id)
+        else:
+            result = assert_proper_response_with_result(response)
+
+    # Check per account
+    account_1_balances = result['per_account']['AVAX'][AVALANCHE_ACC1_AVAX_ADDR]
+    assert 'liabilities' in account_1_balances
+    asset_avax = account_1_balances['assets']['AVAX']
+    assert FVal(asset_avax['amount']) >= ZERO
+    assert FVal(asset_avax['usd_value']) >= ZERO
+
+    account_2_balances = result['per_account']['AVAX'][AVALANCHE_ACC2_AVAX_ADDR]
+    assert 'liabilities' in account_2_balances
+    asset_avax = account_2_balances['assets']['AVAX']
+    assert FVal(asset_avax['amount']) >= ZERO
+    assert FVal(asset_avax['usd_value']) >= ZERO
+
+    # Check totals
+    assert 'liabilities' in result['totals']
+    total_avax = result['totals']['assets']['AVAX']
+    assert FVal(total_avax['amount']) >= ZERO
+    assert FVal(total_avax['usd_value']) >= ZERO

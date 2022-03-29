@@ -6,29 +6,140 @@
     <v-stepper v-model="step">
       <v-stepper-header>
         <v-stepper-step step="1" :complete="step > 1">
-          {{ $t('create_account.select_credentials.title') }}
+          <span v-if="step === 1">
+            {{ $t('create_account.premium.title') }}
+          </span>
         </v-stepper-step>
         <v-divider />
-        <v-stepper-step step="2">
-          {{ $t('create_account.usage_analytics.title') }}
+        <v-stepper-step step="2" :complete="step > 2">
+          <span v-if="step === 2">
+            {{ $t('create_account.select_credentials.title') }}
+          </span>
+        </v-stepper-step>
+        <v-divider />
+        <v-stepper-step step="3">
+          <span v-if="step === 3">
+            {{ $t('create_account.usage_analytics.title') }}
+          </span>
         </v-stepper-step>
       </v-stepper-header>
       <v-stepper-items>
         <v-stepper-content step="1">
           <v-card-text>
-            <v-form ref="form" v-model="valid">
+            <v-form v-model="premiumFormValid">
+              <v-alert text color="primary">
+                <i18n tag="div" path="create_account.premium.premium_question">
+                  <template #premiumLink>
+                    <b>
+                      <external-link url="https://rotki.com/products">
+                        {{ $t('create_account.premium.premium_link_text') }}
+                      </external-link>
+                    </b>
+                  </template>
+                </i18n>
+                <div class="d-flex mt-4 justify-center">
+                  <v-btn
+                    depressed
+                    rounded
+                    small
+                    :outlined="premiumEnabled"
+                    color="primary"
+                    @click="
+                      premiumEnabled = false;
+                      syncDatabase = false;
+                    "
+                  >
+                    <v-icon small class="mr-2">mdi-close</v-icon>
+                    <span>
+                      {{ $t('create_account.premium.button_premium_reject') }}
+                    </span>
+                  </v-btn>
+                  <v-btn
+                    depressed
+                    rounded
+                    small
+                    :outlined="!premiumEnabled"
+                    color="primary"
+                    class="ml-2"
+                    @click="premiumEnabled = true"
+                  >
+                    <v-icon small class="mr-2"> mdi-check</v-icon>
+                    <span>
+                      {{ $t('create_account.premium.button_premium_approve') }}
+                    </span>
+                  </v-btn>
+                </div>
+              </v-alert>
+
+              <premium-credentials
+                :enabled="premiumEnabled"
+                :api-secret="apiSecret"
+                :api-key="apiKey"
+                :loading="loading"
+                :sync-database="syncDatabase"
+                @update:api-key="apiKey = $event"
+                @update:api-secret="apiSecret = $event"
+                @update:sync-database="syncDatabase = $event"
+              />
+            </v-form>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn
+              class="create-account__button__cancel"
+              depressed
+              outlined
+              color="primary"
+              :disabled="loading || newUser"
+              @click="cancel()"
+            >
+              {{ $t('create_account.premium.button_cancel') }}
+            </v-btn>
+            <v-btn
+              class="create-account__premium__button__continue"
+              depressed
+              color="primary"
+              :disabled="!premiumFormValid"
+              :loading="loading"
+              data-cy="create-account__premium__button__continue"
+              @click="step = 2"
+            >
+              {{ $t('create_account.premium.button_continue') }}
+            </v-btn>
+          </v-card-actions>
+        </v-stepper-content>
+        <v-stepper-content step="2">
+          <v-card-text>
+            <v-form ref="form" v-model="credentialsFormValid">
               <v-text-field
                 v-model="username"
+                outlined
                 autofocus
+                single-line
                 class="create-account__fields__username"
                 :label="$t('create_account.select_credentials.label_username')"
-                prepend-icon="mdi-account"
+                prepend-inner-icon="mdi-account"
                 :rules="usernameRules"
                 :disabled="loading"
                 required
               />
+              <v-alert
+                v-if="syncDatabase"
+                text
+                class="mt-2 create-account__password-sync-requirement"
+                outlined
+                color="deep-orange"
+                icon="mdi-information"
+              >
+                {{
+                  $t(
+                    'create_account.select_credentials.password_sync_requirement'
+                  )
+                }}
+              </v-alert>
               <revealable-input
                 v-model="password"
+                outlined
                 class="create-account__fields__password"
                 :label="$t('create_account.select_credentials.label_password')"
                 prepend-icon="mdi-lock"
@@ -38,6 +149,7 @@
               />
               <revealable-input
                 v-model="passwordConfirm"
+                outlined
                 class="create-account__fields__password-repeat"
                 prepend-icon="mdi-repeat"
                 :error-messages="errorMessages"
@@ -57,42 +169,33 @@
                   )
                 "
               />
-              <premium-credentials
-                :enabled="premiumEnabled"
-                :api-secret="apiSecret"
-                :api-key="apiKey"
-                :loading="loading"
-                @api-key-changed="apiKey = $event"
-                @api-secret-changed="apiSecret = $event"
-                @enabled-changed="premiumEnabled = $event"
-              />
             </v-form>
           </v-card-text>
           <v-card-actions>
             <v-spacer />
             <v-btn
-              class="create-account__buttons__cancel"
-              depressed
-              outlined
               color="primary"
+              class="create-account__credentials__button__back"
+              depressed
               :disabled="loading"
-              @click="cancel()"
+              outlined
+              @click="back"
             >
-              {{ $t('create_account.select_credentials.button_cancel') }}
+              {{ $t('create_account.select_credentials.button_back') }}
             </v-btn>
             <v-btn
-              class="create-account__buttons__continue"
+              class="create-account__credentials__button__continue"
               depressed
               color="primary"
-              :disabled="!valid || loading || !userPrompted"
+              :disabled="!credentialsFormValid || loading || !userPrompted"
               :loading="loading"
-              @click="step = 2"
+              @click="step = 3"
             >
               {{ $t('create_account.select_credentials.button_continue') }}
             </v-btn>
           </v-card-actions>
         </v-stepper-content>
-        <v-stepper-content step="2">
+        <v-stepper-content step="3">
           <v-card
             light
             max-width="500"
@@ -103,7 +206,11 @@
                 outlined
                 prominent
                 color="primary"
-                class="mx-auto text-justify text-body-2 create-account__analytics__content"
+                class="
+                  mx-auto
+                  text-justify text-body-2
+                  create-account__analytics__content
+                "
               >
                 {{ $t('create_account.usage_analytics.description') }}
               </v-alert>
@@ -124,7 +231,7 @@
               <v-spacer />
               <v-btn
                 color="primary"
-                class="create-account__analytics__buttons__back"
+                class="create-account__analytics__button__back"
                 depressed
                 :disabled="loading"
                 outlined
@@ -137,7 +244,7 @@
                 depressed
                 :disabled="loading"
                 :loading="loading"
-                class="create-account__analytics__buttons__confirm"
+                class="create-account__analytics__button__confirm"
                 @click="confirm()"
               >
                 {{ $t('create_account.usage_analytics.button_create') }}
@@ -152,12 +259,17 @@
 
 <script lang="ts">
 import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
+import { mapState } from 'vuex';
 import PremiumCredentials from '@/components/account-management/PremiumCredentials.vue';
+import ExternalLink from '@/components/helper/ExternalLink.vue';
 import RevealableInput from '@/components/inputs/RevealableInput.vue';
-import { Credentials } from '@/typing/types';
+import { CreateAccountPayload } from '@/types/login';
 
 @Component({
-  components: { RevealableInput, PremiumCredentials }
+  components: { ExternalLink, RevealableInput, PremiumCredentials },
+  computed: {
+    ...mapState(['newUser'])
+  }
 })
 export default class CreateAccount extends Vue {
   @Prop({ required: true })
@@ -169,6 +281,7 @@ export default class CreateAccount extends Vue {
   @Prop({ required: false, type: String, default: '' })
   error!: string;
 
+  newUser!: boolean;
   username: string = '';
   password: string = '';
   passwordConfirm: string = '';
@@ -179,8 +292,10 @@ export default class CreateAccount extends Vue {
   submitUsageAnalytics: boolean = true;
   apiKey: string = '';
   apiSecret: string = '';
+  syncDatabase: boolean = false;
 
-  valid: boolean = false;
+  premiumFormValid: boolean = true;
+  credentialsFormValid: boolean = false;
   errorMessages: string[] = [];
   step = 1;
 
@@ -250,22 +365,23 @@ export default class CreateAccount extends Vue {
   }
 
   confirm() {
-    const premiumKeys = {
-      apiKey: this.apiKey,
-      apiSecret: this.apiSecret
+    const payload: CreateAccountPayload = {
+      credentials: {
+        username: this.username,
+        password: this.password
+      }
     };
 
-    const accountCredentials: Credentials = {
-      username: this.username,
-      password: this.password,
-      submitUsageAnalytics: this.submitUsageAnalytics
-    };
+    if (this.premiumEnabled) {
+      payload.premiumSetup = {
+        apiKey: this.apiKey,
+        apiSecret: this.apiSecret,
+        submitUsageAnalytics: this.submitUsageAnalytics,
+        syncDatabase: this.syncDatabase
+      };
+    }
 
-    const credentials: Credentials = {
-      ...accountCredentials,
-      ...(this.premiumEnabled ? premiumKeys : {})
-    };
-    this.$emit('confirm', credentials);
+    this.$emit('confirm', payload);
   }
 
   @Emit()
@@ -275,7 +391,7 @@ export default class CreateAccount extends Vue {
   errorClear() {}
 
   back() {
-    this.step = 1;
+    this.step = Math.max(this.step - 1, 1);
     if (this.error) {
       this.errorClear();
     }
@@ -293,6 +409,12 @@ export default class CreateAccount extends Vue {
     &__content {
       background-color: #f8f8f8 !important;
     }
+  }
+
+  &__password-sync-requirement {
+    font-weight: bold;
+    font-size: 0.8rem;
+    line-height: 1rem;
   }
 
   ::v-deep {

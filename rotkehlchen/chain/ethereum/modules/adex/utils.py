@@ -13,11 +13,6 @@ from rotkehlchen.serialization.deserialize import (
 
 from .typing import AdexEventDBTuple, AdexEventType, Bond, ChannelWithdraw, Unbond, UnbondRequest
 
-SUBGRAPH_REMOTE_ERROR_MSG = (
-    "Failed to request the AdEx subgraph due to {error_msg}. "
-    "All staking balances and events history queries are not functioning until this is fixed. "  # noqa: E501
-    "Probably will get fixed with time. If not report it to rotki's support channel"  # noqa: E501
-)
 # Constants from the AdExNetwork repo
 IDENTITY_FACTORY_ADDR = '0x9fe0d438E3c29C7CFF949aD8e8dA9403A531cC1A'
 IDENTITY_PROXY_INIT_CODE = (
@@ -28,7 +23,6 @@ IDENTITY_PROXY_INIT_CODE = (
 STAKING_ADDR = string_to_ethereum_address('0x4846C6837ec670Bbd1f5b485471c8f64ECB9c534')
 CREATE2_SALT = f'0x{bytearray(32).hex()}'
 ADX_AMOUNT_MANTISSA = FVal(10**18)
-DAI_AMOUNT_MANTISSA = FVal(10**18)
 
 ADEX_EVENTS_PREFIX = 'adex_events'
 

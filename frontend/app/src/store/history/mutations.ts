@@ -1,77 +1,58 @@
 import { MutationTree } from 'vuex';
-import { TradeUpdate } from '@/services/history/types';
-import {
-  MUTATION_ADD_LEDGER_ACTION,
-  MUTATION_SET_LEDGER_ACTIONS
-} from '@/store/history/consts';
+import { IgnoredActions } from '@/services/history/const';
+import { TradeLocation } from '@/services/history/types';
+import { HistoryMutations } from '@/store/history/consts';
 import { defaultState } from '@/store/history/state';
 import {
-  AssetMovements,
-  EthTransactions,
-  HistoricData,
+  AssetMovementEntry,
+  EthTransactionEntry,
   HistoryState,
   LedgerActionEntry,
-  TradeEntry,
-  Trades
+  TradeEntry
 } from '@/store/history/types';
+import { Collection } from '@/types/collection';
 
 export const mutations: MutationTree<HistoryState> = {
-  setTrades(state: HistoryState, trades: Trades) {
+  [HistoryMutations.SET_ASSOCIATED_LOCATIONS](
+    state: HistoryState,
+    associatedLocations: TradeLocation[]
+  ) {
+    state.associatedLocations = associatedLocations;
+  },
+
+  [HistoryMutations.SET_TRADES](
+    state: HistoryState,
+    trades: Collection<TradeEntry>
+  ) {
     state.trades = trades;
   },
 
-  addTrade(state: HistoryState, trade: TradeEntry) {
-    const { data: trades } = state.trades;
-    state.trades = { ...state.trades, data: [...trades, trade] };
-  },
-
-  updateTrade(state: HistoryState, { trade, oldTradeId }: TradeUpdate) {
-    const { data: trades } = state.trades;
-    const update = [...trades];
-    const index = update.findIndex(exTrade => {
-      return exTrade.tradeId === oldTradeId;
-    });
-    update[index] = trade;
-    state.trades = {
-      ...state.trades,
-      data: update
-    };
-  },
-
-  deleteTrade(state: HistoryState, tradeId: string) {
-    const { data: trades } = state.trades;
-    const data = [...trades.filter(trade => trade.tradeId !== tradeId)];
-    state.trades = {
-      ...state.trades,
-      data
-    };
-  },
-
-  setMovements(state: HistoryState, movements: AssetMovements) {
+  [HistoryMutations.SET_MOVEMENTS](
+    state: HistoryState,
+    movements: Collection<AssetMovementEntry>
+  ) {
     state.assetMovements = movements;
   },
 
-  setTransactions(state: HistoryState, transactions: EthTransactions) {
+  [HistoryMutations.SET_TRANSACTIONS](
+    state: HistoryState,
+    transactions: Collection<EthTransactionEntry>
+  ) {
     state.transactions = transactions;
   },
 
-  [MUTATION_SET_LEDGER_ACTIONS](
+  [HistoryMutations.SET_LEDGER_ACTIONS](
     state: HistoryState,
-    actions: HistoricData<LedgerActionEntry>
+    actions: Collection<LedgerActionEntry>
   ) {
     state.ledgerActions = actions;
   },
 
-  [MUTATION_ADD_LEDGER_ACTION](state: HistoryState, action: LedgerActionEntry) {
-    const ledgerActions = state.ledgerActions;
-    state.ledgerActions = {
-      data: [...ledgerActions.data, action],
-      limit: ledgerActions.limit,
-      found: ledgerActions.found + 1
-    };
+  [HistoryMutations.SET_IGNORED](state: HistoryState, ignored: IgnoredActions) {
+    state.ignored = ignored;
   },
 
-  reset(state: HistoryState) {
+  [HistoryMutations.RESET](state: HistoryState) {
     Object.assign(state, defaultState());
   }
 };

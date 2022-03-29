@@ -1,18 +1,31 @@
 <template>
-  <div class="card-title">
+  <div
+    class="card-title"
+    :class="{
+      [$style.title]: true,
+      [$style.dark]: dark
+    }"
+  >
     <slot />
   </div>
 </template>
 
 <script lang="ts">
-import { Component, Vue } from 'vue-property-decorator';
+import { defineComponent } from '@vue/composition-api';
+import { setupThemeCheck } from '@/composables/common';
 
-@Component({})
-export default class CardTitle extends Vue {}
+export default defineComponent({
+  setup() {
+    const { dark } = setupThemeCheck();
+    return {
+      dark
+    };
+  }
+});
 </script>
 
-<style scoped lang="scss">
-.card-title {
+<style module lang="scss">
+.title {
   font-size: 14px;
   line-height: 17px;
   /* identical to box height */
@@ -24,5 +37,9 @@ export default class CardTitle extends Vue {}
   display: flex;
   flex-direction: row;
   align-items: center;
+}
+
+.dark {
+  color: #62a4af;
 }
 </style>

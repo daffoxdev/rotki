@@ -11,6 +11,7 @@ import gevent
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_bittrex
@@ -33,7 +34,6 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount_force_positive,
     deserialize_fee,
     deserialize_timestamp_from_date,
-    deserialize_trade_type,
     get_pair_position_str,
     pair_get_assets,
 )
@@ -46,10 +46,12 @@ from rotkehlchen.typing import (
     Price,
     Timestamp,
     TradePair,
+    TradeType,
 )
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import timestamp_to_iso8601, ts_now_in_ms
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_list
 
 if TYPE_CHECKING:
@@ -118,12 +120,11 @@ def trade_from_bittrex(bittrex_trade: Dict[str, Any]) -> Trade:
             deserialize_asset_amount(bittrex_trade['proceeds']) /
             deserialize_asset_amount(bittrex_trade['fillQuantity']),
         )
-    order_type = deserialize_trade_type(bittrex_trade['direction'])
+    order_type = TradeType.deserialize(bittrex_trade['direction'])
     fee = deserialize_fee(bittrex_trade['commission'])
     base_asset, quote_asset = bittrex_pair_to_world(bittrex_trade['marketSymbol'])
     log.debug(
         'Processing bittrex Trade',
-        sensitive_log=True,
         amount=amount,
         rate=rate,
         order_type=order_type,
@@ -150,6 +151,7 @@ def trade_from_bittrex(bittrex_trade: Dict[str, Any]) -> Trade:
 class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
@@ -157,7 +159,13 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             initial_backoff: int = 4,
             backoff_limit: int = 180,
     ):
-        super().__init__('bittrex', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.BITTREX,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.uri = 'https://api.bittrex.com/v3/'
         self.msg_aggregator = msg_aggregator
         self.session.headers.update({
@@ -169,6 +177,17 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def first_connection(self) -> None:
         self.first_connection_made = True
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'Api-Key': self.api_key})
+        return changed
 
     def validate_api_key(self) -> Tuple[bool, str]:
         try:
@@ -258,7 +277,6 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 hashlib.sha512,
             ).hexdigest()
             self.session.headers.update({
-                'Api-Key': self.api_key,
                 'Api-Timestamp': api_timestamp,
                 'Api-Content-Hash': api_content_hash,
                 'Api-Signature': signature,
@@ -346,7 +364,6 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             )
             log.debug(
                 'bittrex balance query result',
-                sensitive_log=True,
                 currency=asset,
                 amount=amount,
                 usd_value=usd_value,
@@ -386,7 +403,7 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,
             end_ts: Timestamp,
             market: Optional[TradePair] = None,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         options: Dict[str, Union[str, int]] = {
             'pageSize': 200,  # max page size according to their docs
             'startDate': timestamp_to_iso8601(start_ts, utc_as_z=True),
@@ -437,7 +454,7 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
             trades.append(trade)
 
-        return trades
+        return trades, (start_ts, end_ts)
 
     def _deserialize_asset_movement(self, raw_data: Dict[str, Any]) -> Optional[AssetMovement]:
         """Processes a single deposit/withdrawal from bittrex and deserializes it
@@ -529,4 +546,11 @@ class Bittrex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for bittrex
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for bittrex

@@ -1,11 +1,16 @@
 import pytest
 import requests
 
-from rotkehlchen.tests.utils.api import api_url_for, assert_proper_response
+from rotkehlchen.tests.utils.api import (
+    api_url_for,
+    assert_proper_response,
+    assert_proper_response_with_result,
+)
 from rotkehlchen.tests.utils.history import mock_history_processing_and_exchanges
+from rotkehlchen.typing import Location
 
 
-@pytest.mark.parametrize('added_exchanges', [('poloniex',)])
+@pytest.mark.parametrize('added_exchanges', [(Location.POLONIEX,)])
 def test_query_messages(rotkehlchen_api_server_with_exchanges):
     """Test that querying the messages endpoint returns notifications for the user"""
     rotki = rotkehlchen_api_server_with_exchanges.rest_api.rotkehlchen
@@ -22,11 +27,9 @@ def test_query_messages(rotkehlchen_api_server_with_exchanges):
     response = requests.get(
         api_url_for(rotkehlchen_api_server_with_exchanges, "messagesresource"),
     )
-    assert_proper_response(response)
-    data = response.json()
-    assert data['message'] == ''
-    errors = data['result']['errors']
-    warnings = data['result']['warnings']
+    result = assert_proper_response_with_result(response)
+    errors = result['errors']
+    warnings = result['warnings']
     assert len(errors) == 0
     assert len(warnings) == 2
     assert warnings[0] == 'Found poloniex trade with unknown asset NOEXISTINGASSET. Ignoring it.'

@@ -1,9 +1,9 @@
+import { TimeFramePeriod } from '@rotki/common/lib/settings/graphs';
 import {
   defaultAccountingSettings,
   defaultGeneralSettings
 } from '@/data/factories';
-import { SessionState } from '@/store/session/types';
-import { TIMEFRAME_ALL } from '@/store/settings/consts';
+import { PrivacyMode, SessionState } from '@/store/session/types';
 
 export const defaultState: () => SessionState = () => ({
   newAccount: false,
@@ -12,7 +12,7 @@ export const defaultState: () => SessionState = () => ({
   username: '',
   generalSettings: defaultGeneralSettings(),
   accountingSettings: defaultAccountingSettings(),
-  privacyMode: false,
+  privacyMode: PrivacyMode.NORMAL,
   scrambleData: false,
   premium: false,
   premiumSync: false,
@@ -27,7 +27,8 @@ export const defaultState: () => SessionState = () => ({
   ignoredAssets: [],
   lastBalanceSave: 0,
   lastDataUpload: 0,
-  timeframe: TIMEFRAME_ALL
+  timeframe: TimeFramePeriod.ALL,
+  showUpdatePopup: false
 });
 
 export const state: SessionState = defaultState();

@@ -1,20 +1,17 @@
 ﻿import Vue from 'vue';
 import Vuex, { StoreOptions } from 'vuex';
 import { api } from '@/services/rotkehlchen-api';
-import { VersionCheck } from '@/services/types-api';
+import { BackendVersion } from '@/services/types-api';
 import { assets } from '@/store/assets';
 import { balances } from '@/store/balances';
 import { defiSections, Section, Status } from '@/store/const';
 import { storePlugins } from '@/store/debug';
 import { defi } from '@/store/defi';
 import { history } from '@/store/history';
-import { notifications } from '@/store/notifications';
-import { reports } from '@/store/reports';
 import { session } from '@/store/session';
 import { settings } from '@/store/settings';
 import { staking } from '@/store/staking';
 import { statistics } from '@/store/statistics';
-import { tasks } from '@/store/tasks';
 import {
   Message,
   RotkehlchenState,
@@ -22,6 +19,7 @@ import {
   Version
 } from '@/store/types';
 import { isLoading } from '@/store/utils';
+import { Nullable } from '@/types';
 
 Vue.use(Vuex);
 
@@ -40,12 +38,14 @@ const defaultVersion = () =>
     downloadUrl: ''
   } as Version);
 
-const defaultState = () => ({
+const defaultState = (): RotkehlchenState => ({
+  newUser: false,
   message: emptyMessage(),
   version: defaultVersion(),
   connected: false,
   connectionFailure: false,
-  status: {}
+  status: {},
+  dataDirectory: ''
 });
 
 const store: StoreOptions<RotkehlchenState> = {
@@ -57,12 +57,15 @@ const store: StoreOptions<RotkehlchenState> = {
     resetMessage: (state: RotkehlchenState) => {
       state.message = emptyMessage();
     },
-    versions: (state: RotkehlchenState, version: VersionCheck) => {
+    versions: (state: RotkehlchenState, version: BackendVersion) => {
       state.version = {
-        version: version.our_version || '',
-        latestVersion: version.latest_version || '',
-        downloadUrl: version.download_url || ''
+        version: version.ourVersion || '',
+        latestVersion: version.latestVersion || '',
+        downloadUrl: version.downloadUrl || ''
       };
+    },
+    dataDirectory(state: RotkehlchenState, directory: string) {
+      state.dataDirectory = directory;
     },
     setConnected: (state: RotkehlchenState, connected: boolean) => {
       state.connected = connected;
@@ -76,18 +79,23 @@ const store: StoreOptions<RotkehlchenState> = {
     ) => {
       state.connectionFailure = connectionFailure;
     },
+    newUser: (state: RotkehlchenState, newUser: boolean) => {
+      state.newUser = newUser;
+    },
     reset: (state: RotkehlchenState) => {
       Object.assign(state, defaultState(), {
         version: state.version,
-        connected: state.connected
+        connected: state.connected,
+        dataDirectory: state.dataDirectory
       });
     }
   },
   actions: {
     async version({ commit }): Promise<void> {
-      const version = await api.checkVersion();
+      const { version, dataDirectory } = await api.info();
       if (version) {
         commit('versions', version);
+        commit('dataDirectory', dataDirectory);
       }
     },
     async connect({ commit, dispatch }, payload: string | null): Promise<void> {
@@ -96,30 +104,33 @@ const store: StoreOptions<RotkehlchenState> = {
         clearInterval(intervalId);
       }
 
-      function connectToDefaultBackend() {
-        const serverUrl = window.interop?.serverUrl();
-        const defaultServerUrl = process.env.VUE_APP_BACKEND_URL;
-        if (serverUrl && serverUrl !== defaultServerUrl) {
-          api.setup(serverUrl);
+      function updateApi(payload?: Nullable<string>) {
+        const interopServerUrl = window.interop?.serverUrl();
+        let backend = process.env.VUE_APP_BACKEND_URL!;
+        if (payload) {
+          backend = payload;
+        } else if (interopServerUrl) {
+          backend = interopServerUrl;
         }
+        api.setup(backend);
       }
 
       const attemptConnect = async function () {
         try {
-          if (!payload) {
-            connectToDefaultBackend();
-          } else {
-            api.setup(payload);
-          }
+          updateApi(payload);
 
           const connected = await api.ping();
           if (connected) {
+            const accounts = await api.users();
+            if (accounts.length === 0) {
+              commit('newUser', true);
+            }
             clearInterval(intervalId);
             commit('setConnected', connected);
             await dispatch('version');
           }
           // eslint-disable-next-line no-empty
-        } catch (e) {
+        } catch (e: any) {
         } finally {
           count++;
           if (count > 20) {
@@ -139,6 +150,9 @@ const store: StoreOptions<RotkehlchenState> = {
           section
         });
       });
+    },
+    async setMessage({ commit }, message: Message) {
+      commit('setMessage', message);
     }
   },
   getters: {
@@ -154,27 +168,27 @@ const store: StoreOptions<RotkehlchenState> = {
     message: (state: RotkehlchenState) => {
       return state.message.title.length > 0;
     },
-    status: (state: RotkehlchenState) => (section: Section): Status => {
-      return state.status[section] ?? Status.NONE;
-    },
+    status:
+      (state: RotkehlchenState) =>
+      (section: Section): Status => {
+        return state.status[section] ?? Status.NONE;
+      },
     detailsLoading: (state: RotkehlchenState) => {
       return (
         isLoading(state.status[Section.BLOCKCHAIN_ETH]) ||
         isLoading(state.status[Section.BLOCKCHAIN_BTC]) ||
         isLoading(state.status[Section.BLOCKCHAIN_KSM]) ||
+        isLoading(state.status[Section.BLOCKCHAIN_AVAX]) ||
         isLoading(state.status[Section.EXCHANGES]) ||
         isLoading(state.status[Section.MANUAL_BALANCES])
       );
     }
   },
   modules: {
-    notifications,
     balances,
     defi,
-    tasks,
     history,
     session,
-    reports,
     settings,
     statistics,
     staking,

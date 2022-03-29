@@ -1,12 +1,11 @@
 <template>
   <v-container>
-    <base-page-header :text="$t('dashboard.title')" />
     <v-row>
       <v-col cols="12">
         <overall-balances />
       </v-col>
     </v-row>
-    <v-row class="mr--1" justify="center">
+    <v-row justify="center">
       <v-col cols="12" md="4" lg="4">
         <summary-card
           :name="$t('dashboard.exchange_balances.title')"
@@ -28,8 +27,8 @@
           <div v-else>
             <exchange-box
               v-for="exchange in exchanges"
-              :key="exchange.name"
-              :name="exchange.name"
+              :key="exchange.location"
+              :location="exchange.location"
               :amount="exchange.total"
             />
           </div>
@@ -101,53 +100,53 @@
         <price-refresh />
       </v-col>
     </v-row>
-    <v-row>
-      <v-col cols="12">
-        <dashboard-asset-table
-          :title="$t('dashboard.per_asset_balances.title')"
-          :loading="anyIsLoading"
-          :balances="aggregatedBalances"
-        />
-      </v-col>
-    </v-row>
-    <v-row v-if="liabilities.length > 0" no-gutters class="mt-8">
-      <v-col>
-        <dashboard-asset-table
-          :title="$t('dashboard.liabilities.title')"
-          :loading="anyIsLoading"
-          :balances="liabilities"
-        />
-      </v-col>
-    </v-row>
+    <dashboard-asset-table
+      :title="$t('dashboard.per_asset_balances.title')"
+      table-type="ASSETS"
+      :loading="anyIsLoading"
+      :balances="aggregatedBalances"
+    />
+    <dashboard-asset-table
+      v-if="liabilities.length > 0"
+      class="mt-8"
+      table-type="LIABILITIES"
+      :title="$t('dashboard.liabilities.title')"
+      :loading="anyIsLoading"
+      :balances="liabilities"
+    />
+    <nft-balance-table data-cy="nft-balance-table" class="mt-8" />
   </v-container>
 </template>
 
 <script lang="ts">
+import { AssetBalance } from '@rotki/common';
+import { Ref } from '@vue/composition-api';
+import { mapState } from 'pinia';
 import { Component, Vue } from 'vue-property-decorator';
 import { mapActions, mapGetters } from 'vuex';
-import BasePageHeader from '@/components/base/BasePageHeader.vue';
 import BlockchainBalanceCardList from '@/components/dashboard/BlockchainBalanceCardList.vue';
 import DashboardAssetTable from '@/components/dashboard/DashboardAssetTable.vue';
 import ExchangeBox from '@/components/dashboard/ExchangeBox.vue';
 import ManualBalanceCardList from '@/components/dashboard/ManualBalanceCardList.vue';
+import NftBalanceTable from '@/components/dashboard/NftBalanceTable.vue';
 import OverallBalances from '@/components/dashboard/OverallBalances.vue';
 import SummaryCard from '@/components/dashboard/SummaryCard.vue';
 import PriceRefresh from '@/components/helper/PriceRefresh.vue';
-import { TaskType } from '@/model/task-type';
 import {
-  AssetBalance,
   BlockchainBalancePayload,
   BlockchainTotal,
   ExchangeBalancePayload,
   LocationBalance
 } from '@/store/balances/types';
-import { ExchangeInfo } from '@/typing/types';
+import { useTasks } from '@/store/tasks';
+import { ExchangeInfo } from '@/types/exchanges';
+import { TaskType } from '@/types/task-type';
 
 @Component({
   components: {
+    NftBalanceTable,
     PriceRefresh,
     DashboardAssetTable,
-    BasePageHeader,
     OverallBalances,
     SummaryCard,
     ExchangeBox,
@@ -155,7 +154,7 @@ import { ExchangeInfo } from '@/typing/types';
     BlockchainBalanceCardList
   },
   computed: {
-    ...mapGetters('tasks', ['isTaskRunning']),
+    ...mapState(useTasks, ['isTaskRunning']),
     ...mapGetters('balances', [
       'exchanges',
       'manualBalanceByLocation',
@@ -176,7 +175,7 @@ import { ExchangeInfo } from '@/typing/types';
 })
 export default class Dashboard extends Vue {
   exchanges!: ExchangeInfo[];
-  isTaskRunning!: (type: TaskType) => boolean;
+  isTaskRunning!: (type: TaskType) => Ref<boolean>;
   blockchainTotals!: BlockchainTotal[];
   aggregatedBalances!: AssetBalance[];
   liabilities!: AssetBalance[];
@@ -189,19 +188,19 @@ export default class Dashboard extends Vue {
   fetchManualBalances!: () => Promise<void>;
 
   get blockchainIsLoading(): boolean {
-    return this.isTaskRunning(TaskType.QUERY_BLOCKCHAIN_BALANCES);
+    return this.isTaskRunning(TaskType.QUERY_BLOCKCHAIN_BALANCES).value;
   }
 
   get exchangeIsLoading(): boolean {
-    return this.isTaskRunning(TaskType.QUERY_EXCHANGE_BALANCES);
+    return this.isTaskRunning(TaskType.QUERY_EXCHANGE_BALANCES).value;
   }
 
   get allBalancesIsLoading(): boolean {
-    return this.isTaskRunning(TaskType.QUERY_BALANCES);
+    return this.isTaskRunning(TaskType.QUERY_BALANCES).value;
   }
 
   get manualBalancesLoading(): boolean {
-    return this.isTaskRunning(TaskType.MANUAL_BALANCES);
+    return this.isTaskRunning(TaskType.MANUAL_BALANCES).value;
   }
 
   get anyIsLoading(): boolean {
@@ -221,7 +220,7 @@ export default class Dashboard extends Vue {
     } else if (balanceSource === 'exchange') {
       for (const exchange of this.exchanges) {
         this.fetchExchangeBalances({
-          name: exchange.name,
+          location: exchange.location,
           ignoreCache: true
         });
       }

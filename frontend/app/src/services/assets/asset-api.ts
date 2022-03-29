@@ -1,19 +1,19 @@
-import { AxiosInstance, AxiosTransformer } from 'axios';
+import { ActionResult, SupportedAsset } from '@rotki/common/lib/data';
+import { AxiosInstance, AxiosResponseTransformer } from 'axios';
 import {
   AssetIdResponse,
+  AssetPriceArray,
   ConflictResolution,
-  EthereumToken
+  EthereumToken,
+  HistoricalPrice,
+  HistoricalPriceDeletePayload,
+  HistoricalPricePayload
 } from '@/services/assets/types';
 import {
   axiosSnakeCaseTransformer,
   setupTransformer
 } from '@/services/axios-tranformers';
-import {
-  ActionResult,
-  PendingTask,
-  SupportedAssets
-} from '@/services/types-api';
-import { SupportedAsset } from '@/services/types-model';
+import { PendingTask, SupportedAssets } from '@/services/types-api';
 import {
   handleResponse,
   validStatus,
@@ -24,7 +24,7 @@ import {
 
 export class AssetApi {
   private readonly axios: AxiosInstance;
-  private readonly baseTransformer: AxiosTransformer[];
+  private readonly baseTransformer: AxiosResponseTransformer[];
 
   constructor(axios: AxiosInstance) {
     this.axios = axios;
@@ -40,7 +40,9 @@ export class AssetApi {
       .then(handleResponse);
   }
 
-  addEthereumToken(token: EthereumToken): Promise<AssetIdResponse> {
+  addEthereumToken(
+    token: Omit<EthereumToken, 'identifier'>
+  ): Promise<AssetIdResponse> {
     return this.axios
       .put<ActionResult<AssetIdResponse>>(
         '/assets/ethereum',
@@ -53,7 +55,9 @@ export class AssetApi {
       .then(handleResponse);
   }
 
-  editEthereumToken(token: EthereumToken): Promise<AssetIdResponse> {
+  editEthereumToken(
+    token: Omit<EthereumToken, 'identifier'>
+  ): Promise<AssetIdResponse> {
     return this.axios
       .patch<ActionResult<AssetIdResponse>>(
         '/assets/ethereum',
@@ -145,7 +149,7 @@ export class AssetApi {
 
   async allAssets(): Promise<SupportedAssets> {
     return this.axios
-      .get<ActionResult<SupportedAssets>>('assets/all', {
+      .get<ActionResult<SupportedAssets>>('/assets/all', {
         validateStatus: validWithSessionAndExternalService,
         transformResponse: setupTransformer([], true)
       })
@@ -219,9 +223,124 @@ export class AssetApi {
 
     return this.axios
       .post<ActionResult<PendingTask>>('/assets/updates', data, {
-        validateStatus: validWithoutSessionStatus,
+        validateStatus: validStatus,
         transformResponse: this.baseTransformer
       })
+      .then(handleResponse);
+  }
+
+  mergeAssets(sourceIdentifier: string, targetAsset: string): Promise<boolean> {
+    const data = axiosSnakeCaseTransformer({
+      sourceIdentifier,
+      targetAsset
+    });
+    return this.axios
+      .put<ActionResult<boolean>>('/assets/replace', data, {
+        validateStatus: validStatus,
+        transformResponse: this.baseTransformer
+      })
+      .then(handleResponse);
+  }
+
+  historicalPrices(
+    payload?: Partial<HistoricalPricePayload>
+  ): Promise<HistoricalPrice[]> {
+    return this.axios
+      .get<ActionResult<HistoricalPrice[]>>('/assets/prices/historical', {
+        params: axiosSnakeCaseTransformer(payload),
+        validateStatus: validWithoutSessionStatus,
+        transformResponse: setupTransformer(['price'])
+      })
+      .then(handleResponse);
+  }
+
+  async addHistoricalPrice(price: HistoricalPrice): Promise<boolean> {
+    return this.axios
+      .put<ActionResult<boolean>>(
+        '/assets/prices/historical',
+        axiosSnakeCaseTransformer(price),
+        {
+          validateStatus: validWithoutSessionStatus
+        }
+      )
+      .then(handleResponse);
+  }
+
+  async editHistoricalPrice(price: HistoricalPrice): Promise<boolean> {
+    return this.axios
+      .patch<ActionResult<boolean>>(
+        '/assets/prices/historical',
+        axiosSnakeCaseTransformer(price),
+        {
+          validateStatus: validWithoutSessionStatus
+        }
+      )
+      .then(handleResponse);
+  }
+
+  async deleteHistoricalPrice(
+    payload: HistoricalPriceDeletePayload
+  ): Promise<boolean> {
+    return this.axios
+      .delete<ActionResult<boolean>>('/assets/prices/historical', {
+        data: axiosSnakeCaseTransformer(payload),
+        validateStatus: validWithoutSessionStatus
+      })
+      .then(handleResponse);
+  }
+
+  restoreAssetsDatabase(
+    reset: String,
+    ignoreWarnings: boolean
+  ): Promise<boolean> {
+    return this.axios
+      .delete<ActionResult<boolean>>('/assets/updates', {
+        data: axiosSnakeCaseTransformer({ reset, ignoreWarnings }),
+        validateStatus: validStatus,
+        transformResponse: this.baseTransformer
+      })
+      .then(handleResponse);
+  }
+
+  fetchCurrentPrices(): Promise<AssetPriceArray> {
+    return this.axios
+      .get<ActionResult<AssetPriceArray>>('/assets/prices/current', {
+        validateStatus: validStatus,
+        transformResponse: this.baseTransformer
+      })
+      .then(handleResponse);
+  }
+
+  deleteCurrentPrice(asset: string): Promise<boolean> {
+    return this.axios
+      .delete<ActionResult<boolean>>('/assets/prices/current', {
+        validateStatus: validStatus,
+        data: {
+          asset
+        },
+        transformResponse: this.baseTransformer
+      })
+      .then(handleResponse);
+  }
+
+  setCurrentPrice(
+    fromAsset: string,
+    toAsset: string,
+    price: string
+  ): Promise<boolean> {
+    return this.axios
+      .put<ActionResult<boolean>>(
+        '/assets/prices/current',
+        axiosSnakeCaseTransformer({
+          fromAsset,
+          toAsset,
+          price
+        }),
+        {
+          validateStatus: validStatus,
+          transformResponse: this.baseTransformer
+        }
+      )
       .then(handleResponse);
   }
 }

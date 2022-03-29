@@ -1,13 +1,12 @@
 import warnings as test_warnings
 from unittest.mock import patch
 
-from rotkehlchen.assets.asset import Asset
-from rotkehlchen.assets.converters import asset_from_iconomi
-from rotkehlchen.constants.assets import A_ETH, A_REP
+from rotkehlchen.assets.asset import WORLD_TO_ICONOMI, Asset
+from rotkehlchen.assets.converters import UNSUPPORTED_ICONOMI_ASSETS, asset_from_iconomi
+from rotkehlchen.constants.assets import A_ETH, A_EUR, A_REP
 from rotkehlchen.errors import UnknownAsset
 from rotkehlchen.exchanges.iconomi import Iconomi
 from rotkehlchen.fval import FVal
-from rotkehlchen.tests.utils.constants import A_EUR
 from rotkehlchen.tests.utils.factories import make_api_key, make_api_secret
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.typing import Location, TradeType
@@ -23,8 +22,9 @@ ICONOMI_TRADES_EMPTY_RESPONSE = """{"transactions":[]}"""
 
 
 def test_name():
-    exchange = Iconomi('a', b'a', object(), object())
-    assert exchange.name == 'iconomi'
+    exchange = Iconomi('iconomi1', 'a', b'a', object(), object())
+    assert exchange.location == Location.ICONOMI
+    assert exchange.name == 'iconomi1'
 
 
 def test_iconomi_query_balances_unknown_asset(function_scope_iconomi):
@@ -96,8 +96,12 @@ def test_iconomi_assets_are_known(
         database,
         inquirer,  # pylint: disable=unused-argument
 ):
+    unsupported_assets = set(UNSUPPORTED_ICONOMI_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_ICONOMI.values()))
+    assert not common_items, f'Iconomi assets {common_items} should not be unsupported'
     # use a real Iconomi instance so that we always get the latest data
     iconomi = Iconomi(
+        name='iconomi1',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,

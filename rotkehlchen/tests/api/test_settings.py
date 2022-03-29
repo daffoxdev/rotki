@@ -5,8 +5,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from rotkehlchen.db.settings import DEFAULT_KRAKEN_ACCOUNT_TYPE, ROTKEHLCHEN_DB_VERSION, DBSettings
-from rotkehlchen.exchanges.kraken import KrakenAccountType
+from rotkehlchen.db.settings import ROTKEHLCHEN_DB_VERSION, DBSettings
 from rotkehlchen.tests.utils.api import (
     api_url_for,
     assert_error_response,
@@ -65,6 +64,7 @@ def test_set_settings(rotkehlchen_api_server):
         'last_data_upload_ts',
         'last_balance_save',
         'have_premium',
+        'last_data_migration',
     )
     for setting, value in original_settings.items():
         if setting in unmodifiable_settings:
@@ -82,16 +82,14 @@ def test_set_settings(rotkehlchen_api_server):
             value = not value
         elif type(value) == int:  # pylint: disable=unidiomatic-typecheck
             value += 1
-        elif setting == 'kraken_account_type':
-            # Change the account type to anything other than default
-            assert value != str(KrakenAccountType.PRO)
-            value = str(KrakenAccountType.PRO)
         elif setting == 'active_modules':
             value = ['makerdao_vaults']
         elif setting == 'frontend_settings':
             value = ''
         elif setting == 'ksm_rpc_endpoint':
             value = 'http://kusama.node.com:9933'
+        elif setting == 'dot_rpc_endpoint':
+            value = 'http://polkadot.node.com:9934'
         elif setting == 'current_price_oracles':
             value = ['coingecko', 'cryptocompare']
         elif setting == 'historical_price_oracles':
@@ -199,27 +197,6 @@ def test_unset_rpc_endpoint(rotkehlchen_api_server, rpc_setting):
     assert result[rpc_setting] == ''
 
 
-@pytest.mark.parametrize('added_exchanges', [('kraken',)])
-def test_set_kraken_account_type(rotkehlchen_api_server_with_exchanges):
-    server = rotkehlchen_api_server_with_exchanges
-    rotki = rotkehlchen_api_server_with_exchanges.rest_api.rotkehlchen
-    kraken = rotki.exchange_manager.get('kraken')
-    assert kraken.account_type == DEFAULT_KRAKEN_ACCOUNT_TYPE
-    assert kraken.call_limit == 15
-    assert kraken.reduction_every_secs == 3
-
-    data = {'settings': {'kraken_account_type': 'intermediate'}}
-    response = requests.put(api_url_for(server, "settingsresource"), json=data)
-    assert_proper_response(response)
-    json_data = response.json()
-    result = json_data['result']
-    assert json_data['message'] == ''
-    assert result['kraken_account_type'] == 'intermediate'
-    assert kraken.account_type == KrakenAccountType.INTERMEDIATE
-    assert kraken.call_limit == 20
-    assert kraken.reduction_every_secs == 2
-
-
 def test_disable_taxfree_after_period(rotkehlchen_api_server):
     """Test that providing -1 for the taxfree_after_period setting disables it """
     data = {
@@ -320,17 +297,6 @@ def test_set_settings_errors(rotkehlchen_api_server):
         status_code=HTTPStatus.BAD_REQUEST,
     )
 
-    # Invalid type for anonymized_logs
-    data = {
-        'settings': {'anonymized_logs': 555.1},
-    }
-    response = requests.put(api_url_for(rotkehlchen_api_server, "settingsresource"), json=data)
-    assert_error_response(
-        response=response,
-        contained_in_msg='Not a valid boolean',
-        status_code=HTTPStatus.BAD_REQUEST,
-    )
-
     # Invalid range for ui_floating_precision
     data = {
         'settings': {'ui_floating_precision': -1},
@@ -417,7 +383,7 @@ def test_set_settings_errors(rotkehlchen_api_server):
         status_code=HTTPStatus.BAD_REQUEST,
     )
 
-    # Invalid asset for main currenty
+    # Invalid asset for main currency
     data = {
         'settings': {'main_currency': 'DSDSDSAD'},
     }
@@ -447,28 +413,6 @@ def test_set_settings_errors(rotkehlchen_api_server):
     assert_error_response(
         response=response,
         contained_in_msg='Not a valid string',
-        status_code=HTTPStatus.BAD_REQUEST,
-    )
-
-    # invalid type kraken_account_type
-    data = {
-        'settings': {'kraken_account_type': 124.1},
-    }
-    response = requests.put(api_url_for(rotkehlchen_api_server, "settingsresource"), json=data)
-    assert_error_response(
-        response=response,
-        contained_in_msg='is not a valid kraken account type',
-        status_code=HTTPStatus.BAD_REQUEST,
-    )
-
-    # invalid value kraken_account_type
-    data = {
-        'settings': {'kraken_account_type': 'super hyper pro'},
-    }
-    response = requests.put(api_url_for(rotkehlchen_api_server, "settingsresource"), json=data)
-    assert_error_response(
-        response=response,
-        contained_in_msg='is not a valid kraken account type',
         status_code=HTTPStatus.BAD_REQUEST,
     )
 

@@ -1,17 +1,20 @@
 ﻿<template>
   <div class="d-flex flex-row shrink align-center">
     <span v-if="!linkOnly & !buttons">
-      <span v-if="fullAddress" :class="privacyMode ? 'blur-content' : null">
+      <span
+        v-if="fullAddress"
+        :class="!shouldShowAmount ? 'blur-content' : null"
+      >
         {{ displayText }}
       </span>
       <v-tooltip v-else top open-delay="400">
         <template #activator="{ on, attrs }">
           <span
-            :class="privacyMode ? 'blur-content' : null"
+            :class="!shouldShowAmount ? 'blur-content' : null"
             v-bind="attrs"
             v-on="on"
           >
-            {{ displayText | truncateAddress }}
+            {{ truncateAddress(displayText) }}
           </span>
         </template>
         <span> {{ displayText }} </span>
@@ -26,7 +29,8 @@
           v-bind="attrs"
           :width="!small ? '20px' : null"
           color="primary"
-          class="grey lighten-4 ml-2"
+          class="ml-2"
+          :class="dark ? null : 'grey lighten-4'"
           v-on="on"
           @click="copyText(text)"
         >
@@ -45,7 +49,8 @@
           v-bind="attrs"
           :width="!small ? '20px' : null"
           color="primary"
-          class="grey lighten-4 ml-1"
+          class="ml-1"
+          :class="dark ? null : 'grey lighten-4'"
           :href="href"
           :target="target"
           v-on="on"
@@ -60,22 +65,24 @@
 </template>
 
 <script lang="ts">
+import { Blockchain } from '@rotki/common/lib/blockchain';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
-import { mapState } from 'vuex';
+import { mapGetters, mapState } from 'vuex';
 import { explorerUrls } from '@/components/helper/asset-urls';
+import { truncateAddress } from '@/filters';
 import ScrambleMixin from '@/mixins/scramble-mixin';
-import { ExplorersSettings } from '@/store/settings/types';
-import { Blockchain, ETH } from '@/typing/types';
-import { randomHex } from '@/typing/utils';
+import ThemeMixin from '@/mixins/theme-mixin';
+import { ExplorersSettings } from '@/types/frontend-settings';
+import { randomHex } from '@/utils/data';
 
 @Component({
   computed: {
-    ...mapState('session', ['privacyMode']),
+    ...mapGetters('session', ['shouldShowAmount']),
     ...mapState('settings', ['explorers'])
   }
 })
-export default class HashLink extends Mixins(ScrambleMixin) {
-  @Prop({ required: true, type: String })
+export default class HashLink extends Mixins(ScrambleMixin, ThemeMixin) {
+  @Prop({ required: false, type: String, default: '' })
   text!: string;
   @Prop({ required: false, type: Boolean, default: false })
   fullAddress!: boolean;
@@ -85,14 +92,16 @@ export default class HashLink extends Mixins(ScrambleMixin) {
   noLink!: boolean;
   @Prop({ required: false, type: String, default: '' })
   baseUrl!: string;
-  @Prop({ required: false, type: String, default: ETH })
-  chain!: Blockchain | 'ETC';
+  @Prop({ required: false, type: String, default: Blockchain.ETH })
+  chain!: Blockchain | 'ETC' | 'zksync';
   @Prop({ required: false, type: Boolean, default: false })
   tx!: Boolean;
   @Prop({ required: false, type: Boolean, default: false })
   buttons!: boolean;
   @Prop({ required: false, type: Boolean, default: false })
   small!: boolean;
+
+  readonly truncateAddress = truncateAddress;
 
   get displayText(): string {
     if (!this.scrambleData) {
@@ -102,18 +111,24 @@ export default class HashLink extends Mixins(ScrambleMixin) {
     return randomHex(length);
   }
 
-  privacyMode!: boolean;
+  shouldShowAmount!: boolean;
   explorers!: ExplorersSettings;
 
   get base(): string {
     if (this.baseUrl) {
       return this.baseUrl;
     }
-    const explorersSetting = this.explorers[this.chain];
+
     const defaultSetting = explorerUrls[this.chain];
-    const baseUrl = this.tx
-      ? explorersSetting?.transaction ?? defaultSetting.transaction
-      : explorersSetting?.address ?? defaultSetting.address;
+    let baseUrl: string;
+    if (this.chain === 'zksync') {
+      baseUrl = this.tx ? defaultSetting.transaction : defaultSetting.address;
+    } else {
+      const explorersSetting = this.explorers[this.chain];
+      baseUrl = this.tx
+        ? explorersSetting?.transaction ?? defaultSetting.transaction
+        : explorersSetting?.address ?? defaultSetting.address;
+    }
 
     return baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
   }

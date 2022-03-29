@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 
+: "${PYINSTALLER_VERSION:=3.5}"
 WORKDIR=$PWD
 BACKEND_DIST_DIR="rotkehlchen_py_dist"
 # cleanup before starting to package stuff
 make clean
+
+source tools/scripts/check_unmerged.sh noforce
 
 if [[ -n "${CI-}" ]]; then
   echo "::group::Pip install"
@@ -25,7 +28,7 @@ fi
 
 # Install the rotki package and pyinstaller. Needed by the pyinstaller
 pip install -e .
-pip install pyinstaller==3.5
+pip install pyinstaller==${PYINSTALLER_VERSION}
 
 if [[ -n "${CI-}" ]]; then
   echo "::endgroup::"
@@ -135,7 +138,7 @@ fi
 
 
 # From here and on we go into the frontend/app directory
-cd frontend/app || exit 1
+cd frontend || exit 1
 
 if [[ -n "${CI-}" ]]; then
   echo "::group::npm ci"
@@ -162,7 +165,7 @@ if [[ -n "${CI-}" ]]; then
   echo "::group::electron:build"
 fi
 # Finally run the packaging
-echo "Packaging Rotki ${ROTKEHLCHEN_VERSION}"
+echo "Packaging rotki ${ROTKEHLCHEN_VERSION}"
 npm run electron:build
 if [[ $? -ne 0 ]]; then
     echo "package.sh - ERROR: electron builder step failed"
@@ -178,7 +181,7 @@ if [[ -n "${CI-}" ]] && [[ "$OSTYPE" == "darwin"* ]]; then
   rm -fr /tmp/*.p12
 fi
 
-echo "Packaging finished for Rotki ${ROTKEHLCHEN_VERSION}"
+echo "Packaging finished for rotki ${ROTKEHLCHEN_VERSION}"
 
 # Go back to root directory
 cd "$WORKDIR" || exit 1

@@ -8,8 +8,9 @@ import pytest
 import requests
 
 from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.assets.asset import WORLD_TO_KUCOIN
 from rotkehlchen.assets.converters import UNSUPPORTED_KUCOIN_ASSETS, asset_from_kucoin
-from rotkehlchen.constants.assets import A_BTC, A_ETH, A_USDT, A_LINK
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_LINK, A_USDT
 from rotkehlchen.errors import RemoteError, UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.data_structures import AssetMovement, Trade, TradeType
 from rotkehlchen.exchanges.kucoin import Kucoin, KucoinCase
@@ -22,13 +23,15 @@ from rotkehlchen.utils.serialization import jsonloads_dict
 
 def test_name():
     exchange = Kucoin(
+        name='kucoin1',
         api_key='a',
         secret=b'a',
         database=object(),
         msg_aggregator=object(),
         passphrase='a',
     )
-    assert exchange.name == str(Location.KUCOIN)
+    assert exchange.location == Location.KUCOIN
+    assert exchange.name == 'kucoin1'
 
 
 def test_kucoin_exchange_assets_are_known(mock_kucoin):
@@ -52,6 +55,8 @@ def test_kucoin_exchange_assets_are_known(mock_kucoin):
 
     # Extract the unique symbols from the exchange pairs
     unsupported_assets = set(UNSUPPORTED_KUCOIN_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_KUCOIN.values()))
+    assert not common_items, f'Kucoin assets {common_items} should not be unsupported'
     for entry in response_dict['data']:
         symbol = entry['currency']
         try:
@@ -75,7 +80,7 @@ def test_api_query_retries_request(mock_kucoin):
         for result_ in results:
             yield result_
 
-    def mock_api_query_response(url):  # pylint: disable=unused-argument
+    def mock_api_query_response(url, **kwargs):  # pylint: disable=unused-argument
         return MockResponse(HTTPStatus.TOO_MANY_REQUESTS, next(get_response))
 
     get_response = get_response()
@@ -497,7 +502,7 @@ def test_query_trades_sandbox(sandbox_kuckoin, inquirer):  # pylint: disable=unu
             notes='',
         ),
     ]
-    trades = sandbox_kuckoin.query_online_trade_history(
+    trades, _ = sandbox_kuckoin.query_online_trade_history(
         start_ts=Timestamp(1612556693),
         end_ts=Timestamp(1612556765),
     )

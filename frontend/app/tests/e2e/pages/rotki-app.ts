@@ -1,20 +1,28 @@
-import axios from 'axios';
-import { ActionResult } from '@/services/types-api';
-
 export class RotkiApp {
   visit() {
     cy.visit('/?skip_update=1');
   }
 
   createAccount(username: string, password: string = '1234') {
+    cy.logout();
     // simulate high scaling / low res by making a very small viewpoirt
-    cy.get('.login__button__new-account').click();
+    cy.get('.connection-loading__content').should('not.exist');
+    cy.get('.account-management__card').then($body => {
+      const button = $body.find('.login__button__new-account');
+      if (button.length > 0) {
+        cy.get('.login__button__new-account').click();
+      }
+    });
+
+    cy.get('[data-cy="create-account__premium__button__continue"]').click();
     cy.get('.create-account__fields__username').type(username);
     cy.get('.create-account__fields__password').type(password);
     cy.get('.create-account__fields__password-repeat').type(password);
     cy.get('.create-account__boxes__user-prompted').click();
-    cy.get('.create-account__buttons__continue').click();
-    cy.get('.create-account__analytics__buttons__confirm').click();
+    cy.get('.create-account__credentials__button__continue').click();
+    cy.get('.create-account__analytics__button__confirm').click();
+    cy.get('.account-management__loading').should('not.exist');
+    cy.updateAssets();
   }
 
   closePremiumOverlay() {
@@ -22,7 +30,7 @@ export class RotkiApp {
       timeout: 10000
     }).should('include.text', 'Upgrade to Premium');
     cy.get('.premium-reminder__buttons__cancel').click();
-    cy.get('.premium-reminder').should('not.be.visible');
+    cy.get('.premium-reminder').should('not.exist');
   }
 
   login(username: string, password: string = '1234') {
@@ -35,7 +43,7 @@ export class RotkiApp {
     cy.get('.user-dropdown').click();
     cy.get('[data-cy=user-dropdown]').should('be.visible');
     cy.get('.user-dropdown__logout').click();
-    cy.get('.confirm-dialog__buttons__confirm').filter(':visible').click();
+    cy.get('[data-cy=confirm-dialog]').find('[data-cy=button-confirm]').click();
     cy.get('.login__fields__username').should('be.visible');
   }
 
@@ -44,26 +52,23 @@ export class RotkiApp {
     cy.get(`#change-to-${currency.toLocaleLowerCase()}`).click();
   }
 
-  togglePrivacyMode() {
+  changePrivacyMode(mode: number) {
     cy.get('.user-dropdown').click();
-    cy.get('.user-dropdown__privacy-mode').click();
-  }
+    cy.get('[data-cy="user-dropdown__privacy-mode"]').click();
+    cy.get(
+      '[data-cy="user-dropdown__privacy-mode__input"] ~ .v-slider__thumb-container'
+    ).as('input');
 
-  logoutApi(username: string, cb: () => void) {
-    axios
-      .create({
-        baseURL: `http://localhost:4242/api/1/`,
-        timeout: 30000
-      })
-      .patch<ActionResult<boolean>>(`/users/${username}`, {
-        action: 'logout'
-      })
-      .then(() => cb())
-      .catch(() => cb());
+    cy.get('@input').focus().type('{downarrow}'.repeat(3));
+
+    if (mode > 0) {
+      cy.get('@input').type('{uparrow}'.repeat(mode));
+    }
+    cy.get('[data-cy="user-dropdown__privacy-mode"]').click();
+    cy.get('.user-dropdown').click();
   }
 
   drawerIsVisible(isVisible: boolean) {
-    cy.get('.account-management__loading').should('not.be.visible');
     cy.get('.app__navigation-drawer').should(
       isVisible ? 'be.visible' : 'not.be.visible'
     );

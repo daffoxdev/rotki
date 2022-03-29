@@ -43,20 +43,18 @@ import PurgeSelector, {
   PurgeParams
 } from '@/components/settings/data-security/PurgeSelector.vue';
 import StatusButton from '@/components/settings/data-security/StatusButton.vue';
-import { EXCHANGE_CRYPTOCOM, SUPPORTED_EXCHANGES } from '@/data/defaults';
-import { SupportedExchange } from '@/services/balances/types';
+import { EXTERNAL_EXCHANGES } from '@/data/defaults';
 import {
-  ALL_DECENTRALIZED_EXCHANGES,
   ALL_CENTRALIZED_EXCHANGES,
+  ALL_DECENTRALIZED_EXCHANGES,
   ALL_MODULES,
-  ALL_TRANSACTIONS,
-  MODULE_BALANCER,
-  MODULE_UNISWAP,
-  MODULES
+  ALL_TRANSACTIONS
 } from '@/services/session/consts';
-import { Purgeable, SupportedModules } from '@/services/session/types';
+import { Purgeable } from '@/services/session/types';
 import { ACTION_PURGE_CACHED_DATA } from '@/store/session/const';
 import { ActionStatus } from '@/store/types';
+import { SUPPORTED_EXCHANGES, SupportedExchange } from '@/types/exchanges';
+import { Module } from '@/types/modules';
 
 @Component({
   components: { PurgeSelector, StatusButton, ConfirmDialog },
@@ -70,7 +68,6 @@ export default class DataManagement extends Vue {
   confirm: boolean = false;
   pending: boolean = false;
   sourceLabel: string = '';
-  removeExchangeTrades!: (location: SupportedExchange) => Promise<void>;
   [ACTION_PURGE_CACHED_DATA]: (purgeable: Purgeable) => Promise<void>;
 
   showConfirmation(source: PurgeParams) {
@@ -90,7 +87,7 @@ export default class DataManagement extends Vue {
         success: true
       };
       setTimeout(() => (this.status = null), 5000);
-    } catch (e) {
+    } catch (e: any) {
       this.status = {
         message: this.$t('data_management.error', {
           source: this.sourceLabel
@@ -111,19 +108,19 @@ export default class DataManagement extends Vue {
       await this.$api.balances.deleteExchangeData();
     } else if (source === ALL_DECENTRALIZED_EXCHANGES) {
       await Promise.all([
-        this.$api.balances.deleteModuleData(MODULE_UNISWAP),
-        this.$api.balances.deleteModuleData(MODULE_BALANCER)
+        this.$api.balances.deleteModuleData(Module.UNISWAP),
+        this.$api.balances.deleteModuleData(Module.BALANCER)
       ]);
     } else {
       if (
         SUPPORTED_EXCHANGES.includes(source as any) ||
-        source === EXCHANGE_CRYPTOCOM
+        EXTERNAL_EXCHANGES.includes(source as any)
       ) {
         await this.$api.balances.deleteExchangeData(
           source as SupportedExchange
         );
-      } else if (MODULES.includes(source as any)) {
-        await this.$api.balances.deleteModuleData(source as SupportedModules);
+      } else if (Object.values(Module).includes(source as any)) {
+        await this.$api.balances.deleteModuleData(source as Module);
       }
     }
     await this[ACTION_PURGE_CACHED_DATA](source);

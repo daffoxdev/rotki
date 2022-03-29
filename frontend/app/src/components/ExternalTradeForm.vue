@@ -15,6 +15,7 @@
               outlined
               class="pt-1"
               seconds
+              limit-now
               data-cy="date"
               :label="$t('external_trade_form.date.label')"
               persistent-hint
@@ -49,7 +50,7 @@
                   v-model="base"
                   outlined
                   required
-                  data-cy="base_asset"
+                  data-cy="base-asset"
                   :rules="baseRules"
                   :hint="$t('external_trade_form.base_asset.hint')"
                   :label="$t('external_trade_form.base_asset.label')"
@@ -65,7 +66,7 @@
                   v-model="quote"
                   required
                   outlined
-                  data-cy="quote_asset"
+                  data-cy="quote-asset"
                   :rules="quoteRules"
                   :hint="$t('external_trade_form.quote_asset.hint')"
                   :label="$t('external_trade_form.quote_asset.label')"
@@ -74,7 +75,7 @@
                 />
               </v-col>
             </v-row>
-            <v-text-field
+            <amount-input
               v-model="amount"
               required
               outlined
@@ -86,18 +87,111 @@
               :error-messages="errorMessages['amount']"
               @focus="delete errorMessages['amount']"
             />
-            <v-text-field
-              v-model="rate"
-              :rules="rateRules"
-              outlined
-              data-cy="rate"
-              :loading="fetching"
-              :label="$t('external_trade_form.rate.label')"
-              persistent-hint
-              :hint="$t('external_trade_form.rate.hint')"
-              :error-messages="errorMessages['rate']"
-              @focus="delete errorMessages['rate']"
-            />
+            <div
+              :class="`external-trade-form__grouped-amount-input d-flex ${
+                selectedCalculationInput === 'quoteAmount'
+                  ? 'flex-column-reverse'
+                  : 'flex-column'
+              }`"
+            >
+              <amount-input
+                ref="rateInput"
+                v-model="rate"
+                :disabled="selectedCalculationInput !== 'rate'"
+                :label="$t('external_trade_form.rate.label')"
+                :loading="fetching"
+                :rules="rateRules"
+                data-cy="rate"
+                :hide-details="selectedCalculationInput !== 'rate'"
+                :class="`${
+                  selectedCalculationInput === 'rate'
+                    ? 'v-input--is-enabled'
+                    : ''
+                }`"
+                filled
+                persistent-hint
+                :error-messages="errorMessages['rate']"
+                @focus="delete errorMessages['rate']"
+              />
+              <amount-input
+                ref="quoteAmountInput"
+                v-model="quoteAmount"
+                :disabled="selectedCalculationInput !== 'quoteAmount'"
+                :rules="quoteAmountRules"
+                data-cy="quote-amount"
+                :hide-details="selectedCalculationInput !== 'quoteAmount'"
+                :class="`${
+                  selectedCalculationInput === 'quoteAmount'
+                    ? 'v-input--is-enabled'
+                    : ''
+                }`"
+                :label="$t('external_trade_form.quote_amount.label')"
+                filled
+                :error-messages="errorMessages['quote_amount']"
+                @focus="delete errorMessages['quote_amount']"
+              />
+              <v-btn
+                class="external-trade-form__grouped-amount-input__swap-button"
+                fab
+                small
+                dark
+                color="primary"
+                data-cy="grouped-amount-input__swap-button"
+                @click="swapAmountInput"
+              >
+                <v-icon>mdi-swap-vertical</v-icon>
+              </v-btn>
+            </div>
+            <div
+              v-if="shouldRenderSummary"
+              class="text-caption green--text mt-n5"
+            >
+              <v-icon small class="mr-2 green--text">
+                mdi-comment-quote
+              </v-icon>
+              <i18n
+                v-if="type === 'buy'"
+                tag="span"
+                path="external_trade_form.summary.buy"
+              >
+                <template #label>
+                  <strong>{{ $t('external_trade_form.summary.label') }}</strong>
+                </template>
+                <template #amount>
+                  <strong>{{ amount }}</strong>
+                </template>
+                <template #base>
+                  <strong>{{ getSymbol(base) }}</strong>
+                </template>
+                <template #quote>
+                  <strong>{{ getSymbol(quote) }}</strong>
+                </template>
+                <template #rate>
+                  <strong>{{ rate }}</strong>
+                </template>
+              </i18n>
+              <i18n
+                v-if="type === 'sell'"
+                tag="span"
+                path="external_trade_form.summary.sell"
+              >
+                <template #label>
+                  <strong>{{ $t('external_trade_form.summary.label') }}</strong>
+                </template>
+                <template #amount>
+                  <strong>{{ amount }}</strong>
+                </template>
+                <template #base>
+                  <strong>{{ getSymbol(base) }}</strong>
+                </template>
+                <template #quote>
+                  <strong>{{ getSymbol(quote) }}</strong>
+                </template>
+                <template #rate>
+                  <strong>{{ rate }}</strong>
+                </template>
+              </i18n>
+            </div>
           </v-col>
         </v-row>
 
@@ -105,7 +199,7 @@
 
         <v-row>
           <v-col cols="12" md="6">
-            <v-text-field
+            <amount-input
               v-model="fee"
               class="external-trade-form__fee"
               outlined
@@ -159,41 +253,56 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
-import moment from 'moment';
-import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
-import { mapActions, mapGetters } from 'vuex';
+import { BigNumber } from '@rotki/common';
+import { SupportedAsset } from '@rotki/common/lib/data';
+import { Ref } from '@vue/composition-api';
+import dayjs from 'dayjs';
+import { mapState as mapPiniaState } from 'pinia';
+import { Component, Emit, Mixins, Prop, Watch } from 'vue-property-decorator';
+import { mapActions, mapState } from 'vuex';
 import DateTimePicker from '@/components/dialogs/DateTimePicker.vue';
 import AssetSelect from '@/components/inputs/AssetSelect.vue';
-import { TaskType } from '@/model/task-type';
+import AssetMixin from '@/mixins/asset-mixin';
 import { convertKeys } from '@/services/axios-tranformers';
 import { deserializeApiErrorMessage } from '@/services/converters';
 import { NewTrade, Trade, TradeType } from '@/services/history/types';
 import { HistoricPricePayload } from '@/store/balances/types';
+import { HistoryActions } from '@/store/history/consts';
+import { useTasks } from '@/store/tasks';
 import { ActionStatus } from '@/store/types';
 import { Writeable } from '@/types';
-import { assert } from '@/utils/assertions';
+import { TaskType } from '@/types/task-type';
 import { bigNumberify, Zero } from '@/utils/bignumbers';
+import { convertFromTimestamp, convertToTimestamp } from '@/utils/date';
 
 @Component({
   components: { AssetSelect, DateTimePicker },
   computed: {
-    ...mapGetters('tasks', ['isTaskRunning'])
+    ...mapPiniaState(useTasks, ['isTaskRunning']),
+    ...mapState('balances', ['supportedAssets'])
   },
   methods: {
-    ...mapActions('history', ['addExternalTrade', 'editExternalTrade']),
+    ...mapActions('history', [
+      HistoryActions.ADD_EXTERNAL_TRADE,
+      HistoryActions.EDIT_EXTERNAL_TRADE
+    ]),
     ...mapActions('balances', ['fetchHistoricPrice'])
   }
 })
-export default class ExternalTradeForm extends Vue {
+export default class ExternalTradeForm extends Mixins(AssetMixin) {
   @Prop({ required: false, type: Boolean, default: false })
   value!: boolean;
 
   @Prop({ required: false, default: null })
   edit!: Trade | null;
 
+  supportedAssets!: SupportedAsset[];
+
   @Emit()
   input(_valid: boolean) {}
+
+  @Emit()
+  refresh() {}
 
   errorMessages: {
     [field: string]: string[];
@@ -202,10 +311,9 @@ export default class ExternalTradeForm extends Vue {
   editExternalTrade!: (
     trade: Omit<Trade, 'ignoredInAccounting'>
   ) => Promise<ActionStatus>;
-  isTaskRunning!: (type: TaskType) => boolean;
+  isTaskRunning!: (type: TaskType) => Ref<boolean>;
   fetchHistoricPrice!: (payload: HistoricPricePayload) => Promise<BigNumber>;
 
-  private static format = 'DD/MM/YYYY HH:mm:ss';
   readonly baseRules = [
     (v: string) =>
       !!v || this.$t('external_trade_form.validation.non_empty_base')
@@ -221,6 +329,10 @@ export default class ExternalTradeForm extends Vue {
   readonly rateRules = [
     (v: string) =>
       !!v || this.$t('external_trade_form.validation.non_empty_rate')
+  ];
+  readonly quoteAmountRules = [
+    (v: string) =>
+      !!v || this.$t('external_trade_form.validation.non_empty_quote_amount')
   ];
 
   base: string = '';
@@ -238,12 +350,18 @@ export default class ExternalTradeForm extends Vue {
       : this.$t('external_trade_form.sell_quote').toString();
   }
 
+  get shouldRenderSummary(): boolean {
+    return !!(this.type && this.base && this.quote && this.amount && this.rate);
+  }
+
   rateMessages: string[] = [];
 
   id: string = '';
   datetime: string = '';
   amount: string = '';
   rate: string = '';
+  quoteAmount: string = '';
+  selectedCalculationInput: 'rate' | 'quoteAmount' = 'rate';
   fee: string = '';
   feeCurrency: string = '';
   link: string = '';
@@ -251,7 +369,7 @@ export default class ExternalTradeForm extends Vue {
   type: TradeType = 'buy';
 
   get fetching(): boolean {
-    return this.isTaskRunning(TaskType.FETCH_HISTORIC_PRICE);
+    return this.isTaskRunning(TaskType.FETCH_HISTORIC_PRICE).value;
   }
 
   mounted() {
@@ -278,6 +396,42 @@ export default class ExternalTradeForm extends Vue {
     await this.fetchPrice();
   }
 
+  @Watch('amount')
+  async onAmountChange() {
+    this.onRateChange();
+    this.onQuoteAmountChange();
+  }
+
+  @Watch('rate')
+  onRateChange() {
+    this.updateRate();
+  }
+
+  updateRate(forceUpdate: boolean = false) {
+    if (
+      this.amount &&
+      this.rate &&
+      (this.selectedCalculationInput === 'rate' || forceUpdate)
+    ) {
+      this.quoteAmount = new BigNumber(this.amount)
+        .multipliedBy(new BigNumber(this.rate))
+        .toString();
+    }
+  }
+
+  @Watch('quoteAmount')
+  onQuoteAmountChange() {
+    if (
+      this.amount &&
+      this.quoteAmount &&
+      this.selectedCalculationInput === 'quoteAmount'
+    ) {
+      this.rate = new BigNumber(this.quoteAmount)
+        .div(new BigNumber(this.amount))
+        .toString();
+    }
+  }
+
   async fetchPrice() {
     if (
       (this.rate && this.edit) ||
@@ -288,7 +442,7 @@ export default class ExternalTradeForm extends Vue {
       return;
     }
 
-    const timestamp = moment(this.datetime, ExternalTradeForm.format).unix();
+    const timestamp = convertToTimestamp(this.datetime);
     const fromAsset = this.base;
     const toAsset = this.quote;
 
@@ -299,7 +453,8 @@ export default class ExternalTradeForm extends Vue {
     });
     if (rate.gt(0)) {
       this.rate = rate.toString();
-    } else {
+      this.updateRate(true);
+    } else if (!this.rate) {
       this.errorMessages = {
         rate: [this.$t('external_trade_form.rate_not_found').toString()]
       };
@@ -316,21 +471,14 @@ export default class ExternalTradeForm extends Vue {
     }
 
     const trade: Trade = this.edit;
-    assert(typeof trade.baseAsset === 'string');
-    assert(typeof trade.quoteAsset === 'string');
 
     this.base = trade.baseAsset;
     this.quote = trade.quoteAsset;
-    this.datetime = moment(trade.timestamp * 1000).format(
-      ExternalTradeForm.format
-    );
+    this.datetime = convertFromTimestamp(trade.timestamp, true);
     this.amount = trade.amount.toString();
     this.rate = trade.rate.toString();
     this.fee = trade.fee?.toString() ?? '';
-    this.feeCurrency =
-      trade.feeCurrency && typeof trade.feeCurrency === 'string'
-        ? trade.feeCurrency
-        : '';
+    this.feeCurrency = trade.feeCurrency ? trade.feeCurrency : '';
     this.link = trade.link ?? '';
     this.notes = trade.notes ?? '';
     this.type = trade.tradeType;
@@ -339,7 +487,7 @@ export default class ExternalTradeForm extends Vue {
 
   reset() {
     this.id = '';
-    this.datetime = moment().format(ExternalTradeForm.format);
+    this.datetime = convertFromTimestamp(dayjs().unix(), true);
     this.amount = '';
     this.rate = '';
     this.fee = '';
@@ -365,7 +513,7 @@ export default class ExternalTradeForm extends Vue {
       quoteAsset: this.quote,
       rate: rate.isNaN() ? Zero : rate,
       location: 'external',
-      timestamp: moment(this.datetime, ExternalTradeForm.format).unix(),
+      timestamp: convertToTimestamp(this.datetime),
       tradeType: this.type
     };
 
@@ -374,6 +522,7 @@ export default class ExternalTradeForm extends Vue {
       : await this.editExternalTrade({ ...tradePayload, tradeId: this.id });
 
     if (success) {
+      this.refresh();
       this.reset();
       return true;
     }
@@ -387,29 +536,136 @@ export default class ExternalTradeForm extends Vue {
 
     return false;
   }
+
+  swapAmountInput() {
+    if (this.selectedCalculationInput === 'rate') {
+      this.selectedCalculationInput = 'quoteAmount';
+      this.$nextTick(() => {
+        const quoteAmountInput = this.$refs.quoteAmountInput as any;
+        if (quoteAmountInput) {
+          quoteAmountInput.focus();
+        }
+      });
+    } else {
+      this.selectedCalculationInput = 'rate';
+      this.$nextTick(() => {
+        const rateInput = this.$refs.rateInput as any;
+        if (rateInput) {
+          rateInput.focus();
+        }
+      });
+    }
+  }
 }
 </script>
 
 <style scoped lang="scss">
+/* stylelint-disable */
 .external-trade-form {
   &__action-hint {
     width: 60px;
     margin-top: -24px;
   }
 
+  &__grouped-amount-input {
+    position: relative;
+    margin-bottom: 30px;
+
+    ::v-deep {
+      .v-input {
+        position: static;
+
+        &__slot {
+          margin-bottom: 0;
+          background: transparent !important;
+        }
+
+        &--is-disabled {
+          .v-input__control {
+            .v-input__slot {
+              &::before {
+                content: none;
+              }
+            }
+          }
+        }
+
+        .v-text-field__details {
+          position: absolute;
+          bottom: -30px;
+          width: 100%;
+        }
+
+        &--is-enabled {
+          &::before {
+            content: '';
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            border: 1px solid rgba(0, 0, 0, 0.42);
+            border-radius: 4px;
+          }
+
+          &.v-input--is-focused {
+            &::before {
+              border: 2px solid var(--v-primary-base) !important;
+            }
+          }
+
+          &.error--text {
+            &::before {
+              border: 2px solid var(--v-error-base) !important;
+            }
+          }
+        }
+      }
+    }
+
+    &__swap-button {
+      position: absolute;
+      right: 20px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+  }
+
   ::v-deep {
-    /* stylelint-disable selector-class-pattern,selector-nested-pattern,scss/selector-nest-combinators,rule-empty-line-before */
     .v-select.v-text-field--outlined:not(.v-text-field--single-line) {
       .v-select__selections {
         padding: 0 !important;
       }
     }
-
-    /* stylelint-enable selector-class-pattern,selector-nested-pattern,scss/selector-nest-combinators,rule-empty-line-before */
   }
 
   &__fee {
     height: 60px;
   }
 }
+
+.theme {
+  &--dark {
+    .external-trade-form {
+      &__grouped-amount-input {
+        ::v-deep {
+          .v-input {
+            &__slot {
+              &::before {
+                border-color: hsla(0, 0%, 100%, 0.24) !important;
+              }
+            }
+
+            &--is-enabled {
+              &::before {
+                border-color: hsla(0, 0%, 100%, 0.24);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+/* stylelint-enable */
 </style>

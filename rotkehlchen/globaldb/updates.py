@@ -13,14 +13,17 @@ from typing_extensions import Literal
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.assets.resolver import AssetResolver
 from rotkehlchen.assets.typing import AssetData, AssetType
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
 from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.serialization.deserialize import deserialize_ethereum_address
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 
 from .handler import GlobalDBHandler, initialize_globaldb
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 ASSETS_VERSION_KEY = 'assets_version'
 
@@ -66,8 +69,7 @@ def _force_remote(cursor: sqlite3.Cursor, local_asset: Asset, full_insert: str) 
 
     May raise an sqlite3 error if something fails.
     """
-    cursor.executescript('BEGIN TRANSACTION; PRAGMA foreign_keys=off; COMMIT;')
-    # Delete the old entry
+    cursor.executescript('PRAGMA foreign_keys = OFF;')
     if local_asset.asset_type == AssetType.ETHEREUM_TOKEN:
         token = EthereumToken.from_asset(local_asset)
         cursor.execute(
@@ -83,7 +85,7 @@ def _force_remote(cursor: sqlite3.Cursor, local_asset: Asset, full_insert: str) 
         'DELETE FROM assets WHERE identifier=?;',
         (local_asset.identifier,),
     )
-    cursor.executescript('BEGIN TRANSACTION; PRAGMA foreign_keys=on; COMMIT;')
+    cursor.executescript('PRAGMA foreign_keys = ON;')
     # Insert new entry. Since identifiers are the same, no foreign key constrains should break
     executeall(cursor, full_insert)
     AssetResolver().clean_memory_cache(local_asset.identifier.lower())
@@ -119,7 +121,7 @@ class AssetsUpdater():
     def _get_remote_info_json(self) -> Dict[str, Any]:
         url = f'https://raw.githubusercontent.com/rotki/assets/{self.branch}/updates/info.json'
         try:
-            response = requests.get(url)
+            response = requests.get(url=url, timeout=DEFAULT_TIMEOUT_TUPLE)
         except requests.exceptions.RequestException as e:
             raise RemoteError(f'Failed to query Github {url} during assets update: {str(e)}') from e  # noqa: E501
 
@@ -341,6 +343,14 @@ class AssetsUpdater():
                 local_data = AssetResolver().get_asset_data(local_asset.identifier, False)
                 self.conflicts.append((local_data, remote_asset_data))
 
+        # special case upgrade that should be temporary, until we make non-asset specific
+        # update lines possible in our update mechanism:
+        # https://github.com/rotki/assets/pull/49
+        if version == 7:
+            cursor.execute(
+                'UPDATE ethereum_tokens SET decimals=18 WHERE protocol=="balancer";',
+            )
+
         # at the very end update the current version in the DB
         cursor.execute(
             'INSERT OR REPLACE INTO settings(name, value) VALUES(?, ?)',
@@ -355,7 +365,10 @@ class AssetsUpdater():
         """Performs an asset update by downloading new changes from the remote
 
         If `up_to_version` is given then changes up to and including that version are made.
-        If not all possible changes are applied
+        If not all possible changes are applied.
+
+        For success returns None. If there is conflicts a list of conflicting
+        assets identifiers is going to be returned.
 
         May raise:
             - RemoteError if there is a problem querying Github
@@ -411,13 +424,20 @@ class AssetsUpdater():
             try:
                 min_schema_version = infojson['updates'][str(version)]['min_schema_version']
                 max_schema_version = infojson['updates'][str(version)]['max_schema_version']
-                if local_schema_version < min_schema_version or local_schema_version > max_schema_version:  # noqa: E501
+                if local_schema_version < min_schema_version:
+                    self.msg_aggregator.add_warning(
+                        f'Skipping assets update {version} since it requires a min schema of '
+                        f'{min_schema_version}. Please upgrade rotki to get this assets update',
+                    )
+                    break  # get out of the loop
+
+                if local_schema_version > max_schema_version:
                     self.msg_aggregator.add_warning(
                         f'Skipping assets update {version} since it requires a min '
                         f'schema of {min_schema_version} and max schema of {max_schema_version} '
                         f'while the local DB schema version is {local_schema_version}. '
                         f'You will have to follow an alternative method to '
-                        f'obtain the assets of this update.',
+                        f'obtain the assets of this update. Easiest would be to reset global DB.',
                     )
                     cursor.execute(
                         'INSERT OR REPLACE INTO settings(name, value) VALUES(?, ?)',
@@ -435,7 +455,7 @@ class AssetsUpdater():
 
             try:
                 url = f'https://raw.githubusercontent.com/rotki/assets/{self.branch}/updates/{version}/updates.sql'  # noqa: E501
-                response = requests.get(url)
+                response = requests.get(url=url, timeout=DEFAULT_TIMEOUT_TUPLE)
             except requests.exceptions.RequestException as e:
                 connection.rollback()
                 raise RemoteError(f'Failed to query Github for {url} during assets update: {str(e)}') from e  # noqa: E501

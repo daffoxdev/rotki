@@ -1,5 +1,21 @@
 <template>
   <fragment>
+    <v-row
+      v-if="!!edit"
+      class="text-caption text--secondary py-2"
+      align="center"
+    >
+      <v-col cols="auto" class="font-weight-medium">
+        {{ $t('asset_form.identifier') }}
+      </v-col>
+      <v-col>
+        {{ edit.identifier }}
+        <copy-button
+          :value="edit.identifier"
+          :tooltip="$t('asset_form.identifier_copy')"
+        />
+      </v-col>
+    </v-row>
     <v-form :value="value" class="pt-2" @input="input">
       <v-row>
         <v-col>
@@ -7,7 +23,7 @@
             v-model="assetType"
             outlined
             :label="$t('asset_form.labels.asset_type')"
-            :disabled="types.length === 1"
+            :disabled="types.length === 1 || !!edit"
             :items="types"
           />
         </v-col>
@@ -21,6 +37,7 @@
             :error-messages="errors['address']"
             :label="$t('asset_form.labels.address')"
             :disabled="saving || fetching"
+            @keydown.space.prevent
             @focus="delete errors['address']"
           />
         </v-col>
@@ -218,18 +235,24 @@
 </template>
 
 <script lang="ts">
+import { SupportedAsset } from '@rotki/common/lib/data';
 import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
 import { mapActions } from 'vuex';
 import UnderlyingTokenManager from '@/components/asset-manager/UnderlyingTokenManager.vue';
+import CopyButton from '@/components/helper/CopyButton.vue';
 import Fragment from '@/components/helper/Fragment';
 import HelpLink from '@/components/helper/HelpLink.vue';
 import RowActions from '@/components/helper/RowActions.vue';
 import FileUpload from '@/components/import/FileUpload.vue';
-import { EthereumToken, UnderlyingToken } from '@/services/assets/types';
+import {
+  EthereumToken,
+  ManagedAsset,
+  UnderlyingToken
+} from '@/services/assets/types';
 import { deserializeApiErrorMessage } from '@/services/converters';
-import { SupportedAsset } from '@/services/types-model';
 import { ERC20Token } from '@/store/balances/types';
 import { showError } from '@/store/utils';
+import { Nullable } from '@/types';
 import { convertFromTimestamp, convertToTimestamp } from '@/utils/date';
 
 function value<T>(t: T): T | undefined {
@@ -244,6 +267,7 @@ const ETHEREUM_TOKEN = 'ethereum token';
 
 @Component({
   components: {
+    CopyButton,
     HelpLink,
     Fragment,
     UnderlyingTokenManager,
@@ -284,7 +308,7 @@ export default class AssetForm extends Vue {
   value!: boolean;
 
   @Prop({ required: false, default: () => null })
-  edit!: EthereumToken | SupportedAsset | null;
+  edit!: Nullable<ManagedAsset>;
   @Prop({ required: false, type: Boolean, default: false })
   saving!: boolean;
 
@@ -297,6 +321,12 @@ export default class AssetForm extends Vue {
 
   @Watch('address')
   async onAddressChange() {
+    const sanitizedAddress = this.sanitizeAddress(this.address);
+    if (this.address !== sanitizedAddress) {
+      this.address = sanitizedAddress;
+      return;
+    }
+
     if (
       this.dontAutoFetch ||
       !this.address.startsWith('0x') ||
@@ -320,7 +350,7 @@ export default class AssetForm extends Vue {
     return this.identifier ?? this.symbol ?? null;
   }
 
-  get token(): EthereumToken {
+  get token(): Omit<EthereumToken, 'identifier'> {
     const ut = this.underlyingTokens;
     return {
       address: this.address,
@@ -352,7 +382,7 @@ export default class AssetForm extends Vue {
   async created() {
     try {
       this.types = await this.$api.assets.assetTypes();
-    } catch (e) {
+    } catch (e: any) {
       showError(
         this.$t('asset_form.types.error', { message: e.message }).toString()
       );
@@ -366,7 +396,7 @@ export default class AssetForm extends Vue {
       return;
     }
 
-    this.name = token.name;
+    this.name = token.name ?? '';
     this.symbol = token.symbol;
     this.identifier = token.identifier ?? '';
     this.swappedFor = token.swappedFor ?? '';
@@ -399,13 +429,13 @@ export default class AssetForm extends Vue {
     let success = false;
     let message = '';
     try {
-      if (this.$interop.isPackaged) {
+      if (this.$interop.appSession) {
         await this.$api.assets.setIcon(identifier, this.icon.path);
       } else {
         await this.$api.assets.uploadIcon(identifier, this.icon);
       }
       success = true;
-    } catch (e) {
+    } catch (e: any) {
       message = e.message;
     }
 
@@ -428,7 +458,7 @@ export default class AssetForm extends Vue {
       await this.saveIcon(identifier);
       await this.fetchSupportedAssets(true);
       return true;
-    } catch (e) {
+    } catch (e: any) {
       const message = deserializeApiErrorMessage(e.message) as any;
       if (!message) {
         showError(
@@ -483,7 +513,7 @@ export default class AssetForm extends Vue {
   private async saveEthereumToken() {
     let identifier: string;
     const token = this.token!;
-    if (this.edit) {
+    if (this.edit && this.identifier) {
       ({ identifier } = await this.$api.assets.editEthereumToken(token));
     } else {
       ({ identifier } = await this.$api.assets.addEthereumToken(token));
@@ -501,6 +531,10 @@ export default class AssetForm extends Vue {
       ({ identifier } = await this.$api.assets.addAsset(asset));
     }
     return identifier;
+  }
+
+  private sanitizeAddress(address: string) {
+    return address.replace(/\s/g, '');
   }
 }
 </script>

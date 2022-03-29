@@ -133,21 +133,24 @@
 </template>
 
 <script lang="ts">
+import { Ref } from '@vue/composition-api';
+import { mapState } from 'pinia';
 import { Component, Vue, Watch } from 'vue-property-decorator';
 import { DataTableHeader } from 'vuetify';
-import { mapActions, mapGetters } from 'vuex';
+import { mapActions } from 'vuex';
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue';
 import ActionStatusIndicator from '@/components/error/ActionStatusIndicator.vue';
 import DataTable from '@/components/helper/DataTable.vue';
 import Fragment from '@/components/helper/Fragment';
 import OracleEntry from '@/components/settings/OracleEntry.vue';
-import { PriceOracles } from '@/model/action-result';
-import { TaskType } from '@/model/task-type';
 import { OracleCacheMeta } from '@/services/balances/types';
 import { OracleCachePayload } from '@/store/balances/types';
+import { useNotifications } from '@/store/notifications';
 import { Severity } from '@/store/notifications/consts';
-import { notify } from '@/store/notifications/utils';
+import { useTasks } from '@/store/tasks';
 import { ActionStatus } from '@/store/types';
+import { TaskType } from '@/types/task-type';
+import { PriceOracle } from '@/types/user';
 import { assert } from '@/utils/assertions';
 
 @Component({
@@ -159,7 +162,7 @@ import { assert } from '@/utils/assertions';
     OracleEntry
   },
   computed: {
-    ...mapGetters('tasks', ['isTaskRunning'])
+    ...mapState(useTasks, ['isTaskRunning'])
   },
   methods: {
     ...mapActions('balances', ['createOracleCache'])
@@ -188,7 +191,7 @@ export default class OracleCacheManagement extends Vue {
       value: 'actions'
     }
   ];
-  readonly oracles: PriceOracles[] = ['cryptocompare'];
+  readonly oracles: PriceOracle[] = ['cryptocompare'];
 
   loading: boolean = false;
   confirmClear: boolean = false;
@@ -196,10 +199,10 @@ export default class OracleCacheManagement extends Vue {
   fromAsset: string = '';
   toAsset: string = '';
   search: string = '';
-  selection: PriceOracles = 'cryptocompare';
+  selection: PriceOracle = 'cryptocompare';
   deleteEntry: OracleCacheMeta | null = null;
   createOracleCache!: (payload: OracleCachePayload) => Promise<ActionStatus>;
-  isTaskRunning!: (type: TaskType) => boolean;
+  isTaskRunning!: (type: TaskType) => Ref<boolean>;
 
   @Watch('selection')
   async onSelectionChanged() {
@@ -221,7 +224,7 @@ export default class OracleCacheManagement extends Vue {
   }
 
   get pending(): boolean {
-    return this.isTaskRunning(TaskType.CREATE_PRICE_CACHE);
+    return this.isTaskRunning(TaskType.CREATE_PRICE_CACHE).value;
   }
 
   async mounted() {
@@ -251,7 +254,7 @@ export default class OracleCacheManagement extends Vue {
         toAsset
       );
       await this.load();
-    } catch (e) {
+    } catch (e: any) {
       const title = this.$t(
         'oracle_cache_management.notification.title'
       ).toString();
@@ -262,7 +265,13 @@ export default class OracleCacheManagement extends Vue {
         error: e.message
       }).toString();
 
-      notify(message, title, Severity.ERROR, true);
+      const { notify } = useNotifications();
+      notify({
+        title,
+        message,
+        severity: Severity.ERROR,
+        display: true
+      });
     }
   }
 
@@ -300,14 +309,13 @@ export default class OracleCacheManagement extends Vue {
       'oracle_cache_management.notification.title'
     ).toString();
 
-    notify(
-      message.toString(),
+    const { notify } = useNotifications();
+    notify({
       title,
-      status.success ? Severity.INFO : Severity.ERROR,
-      true
-    );
+      message: message.toString(),
+      severity: status.success ? Severity.INFO : Severity.ERROR,
+      display: true
+    });
   }
 }
 </script>
-
-<style scoped lang="scss"></style>

@@ -1,19 +1,46 @@
+import logging
 from dataclasses import InitVar, dataclass, field
 from functools import total_ordering
-from typing import TYPE_CHECKING, Any, Optional, Type, TypeVar
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Type, TypeVar
 
+from rotkehlchen.constants.misc import NFT_DIRECTIVE
 from rotkehlchen.constants.resolver import (
     ETHEREUM_DIRECTIVE,
     ETHEREUM_DIRECTIVE_LENGTH,
+    ethaddress_to_identifier,
     strethaddress_to_identifier,
 )
-from rotkehlchen.errors import DeserializationError, UnsupportedAsset
+from rotkehlchen.errors import DeserializationError, UnknownAsset, UnsupportedAsset
+from rotkehlchen.fval import FVal
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
 
 from .typing import AssetType
 
-if TYPE_CHECKING:
-    from rotkehlchen.chain.ethereum.typing import CustomEthereumTokenWithIdentifier
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
+
+UnderlyingTokenDBTuple = Tuple[str, str]
+
+
+class UnderlyingToken(NamedTuple):
+    """Represents an underlying token of a token
+
+    Is used for pool tokens, tokensets etc.
+    """
+    address: ChecksumEthAddress
+    weight: FVal  # Floating percentage from 0 to 1
+
+    def serialize(self) -> Dict[str, Any]:
+        return {'address': self.address, 'weight': str(self.weight * 100)}
+
+    @classmethod
+    def deserialize_from_db(cls, entry: UnderlyingTokenDBTuple) -> 'UnderlyingToken':
+        return UnderlyingToken(
+            address=entry[0],  # type: ignore
+            weight=FVal(entry[1]),
+        )
+
 
 WORLD_TO_BITTREX = {
     # In Rotkehlchen Bitswift is BITS-2 but in Bittrex it's BITS
@@ -53,10 +80,48 @@ WORLD_TO_BITTREX = {
     'MTC-3': 'MTC',
     # EDG renamed to EDGELESS
     strethaddress_to_identifier('0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c'): 'EDGELESS',
+    strethaddress_to_identifier('0xF970b8E36e23F7fC3FD752EeA86f8Be8D83375A6'): 'RCN',
+    strethaddress_to_identifier('0x6F919D67967a97EA36195A2346d9244E60FE0dDB'): 'BLOC',
+    strethaddress_to_identifier('0xc528c28FEC0A90C083328BC45f587eE215760A0F'): 'EDR',
+    strethaddress_to_identifier('0xfAE4Ee59CDd86e3Be9e8b90b53AA866327D7c090'): 'CPC',
+    # Tokenized coinbase in bittrex
+    'COIN-2': 'COIN',
+    strethaddress_to_identifier('0x15B543e986b8c34074DFc9901136d9355a537e7E'): 'STCCOIN',
+    strethaddress_to_identifier('0x8f136Cc8bEf1fEA4A7b71aa2301ff1A52F084384'): 'STC',
+    'MER': 'MER',
+    # For some reason seems that XSILV and XGOLD are the same asset in bittrex
+    strethaddress_to_identifier('0x670f9D9a26D3D42030794ff035d35a67AA092ead'): 'XGOLD',
+    strethaddress_to_identifier('0x3b58c52C03ca5Eb619EBa171091c86C34d603e5f'): 'CYCLUB',
+    strethaddress_to_identifier('0xE081b71Ed098FBe1108EA48e235b74F122272E68'): 'GOLD',
+    strethaddress_to_identifier('0x13339fD07934CD674269726EdF3B5ccEE9DD93de'): 'CURIO',
+    'YCE': 'MYCE',
+    strethaddress_to_identifier('0xF56b164efd3CFc02BA739b719B6526A6FA1cA32a'): 'CGT',
+    strethaddress_to_identifier('0x9b5161a41B58498Eb9c5FEBf89d60714089d2253'): 'MF1',
+    strethaddress_to_identifier('0x765f0C16D1Ddc279295c1a7C24B0883F62d33F75'): 'DTX',
+    strethaddress_to_identifier('0xfa5B75a9e13Df9775cf5b996A049D9cc07c15731'): 'VCK',
+    strethaddress_to_identifier('0x653430560bE843C4a3D143d0110e896c2Ab8ac0D'): '_MOF',
+}
+
+WORLD_TO_BITSTAMP = {
+    strethaddress_to_identifier('0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9'): 'FTT',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85'): 'FET',
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    strethaddress_to_identifier('0xC581b735A1688071A1746c968e0798D642EDE491'): 'EURT',
 }
 
 WORLD_TO_FTX = {
     strethaddress_to_identifier('0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9'): 'FTT',
+    strethaddress_to_identifier('0xcca0c9c383076649604eE31b20248BC04FdF61cA'): 'ASD',
+    'SOL-2': 'SOL',
+    'COIN': 'COIN',
+    # SLP is smooth love potion
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    'MER-2': 'MER',
+    strethaddress_to_identifier('0x476c5E26a75bd202a9683ffD34359C0CC15be0fF'): 'SRM',
+    strethaddress_to_identifier('0xF57e7e7C23978C3cAEC3C3548E3D615c346e79fF'): 'IMX',
+    'GENE': 'GENE',
 }
 
 WORLD_TO_POLONIEX = {
@@ -102,6 +167,15 @@ WORLD_TO_POLONIEX = {
     strethaddress_to_identifier('0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0'): 'TRB',
     # WINK is WIN in poloniex
     'WIN-3': 'WIN',
+    # GTC is gitcoin in poloniex
+    strethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'): 'GTC',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0xfB7B4564402E5500dB5bB6d63Ae671302777C75a'): 'DEXT',
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85'): 'FET',
+    strethaddress_to_identifier('0xF57e7e7C23978C3cAEC3C3548E3D615c346e79fF'): 'IMX',
+    strethaddress_to_identifier('0xba5BDe662c17e2aDFF1075610382B9B691296350'): 'RARE',
 }
 
 WORLD_TO_KRAKEN = {
@@ -179,6 +253,46 @@ WORLD_TO_KRAKEN = {
     'FLOW': 'FLOW',
     'OCEAN': 'OCEAN',
     'EWT': 'EWT',
+    'MATIC': 'MATIC',
+    'MKR': 'MKR',
+    strethaddress_to_identifier('0xFca59Cd816aB1eaD66534D82bc21E7515cE441CF'): 'RARI',
+    'REN': 'REN',
+    strethaddress_to_identifier('0xE41d2489571d322189246DaFA5ebDe1F4699F498'): 'ZRX',
+    strethaddress_to_identifier('0x3F382DbD960E3a9bbCeaE22651E88158d2791550'): 'GHST',
+    strethaddress_to_identifier('0x6B3595068778DD592e39A122f4f5a5cF09C90fE2'): 'SUSHI',
+    strethaddress_to_identifier('0x8290333ceF9e6D528dD5618Fb97a76f268f3EDD4'): 'ANKR',
+    strethaddress_to_identifier('0x58b6A8A3302369DAEc383334672404Ee733aB239'): 'LPT',
+    strethaddress_to_identifier('0x3845badAde8e6dFF049820680d1F14bD3903a5d0'): 'SAND',
+    strethaddress_to_identifier('0x1F573D6Fb3F13d689FF844B4cE37794d79a7FF1C'): 'BNT',
+    strethaddress_to_identifier('0xF629cBd94d3791C9250152BD8dfBDF380E2a3B9c'): 'ENJ',
+    'MINA': 'MINA',
+    'SRM': 'SRM',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0x3506424F91fD33084466F402d5D97f05F8e3b4AF'): 'CHZ',
+    strethaddress_to_identifier('0x8207c1FfC5B6804F6024322CcF34F29c3541Ae26'): 'OGN',
+    strethaddress_to_identifier('0xbC396689893D065F41bc2C6EcbeE5e0085233447'): 'PERP',
+    strethaddress_to_identifier('0xD417144312DbF50465b1C641d016962017Ef6240'): 'CQT',
+    strethaddress_to_identifier('0xF5D669627376EBd411E34b98F19C868c8ABA5ADA'): 'AXS',
+    'WBTC': 'WBTC',
+    strethaddress_to_identifier('0x491604c0FDF08347Dd1fa4Ee062a822A5DD06B5D'): 'CTSI',
+    strethaddress_to_identifier('0xBBbbCA6A901c926F240b89EacB641d8Aec7AEafD'): 'LRC',
+    'KAR': 'KAR',
+    strethaddress_to_identifier('0x3472A5A71965499acd81997a54BBA8D852C6E53d'): 'BADGER',
+    strethaddress_to_identifier('0x111111111117dC0aa78b770fA6A738034120C302'): '1INCH',
+    strethaddress_to_identifier('0x09a3EcAFa817268f77BE1283176B946C4ff2E608'): 'MIR',
+    strethaddress_to_identifier('0xBA11D00c5f74255f56a5E366F4F77f5A186d7f55'): 'BAND',
+    strethaddress_to_identifier('0xe28b3B32B6c345A34Ff64674606124Dd5Aceca30'): 'INJ',
+    'MOVR': 'MOVR',
+    'SDN': 'SDN',
+    strethaddress_to_identifier('0x92D6C1e31e14520e676a687F0a93788B716BEff5'): 'DYDX',
+    'OXY': 'OXY',
+    'RAY': 'RAY',
+    strethaddress_to_identifier('0x6c5bA91642F10282b576d91922Ae6448C9d52f4E'): 'PHA',
+    'BNC': 'BNC',
+    strethaddress_to_identifier('0xd2877702675e6cEb975b4A1dFf9fb7BAF4C91ea9'): 'LUNA',
+    strethaddress_to_identifier('0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE'): 'SHIB',
+    'AVAX': 'AVAX',
+    'KILT': 'KILT',
 }
 
 WORLD_TO_BINANCE = {
@@ -219,13 +333,22 @@ WORLD_TO_BINANCE = {
     strethaddress_to_identifier('0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0'): 'TRB',
     # WIN is WINk in Binance
     'WIN-3': 'WIN',
+    strethaddress_to_identifier('0xF970b8E36e23F7fC3FD752EeA86f8Be8D83375A6'): 'RCN',
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    strethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'): 'GTC',
+    strethaddress_to_identifier('0xEA1ea0972fa092dd463f2968F9bB51Cc4c981D71'): 'MOD',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0x8f693ca8D21b157107184d29D398A8D082b38b76'): 'DATA',
+    strethaddress_to_identifier('0x4824A7b64E3966B0133f4f4FFB1b9D6bEb75FFF7'): 'TCT',
+    strethaddress_to_identifier('0xba5BDe662c17e2aDFF1075610382B9B691296350'): 'RARE',
 }
 
 WORLD_TO_BITFINEX = {
-    'BCH': 'BCHABC',
+    'BCH': 'BCHN',
     'CNY': 'CNH',
     'DOGE': 'DOG',
     'LUNA-2': 'LUNA',
+    'SOL-2': 'SOL',
     # make sure GNY maps to the appropriate token for bitfinex
     strethaddress_to_identifier('0xb1f871Ae9462F1b2C6826E88A7827e76f86751d4'): 'GNY',
     # make sure REP maps to latest one in bitfinex
@@ -246,6 +369,14 @@ WORLD_TO_BITFINEX = {
     strethaddress_to_identifier('0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9'): 'FTT',
     # FET is Fetch AI in bitfinex
     strethaddress_to_identifier('0x1D287CC25dAD7cCaF76a26bc660c5F7C8E2a05BD'): 'FET',
+    # TerraUSD is TERRAUST in bitfinex
+    'UST': 'TERRAUST',
+    strethaddress_to_identifier('0x8f693ca8D21b157107184d29D398A8D082b38b76'): 'DAT',
+    'XEC': 'BCHABC',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    # Spankchain is SPK in bitfinex
+    strethaddress_to_identifier('0x42d6622deCe394b54999Fbd73D108123806f6a18'): 'SPK',
+    strethaddress_to_identifier('0xC581b735A1688071A1746c968e0798D642EDE491'): 'EUT',
 }
 
 WORLD_TO_KUCOIN = {
@@ -261,10 +392,35 @@ WORLD_TO_KUCOIN = {
     strethaddress_to_identifier('0x2ef52Ed7De8c5ce03a4eF0efbe9B7450F2D7Edc9'): 'R',
     # FET is Fetch AI in Kucoin
     strethaddress_to_identifier('0x1D287CC25dAD7cCaF76a26bc660c5F7C8E2a05BD'): 'FET',
-    # WINK is WINk in KUCOIN
-    'WIN-3': 'WINK',
     # As reported in #2805 CAPP refers to this token
     strethaddress_to_identifier('0x11613b1f840bb5A40F8866d857e24DA126B79D73'): 'CAPP',
+    strethaddress_to_identifier('0x6F919D67967a97EA36195A2346d9244E60FE0dDB'): 'BLOC',
+    'WIN-3': 'WIN',
+    'STX-2': 'STX',
+    strethaddress_to_identifier('0xfAE4Ee59CDd86e3Be9e8b90b53AA866327D7c090'): 'CPC',
+    'ONE-2': 'ONE',
+    strethaddress_to_identifier('0xf4CD3d3Fda8d7Fd6C5a500203e38640A70Bf9577'): 'YFDAI',
+    strethaddress_to_identifier('0xcca0c9c383076649604eE31b20248BC04FdF61cA'): 'ASD',
+    strethaddress_to_identifier('0xEA1ea0972fa092dd463f2968F9bB51Cc4c981D71'): 'MODEFI',
+    strethaddress_to_identifier('0x824a50dF33AC1B41Afc52f4194E2e8356C17C3aC'): 'KICK',
+    strethaddress_to_identifier('0x15B543e986b8c34074DFc9901136d9355a537e7E'): 'STC',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    strethaddress_to_identifier('0x15D4c048F83bd7e37d49eA4C83a07267Ec4203dA'): 'GALAX',
+    strethaddress_to_identifier('0x89Ab32156e46F46D02ade3FEcbe5Fc4243B9AAeD'): 'PNT',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0xc221b7E65FfC80DE234bbB6667aBDd46593D34F0'): 'CFG',  # using wrapped centrifuge for now  # noqa: E501
+    strethaddress_to_identifier('0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0'): 'TRB',
+    strethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'): 'GTC',
+    strethaddress_to_identifier('0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9'): 'FTT',
+    'EDG-2': 'EDG',
+    strethaddress_to_identifier('0x8f693ca8D21b157107184d29D398A8D082b38b76'): 'DATA',
+    strethaddress_to_identifier('0xAA2ce7Ae64066175E0B90497CE7d9c190c315DB4'): 'SUTER',
+    'RMRK': 'RMRK',
+    strethaddress_to_identifier('0xa117000000f279D81A1D3cc75430fAA017FA5A2e'): 'ANT',
+    strethaddress_to_identifier('0xADE00C28244d5CE17D72E40330B1c318cD12B7c3'): 'ADX',
+    strethaddress_to_identifier('0xF57e7e7C23978C3cAEC3C3548E3D615c346e79fF'): 'IMX',
+    strethaddress_to_identifier('0x3106a0a076BeDAE847652F42ef07FD58589E001f'): 'ADS',
 }
 
 WORLD_TO_ICONOMI = {
@@ -286,7 +442,123 @@ WORLD_TO_ICONOMI = {
     strethaddress_to_identifier('0x1D287CC25dAD7cCaF76a26bc660c5F7C8E2a05BD'): 'FET',
     # TRB is Tellor Tributes in iconomi
     strethaddress_to_identifier('0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0'): 'TRB',
+    # EDG is Edgeless in iconomi
+    strethaddress_to_identifier('0x08711D3B02C8758F2FB3ab4e80228418a7F8e39c'): 'EDG',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0xF970b8E36e23F7fC3FD752EeA86f8Be8D83375A6'): 'RCN',
+    'ONE-2': 'ONE',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
 }
+
+WORLD_TO_COINBASE_PRO = {
+    strethaddress_to_identifier('0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0'): 'TRB',
+    strethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'): 'GTC',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85'): 'FET',
+    strethaddress_to_identifier('0xd2877702675e6cEb975b4A1dFf9fb7BAF4C91ea9'): 'WLUNA',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0x0391D2021f89DC339F60Fff84546EA23E337750f'): 'BOND',
+    strethaddress_to_identifier('0x2565ae0385659badCada1031DB704442E1b69982'): 'ASM',
+    strethaddress_to_identifier('0xF57e7e7C23978C3cAEC3C3548E3D615c346e79fF'): 'IMX',
+    strethaddress_to_identifier('0x4C19596f5aAfF459fA38B0f7eD92F11AE6543784'): 'TRU',
+    strethaddress_to_identifier('0xa0246c9032bC3A600820415aE600c6388619A14D'): 'FARM',
+    'STX-2': 'STX',
+}
+
+WORLD_TO_COINBASE = {
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0x32353A6C91143bfd6C7d363B546e62a9A2489A20'): 'AGLD',
+    strethaddress_to_identifier('0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85'): 'FET',
+    strethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'): 'GTC',
+    strethaddress_to_identifier('0x4C19596f5aAfF459fA38B0f7eD92F11AE6543784'): 'TRU',
+    strethaddress_to_identifier('0xa0246c9032bC3A600820415aE600c6388619A14D'): 'FARM',
+    'STX-2': 'STX',
+}
+
+WORLD_TO_UPHOLD = {
+    'BTC': 'BTC',
+    strethaddress_to_identifier('0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9'): 'AAVE',
+    'XRP': 'XRP',
+    'ETH': 'ETH',
+    strethaddress_to_identifier('0x0D8775F648430679A709E98d2b0Cb6250d2887EF'): 'BAT',
+    'ADA': 'ADA',
+    'ATOM': 'ATOM',
+    'BCH': 'BCH',
+    'BAL': 'BAL',
+    'BTG': 'BTG',  # Bitcoin Gold
+    strethaddress_to_identifier('0xc00e94Cb662C3520282E6f5717214004A7f26888'): 'COMP',
+    'DASH': 'DASH',
+    'DCR': 'DCR',
+    'DGB': 'DGB',
+    'DOGE': 'DOGE',
+    'DOT': 'DOT',
+    strethaddress_to_identifier('0xF629cBd94d3791C9250152BD8dfBDF380E2a3B9c'): 'ENJ',
+    'EOS': 'EOS',
+    'FIL': 'FIL',
+    'FLOW': 'FLOW',
+    strethaddress_to_identifier('0xc944E90C64B2c07662A292be6244BDf05Cda44a7'): 'GRT',
+    'HBAR': 'HBAR',
+    'HNT': 'HNT',
+    'IOTA': 'MIOTA',
+    strethaddress_to_identifier('0x514910771AF9Ca656af840dff83E8264EcF986CA'): 'LINK',
+    'LTC': 'LTC',
+    strethaddress_to_identifier('0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0'): 'MATIC',
+    strethaddress_to_identifier('0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2'): 'MKR',
+    'NANO': 'NANO',
+    'NEO': 'NEO',
+    strethaddress_to_identifier('0xd26114cd6EE289AccF82350c8d8487fedB8A0C07'): 'OMG',
+    strethaddress_to_identifier('0x4575f41308EC1483f3d399aa9a2826d74Da13Deb'): 'OXT',
+    strethaddress_to_identifier('0x408e41876cCCDC0F92210600ef50372656052a38'): 'REN',
+    strethaddress_to_identifier('0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F'): 'SNX',
+    'SOL-2': 'SOL',
+    strethaddress_to_identifier('0x476c5E26a75bd202a9683ffD34359C0CC15be0fF'): 'SRM',
+    strethaddress_to_identifier('0x3883f5e181fccaF8410FA61e12b59BAd963fb645'): 'THETA',
+    strethaddress_to_identifier('0xf230b790E05390FC8295F4d3F60332c93BEd42e2'): 'TRX',
+    'VET': 'VET',
+    strethaddress_to_identifier('0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599'): 'WBTC',
+    strethaddress_to_identifier('0x04Fa0d235C4abf4BcF4787aF4CF447DE572eF828'): 'UMA',
+    strethaddress_to_identifier('0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984'): 'UNI',
+    # 'UPT': 'UPT',
+    'XCH': 'XCH',
+    'XEM': 'NEM',
+    'XLM': 'XLM',
+    'XTZ': 'XTZ',
+    strethaddress_to_identifier('0x05f4a42e251f2d52b8ed15E9FEdAacFcEF1FAD27'): 'ZIL',
+    strethaddress_to_identifier('0xE41d2489571d322189246DaFA5ebDe1F4699F498'): 'ZRX',
+}
+
+WORLD_TO_GEMINI = {
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    strethaddress_to_identifier('0xCC8Fa225D80b9c7D42F96e9570156c65D6cAAa25'): 'SLP',
+    strethaddress_to_identifier('0xba5BDe662c17e2aDFF1075610382B9B691296350'): 'RARE',
+    strethaddress_to_identifier('0x18aAA7115705e8be94bfFEBDE57Af9BFc265B998'): 'AUDIO',
+    strethaddress_to_identifier('0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85'): 'FET',
+    strethaddress_to_identifier('0xd2877702675e6cEb975b4A1dFf9fb7BAF4C91ea9'): 'LUNA',
+}
+
+WORLD_TO_NEXO = {
+    strethaddress_to_identifier('0xB62132e35a6c13ee1EE0f84dC5d40bad8d815206'): 'NEXONEXO',
+    'GBP': 'GBPX',
+    strethaddress_to_identifier('0xdAC17F958D2ee523a2206206994597C13D831ec7'): 'USDTERC',
+}
+
+WORLD_TO_BITPANDA = {
+    'IOTA': 'MIOTA',
+    strethaddress_to_identifier('0x536381a8628dBcC8C70aC9A30A7258442eAb4c92'): 'PAN',  # Pantos
+    strethaddress_to_identifier('0xa117000000f279D81A1D3cc75430fAA017FA5A2e'): 'ANT',  # ANT v2
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',  # AXS v2
+    'SOL-2': 'SOL',  # Solana
+    'LUNA-2': 'LUNA',  # Luna Terra
+}
+
+WORLD_TO_CRYPTOCOM = {
+    strethaddress_to_identifier('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b'): 'AXS',
+    'LUNA-2': 'LUNA',
+}
+
+# Create a generic variable that can be 'Asset', or any subclass.
+Z = TypeVar('Z', bound='Asset')
 
 
 @total_ordering
@@ -294,17 +566,22 @@ WORLD_TO_ICONOMI = {
 class Asset():
     identifier: str
     form_with_incomplete_data: InitVar[bool] = field(default=False)
+    direct_field_initialization: InitVar[bool] = field(default=False)
     name: str = field(init=False)
     symbol: str = field(init=False)
     asset_type: AssetType = field(init=False)
-    started: Timestamp = field(init=False)
-    forked: Optional[str] = field(init=False)
-    swapped_for: Optional[str] = field(init=False)
+    started: Optional[Timestamp] = field(init=False)
+    forked: Optional['Asset'] = field(init=False)
+    swapped_for: Optional['Asset'] = field(init=False)
     # None means no special mapping. '' means not supported
     cryptocompare: Optional[str] = field(init=False)
     coingecko: Optional[str] = field(init=False)
 
-    def __post_init__(self, form_with_incomplete_data: bool = False) -> None:
+    def __post_init__(
+            self,
+            form_with_incomplete_data: bool = False,
+            direct_field_initialization: bool = False,
+    ) -> None:
         """
         Asset post initialization
 
@@ -326,6 +603,20 @@ class Asset():
                 'Tried to initialize an asset out of a non-string identifier',
             )
 
+        if self.identifier.startswith(NFT_DIRECTIVE):  # probably should subclass better
+            object.__setattr__(self, 'name', f'nft with id {self.identifier}')
+            object.__setattr__(self, 'symbol', self.identifier[len(NFT_DIRECTIVE):])
+            object.__setattr__(self, 'asset_type', AssetType.NFT)
+            object.__setattr__(self, 'started', 0)
+            object.__setattr__(self, 'forked', None)
+            object.__setattr__(self, 'swapped_for', None)
+            object.__setattr__(self, 'cryptocompare', '')
+            object.__setattr__(self, 'coingecko', None)
+            return
+
+        if direct_field_initialization:
+            return
+
         # TODO: figure out a way to move this out. Moved in here due to cyclic imports
         from rotkehlchen.assets.resolver import AssetResolver  # isort:skip  # noqa: E501  # pylint: disable=import-outside-toplevel
         data = AssetResolver().get_asset_data(self.identifier, form_with_incomplete_data)
@@ -337,8 +628,20 @@ class Asset():
         object.__setattr__(self, 'symbol', data.symbol)
         object.__setattr__(self, 'asset_type', data.asset_type)
         object.__setattr__(self, 'started', data.started)
-        object.__setattr__(self, 'forked', data.forked)
-        object.__setattr__(self, 'swapped_for', data.swapped_for)
+        forked = None
+        if data.forked is not None:
+            try:
+                forked = Asset(data.forked)
+            except UnknownAsset:  # should not happen due to foreign keys
+                log.error(f'Forked asset {data.forked} for {self.identifier} could not be found')
+        object.__setattr__(self, 'forked', forked)
+        swapped_for = None
+        if data.swapped_for is not None:
+            try:
+                swapped_for = Asset(data.swapped_for)
+            except UnknownAsset:  # should not happen due to foreign keys
+                log.error(f'Swapped for asset {data.swapped_for} for {self.identifier} could not be found')  # noqa: E501
+        object.__setattr__(self, 'swapped_for', swapped_for)
         object.__setattr__(self, 'cryptocompare', data.cryptocompare)
         object.__setattr__(self, 'coingecko', data.coingecko)
 
@@ -402,6 +705,9 @@ class Asset():
     def has_coingecko(self) -> bool:
         return self.coingecko is not None and self.coingecko != ''
 
+    def has_oracle(self) -> bool:
+        return self.has_coingecko() or self.cryptocompare is not None
+
     def __hash__(self) -> int:
         return hash(self.identifier)
 
@@ -427,6 +733,51 @@ class Asset():
         # else
         raise ValueError(f'Invalid comparison of asset with {type(other)}')
 
+    @classmethod
+    def initialize(
+            cls: Type[Z],
+            identifier: str,
+            asset_type: AssetType,
+            name: Optional[str] = None,
+            symbol: Optional[str] = None,
+            started: Optional[Timestamp] = None,
+            forked: Optional['Asset'] = None,
+            swapped_for: Optional['Asset'] = None,
+            coingecko: Optional[str] = None,
+            # add the asset with inactive cryptocompare so querying is not attempted by symbol
+            cryptocompare: Optional[str] = '',
+    ) -> Z:
+        """Initialize an asset from fields"""
+        asset = cls('whatever', direct_field_initialization=True)
+        object.__setattr__(asset, 'identifier', identifier)
+        object.__setattr__(asset, 'name', name)
+        object.__setattr__(asset, 'symbol', symbol)
+        object.__setattr__(asset, 'asset_type', asset_type)
+        object.__setattr__(asset, 'started', started)
+        object.__setattr__(asset, 'forked', forked)
+        object.__setattr__(asset, 'swapped_for', swapped_for)
+        object.__setattr__(asset, 'cryptocompare', cryptocompare)
+        object.__setattr__(asset, 'coingecko', coingecko)
+        return asset
+
+
+EthereumTokenDBTuple = Tuple[
+    str,                  # identifier
+    str,                  # address
+    Optional[int],        # decimals
+    Optional[str],        # name
+    Optional[str],        # symbol
+    Optional[int],        # started
+    Optional[str],        # swapped_for
+    Optional[str],        # coingecko
+    Optional[str],        # cryptocompare
+    Optional[str],        # protocol
+]
+
+
+# Create a generic variable that can be 'HasEthereumToken', or any subclass.
+Y = TypeVar('Y', bound='HasEthereumToken')
+
 
 @dataclass(init=True, repr=True, eq=False, order=False, unsafe_hash=False, frozen=True)
 class HasEthereumToken(Asset):
@@ -434,12 +785,21 @@ class HasEthereumToken(Asset):
     ethereum_address: ChecksumEthAddress = field(init=False)
     decimals: int = field(init=False)
     protocol: str = field(init=False)
+    underlying_tokens: List[UnderlyingToken] = field(init=False)
 
-    def __post_init__(self, form_with_incomplete_data: bool = False) -> None:
+    def __post_init__(
+            self,
+            form_with_incomplete_data: bool = False,
+            direct_field_initialization: bool = False,
+    ) -> None:
+        if direct_field_initialization:
+            return
+
         object.__setattr__(self, 'identifier', ETHEREUM_DIRECTIVE + self.identifier)
         super().__post_init__(form_with_incomplete_data)
         # TODO: figure out a way to move this out. Moved in here due to cyclic imports
         from rotkehlchen.assets.resolver import AssetResolver  # isort:skip  # noqa: E501  # pylint: disable=import-outside-toplevel
+        from rotkehlchen.globaldb import GlobalDBHandler  # isort:skip  # noqa: E501  # pylint: disable=import-outside-toplevel
 
         data = AssetResolver().get_asset_data(self.identifier)  # pylint: disable=no-member
 
@@ -451,6 +811,81 @@ class HasEthereumToken(Asset):
         object.__setattr__(self, 'ethereum_address', data.ethereum_address)
         object.__setattr__(self, 'decimals', data.decimals)
         object.__setattr__(self, 'protocol', data.protocol)
+
+        underlying_tokens = GlobalDBHandler().fetch_underlying_tokens(data.ethereum_address)
+        object.__setattr__(self, 'underlying_tokens', underlying_tokens)
+
+    def serialize_all_info(self) -> Dict[str, Any]:
+        underlying_tokens = [x.serialize() for x in self.underlying_tokens] if self.underlying_tokens is not None else None  # noqa: E501
+        return {
+            'identifier': self.identifier,
+            'address': self.ethereum_address,
+            'decimals': self.decimals,
+            'name': self.name,
+            'symbol': self.symbol,
+            'started': self.started,
+            'swapped_for': self.swapped_for.identifier if self.swapped_for else None,
+            'coingecko': self.coingecko,
+            'cryptocompare': self.cryptocompare,
+            'protocol': self.protocol,
+            'underlying_tokens': underlying_tokens,
+        }
+
+    @classmethod
+    def initialize(  # type: ignore  # figure out a way to make mypy happy
+            cls: Type[Y],
+            address: ChecksumEthAddress,
+            decimals: Optional[int] = None,
+            name: Optional[str] = None,
+            symbol: Optional[str] = None,
+            started: Optional[Timestamp] = None,
+            swapped_for: Optional[Asset] = None,
+            coingecko: Optional[str] = None,
+            # add the token with inactive cryptocompare so querying is not attempted by symbol
+            cryptocompare: Optional[str] = '',
+            protocol: Optional[str] = None,
+            underlying_tokens: Optional[List[UnderlyingToken]] = None,
+    ) -> Y:
+        """Initialize a token from fields"""
+        token = cls('whatever', direct_field_initialization=True)
+        object.__setattr__(token, 'identifier', ethaddress_to_identifier(address))
+        object.__setattr__(token, 'name', name)
+        object.__setattr__(token, 'symbol', symbol)
+        object.__setattr__(token, 'asset_type', AssetType.ETHEREUM_TOKEN)
+        object.__setattr__(token, 'started', started)
+        object.__setattr__(token, 'forked', None)
+        object.__setattr__(token, 'swapped_for', swapped_for)
+        object.__setattr__(token, 'cryptocompare', cryptocompare)
+        object.__setattr__(token, 'coingecko', coingecko)
+        object.__setattr__(token, 'ethereum_address', address)
+        object.__setattr__(token, 'decimals', decimals)
+        object.__setattr__(token, 'protocol', protocol)
+        object.__setattr__(token, 'underlying_tokens', underlying_tokens)
+        return token
+
+    @classmethod
+    def deserialize_from_db(
+            cls: Type[Y],
+            entry: EthereumTokenDBTuple,
+            underlying_tokens: Optional[List[UnderlyingToken]] = None,
+    ) -> Y:
+        """May raise UnknownAsset if the swapped for asset can't be recognized
+
+        That error would be bad because it would mean somehow an unknown id made it into the DB
+        """
+        swapped_for = Asset(entry[6]) if entry[6] is not None else None
+        return cls.initialize(
+            address=entry[1],  # type: ignore
+            decimals=entry[2],
+            name=entry[3],
+            symbol=entry[4],
+            started=Timestamp(entry[5]),  # type: ignore
+            swapped_for=swapped_for,
+            coingecko=entry[7],
+            cryptocompare=entry[8],
+            protocol=entry[9],
+            underlying_tokens=underlying_tokens,
+        )
 
 
 # Create a generic variable that can be 'EthereumToken', or any subclass.
@@ -464,38 +899,31 @@ class EthereumToken(HasEthereumToken):
         return f'{self.symbol}({self.ethereum_address})'
 
     @classmethod
-    def from_asset(cls: Type[T], asset: Asset) -> Optional[T]:
+    def from_asset(
+            cls: Type[T],
+            asset: Asset,
+            form_with_incomplete_data: bool = True,
+    ) -> Optional[T]:
         """Attempts to turn an asset into an EthereumToken. If it fails returns None"""
-        return cls.from_identifier(asset.identifier)
+        return cls.from_identifier(
+            identifier=asset.identifier,
+            form_with_incomplete_data=form_with_incomplete_data,
+        )
 
     @classmethod
-    def from_identifier(cls: Type[T], identifier: str) -> Optional[T]:
+    def from_identifier(
+            cls: Type[T],
+            identifier: str,
+            form_with_incomplete_data: bool = True,
+    ) -> Optional[T]:
         """Attempts to turn an asset into an EthereumToken. If it fails returns None"""
         if not identifier.startswith(ETHEREUM_DIRECTIVE):
             return None
 
         try:
-            return cls(identifier[ETHEREUM_DIRECTIVE_LENGTH:])
+            return cls(
+                identifier[ETHEREUM_DIRECTIVE_LENGTH:],
+                form_with_incomplete_data=form_with_incomplete_data,
+            )
         except DeserializationError:
             return None
-
-    def to_custom_ethereum_token(self) -> 'CustomEthereumTokenWithIdentifier':
-        """TODO:This is just to satisfy its use in one place
-
-        Eventually these two data structures should be consolidated."""
-        # TODO: figure out a way to move this out. Moved in here due to cyclic imports
-        from rotkehlchen.chain.ethereum.typing import CustomEthereumTokenWithIdentifier  # isort:skip  # noqa: E501  # pylint: disable=import-outside-toplevel
-        swapped_for_asset = None if self.swapped_for is None else Asset(self.swapped_for)
-        return CustomEthereumTokenWithIdentifier(
-            identifier=self.identifier,
-            address=self.ethereum_address,
-            decimals=self.decimals,
-            name=self.name,
-            symbol=self.symbol,
-            started=self.started,
-            swapped_for=swapped_for_asset,
-            coingecko=self.coingecko,
-            cryptocompare=self.cryptocompare,
-            protocol=None,
-            underlying_tokens=None,
-        )

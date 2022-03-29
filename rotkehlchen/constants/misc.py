@@ -1,8 +1,6 @@
+from rotkehlchen.assets.typing import AssetType
 from rotkehlchen.fval import FVal
-from rotkehlchen.typing import EmptyStr, EventType
-
-S_EMPTYSTR = EmptyStr('')
-
+from rotkehlchen.typing import EventType
 
 EV_BUY = EventType('buy')
 EV_SELL = EventType('sell')
@@ -19,11 +17,13 @@ CURRENCYCONVERTER_API_KEY = '7ad371210f296db27c19'
 ZERO = FVal(0)
 ONE = FVal(1)
 
+NFT_DIRECTIVE = '_nft_'
+
 # API URLS
 KRAKEN_BASE_URL = 'https://api.kraken.com'
 KRAKEN_API_VERSION = '0'
-BINANCE_BASE_URL = 'binance.com/'
-BINANCE_US_BASE_URL = 'binance.us/'
 # KRAKEN_BASE_URL = 'http://localhost:5001/kraken'
 # KRAKEN_API_VERSION = 'mock'
 # BINANCE_BASE_URL = 'http://localhost:5001/binance/api/'
+
+ASSET_TYPES_EXCLUDED_FOR_USERS = {AssetType.NFT}

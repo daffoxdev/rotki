@@ -2,16 +2,19 @@ import random
 import warnings as test_warnings
 from contextlib import ExitStack
 from http import HTTPStatus
+from typing import Any, Dict
 
 import pytest
 import requests
 
 from rotkehlchen.api.server import APIServer
-from rotkehlchen.constants.assets import A_ADAI_V1, A_AWBTC_V1, A_WBTC, A_BUSD
+from rotkehlchen.constants.assets import A_BUSD, A_WBTC
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.fval import FVal
 from rotkehlchen.serialization.serialize import process_result_list
 from rotkehlchen.tests.utils.aave import (
+    A_ADAI_V1,
+    A_AWBTC_V1,
     AAVE_TEST_ACC_1,
     AAVE_TEST_ACC_2,
     AAVE_TEST_ACC_3,
@@ -19,6 +22,7 @@ from rotkehlchen.tests.utils.aave import (
     aave_mocked_historical_prices,
     expected_aave_deposit_test_events,
     expected_aave_liquidation_test_events,
+    expected_aave_v2_events,
 )
 from rotkehlchen.tests.utils.api import (
     api_url_for,
@@ -31,11 +35,12 @@ from rotkehlchen.tests.utils.api import (
 from rotkehlchen.tests.utils.checks import assert_serialized_lists_equal
 from rotkehlchen.tests.utils.rotkehlchen import BalancesTestSetup, setup_balances
 
+AAVE_BALANCESV1_TEST_ACC = '0xC2cB1040220768554cf699b0d863A3cd4324ce32'
+AAVE_BALANCESV2_TEST_ACC = '0x8Fe178db26ebA2eEdb22575265bf10A63c395a3d'
+AAVE_V2_TEST_ACC = '0x008C00c45D461d7E08acBC4755a4A0a3a94115ee'
 
-AAVE_BALANCES_TEST_ACC = '0xC2cB1040220768554cf699b0d863A3cd4324ce32'
 
-
-@pytest.mark.parametrize('ethereum_accounts', [[AAVE_BALANCES_TEST_ACC]])
+@pytest.mark.parametrize('ethereum_accounts', [[AAVE_BALANCESV1_TEST_ACC, AAVE_BALANCESV2_TEST_ACC]])  # noqa: E501
 @pytest.mark.parametrize('ethereum_modules', [['aave']])
 def test_query_aave_balances(rotkehlchen_api_server, ethereum_accounts):
     """Check querying the aave balances endpoint works. Uses real data.
@@ -66,28 +71,60 @@ def test_query_aave_balances(rotkehlchen_api_server, ethereum_accounts):
         else:
             result = assert_proper_response_with_result(response)
 
-    if len(result) != 1:
-        test_warnings.warn(UserWarning(f'Test account {AAVE_BALANCES_TEST_ACC} has no aave balances'))  # noqa: E501
+    if len(result) == 0:
+        test_warnings.warn(UserWarning(f'Test account {AAVE_BALANCESV1_TEST_ACC} and {AAVE_BALANCESV2_TEST_ACC} have no aave balances'))  # noqa: E501
         return
 
-    lending = result[AAVE_BALANCES_TEST_ACC]['lending']
-    for _, entry in lending.items():
-        assert len(entry) == 2
-        assert len(entry['balance']) == 2
-        assert 'amount' in entry['balance']
-        assert 'usd_value' in entry['balance']
-        assert '%' in entry['apy']
-    borrowing = result[AAVE_BALANCES_TEST_ACC]['borrowing']
-    for _, entry in borrowing.items():
-        assert len(entry) == 3
-        assert len(entry['balance']) == 2
-        assert 'amount' in entry['balance']
-        assert 'usd_value' in entry['balance']
-        assert '%' in entry['variable_apr']
-        assert '%' in entry['stable_apr']
+    def _assert_valid_entries(balances: Dict[str, Any]) -> None:
+        lending = v1_balances['lending']
+        for _, entry in lending.items():
+            assert len(entry) == 2
+            assert len(entry['balance']) == 2
+            assert 'amount' in entry['balance']
+            assert 'usd_value' in entry['balance']
+            assert '%' in entry['apy']
+        borrowing = balances['borrowing']
+        for _, entry in borrowing.items():
+            assert len(entry) == 3
+            assert len(entry['balance']) == 2
+            assert 'amount' in entry['balance']
+            assert 'usd_value' in entry['balance']
+            assert '%' in entry['variable_apr']
+            assert '%' in entry['stable_apr']
+
+    v1_balances = result.get(AAVE_BALANCESV1_TEST_ACC)
+    if v1_balances:
+        _assert_valid_entries(v1_balances)
+    else:
+        test_warnings.warn(UserWarning(f'Test account {AAVE_BALANCESV1_TEST_ACC} has no aave v1 balances'))  # noqa: E501
+
+    v2_balances = result.get(AAVE_BALANCESV2_TEST_ACC)
+    if v2_balances:
+        _assert_valid_entries(v2_balances)
+    else:
+        test_warnings.warn(UserWarning(f'Test account {AAVE_BALANCESV2_TEST_ACC} has no aave v2 balances'))  # noqa: E501
 
 
-@pytest.mark.parametrize('ethereum_accounts', [[AAVE_BALANCES_TEST_ACC]])
+@pytest.mark.parametrize('ethereum_accounts', [[AAVE_V2_TEST_ACC]])
+@pytest.mark.parametrize('ethereum_modules', [['aave']])
+@pytest.mark.parametrize('start_with_valid_premium', [True])
+@pytest.mark.parametrize('mocked_price_queries', [aave_mocked_historical_prices])
+@pytest.mark.parametrize('mocked_current_prices', [aave_mocked_current_prices])
+@pytest.mark.parametrize('default_mock_price_value', [FVal(1)])
+@pytest.mark.parametrize('aave_use_graph', [True])
+def test_query_aave_history_with_borrowing_v2(rotkehlchen_api_server, ethereum_accounts, aave_use_graph):  # pylint: disable=unused-argument  # noqa: E501
+    """Check querying the aave histoy endpoint works. Uses real data."""
+    rotki = rotkehlchen_api_server.rest_api.rotkehlchen
+    setup = setup_balances(
+        rotki,
+        ethereum_accounts=ethereum_accounts,
+        btc_accounts=None,
+        original_queries=['zerion', 'logs', 'blocknobytime'],
+    )
+    _query_simple_aave_history_test_v2(setup, rotkehlchen_api_server, False)
+
+
+@pytest.mark.parametrize('ethereum_accounts', [[AAVE_BALANCESV1_TEST_ACC]])
 @pytest.mark.parametrize('ethereum_modules', [['makerdao_dsr']])
 def test_query_aave_balances_module_not_activated(
         rotkehlchen_api_server,
@@ -164,6 +201,47 @@ def _query_simple_aave_history_test(
     )
 
 
+def _query_simple_aave_history_test_v2(
+        setup: BalancesTestSetup,
+        server: APIServer,
+        async_query: bool,
+) -> None:
+    with ExitStack() as stack:
+        # patch ethereum/etherscan to not autodetect tokens
+        setup.enter_ethereum_patches(stack)
+        response = requests.get(api_url_for(
+            server,
+            "aavehistoryresource",
+        ), json={'async_query': async_query})
+        if async_query:
+            task_id = assert_ok_async_response(response)
+            # Big timeout since this test can take a long time
+            outcome = wait_for_async_task(server, task_id, timeout=600)
+            assert outcome['message'] == ''
+            result = outcome['result']
+        else:
+            result = assert_proper_response_with_result(response)
+
+    assert len(result) == 1
+    assert len(result[AAVE_V2_TEST_ACC]) == 4
+    events = result[AAVE_V2_TEST_ACC]['events']
+    total_earned_interest = result[AAVE_V2_TEST_ACC]['total_earned_interest']
+    total_lost = result[AAVE_V2_TEST_ACC]['total_lost']
+    total_earned_liquidations = result[AAVE_V2_TEST_ACC]['total_earned_liquidations']
+    assert len(total_lost) == 1
+    assert len(total_earned_liquidations) == 0
+    assert len(total_earned_interest) == 1
+    assert len(total_earned_interest['_ceth_0xa06bC25B5805d5F8d82847D191Cb4Af5A3e873E0']) == 2
+    assert FVal(total_earned_interest['_ceth_0xa06bC25B5805d5F8d82847D191Cb4Af5A3e873E0']['amount']) >= FVal('0.09')  # noqa: E501
+    assert FVal(total_earned_interest['_ceth_0xa06bC25B5805d5F8d82847D191Cb4Af5A3e873E0']['usd_value']) >= FVal('0.09248')  # noqa: E501
+
+    assert_serialized_lists_equal(
+        a=events[:len(expected_aave_v2_events)],
+        b=process_result_list(expected_aave_v2_events),
+        ignore_keys=None,
+    )
+
+
 @pytest.mark.parametrize('ethereum_accounts', [[AAVE_TEST_ACC_2]])
 @pytest.mark.parametrize('ethereum_modules', [['aave']])
 @pytest.mark.parametrize('start_with_valid_premium', [True])
@@ -172,6 +250,36 @@ def _query_simple_aave_history_test(
 @pytest.mark.parametrize('default_mock_price_value', [FVal(1)])
 @pytest.mark.parametrize('aave_use_graph', [True, False])  # Try both with blockchain and graph
 def test_query_aave_history(rotkehlchen_api_server, ethereum_accounts, aave_use_graph):  # pylint: disable=unused-argument  # noqa: E501
+    """Check querying the aave histoy endpoint works. Uses real data.
+
+    Since this actually queries real blockchain data for aave it is a very slow test
+    due to the sheer amount of log queries. We also use graph in 2nd version of test.
+    """
+    rotki = rotkehlchen_api_server.rest_api.rotkehlchen
+    setup = setup_balances(
+        rotki,
+        ethereum_accounts=ethereum_accounts,
+        btc_accounts=None,
+        original_queries=['zerion', 'logs', 'blocknobytime'],
+    )
+    # Since this test is slow we don't run both async and sync in the same test run
+    # Instead we randomly choose one. Eventually both cases will be covered.
+    async_query = random.choice([True, False])
+
+    _query_simple_aave_history_test(setup, rotkehlchen_api_server, async_query, aave_use_graph)
+
+    if aave_use_graph:  # run it once more for graph to make sure DB querying gives same results
+        _query_simple_aave_history_test(setup, rotkehlchen_api_server, async_query, aave_use_graph)
+
+
+@pytest.mark.parametrize('ethereum_accounts', [[AAVE_TEST_ACC_2]])
+@pytest.mark.parametrize('ethereum_modules', [['aave']])
+@pytest.mark.parametrize('start_with_valid_premium', [True])
+@pytest.mark.parametrize('mocked_price_queries', [aave_mocked_historical_prices])
+@pytest.mark.parametrize('mocked_current_prices', [aave_mocked_current_prices])
+@pytest.mark.parametrize('default_mock_price_value', [FVal(1)])
+@pytest.mark.parametrize('aave_use_graph', [True])  # Try both with blockchain and graph
+def test_query_aave_history2(rotkehlchen_api_server, ethereum_accounts, aave_use_graph):  # pylint: disable=unused-argument  # noqa: E501
     """Check querying the aave histoy endpoint works. Uses real data.
 
     Since this actually queries real blockchain data for aave it is a very slow test
@@ -290,11 +398,7 @@ def _test_for_duplicates_and_negatives(setup: BalancesTestSetup, server: APIServ
     result = result[AAVE_TEST_ACC_1]
     assert len(result) == 4
 
-    for asset, entry in result['total_earned_interest'].items():
-        if asset == ('aAAVE'):
-            # TODO: This test for this address fails due to LEND and AAVE
-            # Investigate and fix.
-            continue
+    for _, entry in result['total_earned_interest'].items():
         assert FVal(entry['amount']) > ZERO
     for _, entry in result['total_lost'].items():
         assert FVal(entry['amount']) > ZERO

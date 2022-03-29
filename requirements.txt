@@ -1,24 +1,35 @@
-gevent==21.1.2
-greenlet==1.0.0
-web3==5.15.0
-pysqlcipher3==1.0.3
-requests==2.25.1
-pycryptodome==3.6.6
-pycryptodomex==3.6.6
+gevent==21.12.0
+greenlet==1.1.2
+gevent-websocket==0.10.1
+wsaccel==0.6.3  # recommended for acceleration of gevent-websocket. But abandoned.
+web3==5.25.0
+pysqlcipher3==1.0.4
+requests==2.26.0
+urllib3==1.26.7
+pycryptodome==3.11.0
+pycryptodomex==3.11.0
 coincurve==13.0.0
-typing-extensions==3.7.4.3
+typing-extensions==3.10.0.2
 base58check==1.0.2
 bech32==1.2.0
 gql==2.0.0
-substrate-interface==0.11.16
-beautifulsoup4==4.9.3
+scalecodec==1.0.28
+py-sr25519-bindings==0.1.4
+py-ed25519-bindings==1.0.1
+py-bip39-bindings==0.1.8
+substrate-interface==1.1.6
+beautifulsoup4==4.10.0
+maxminddb==2.2.0
+miniupnpc==2.0.2; sys_platform != 'win32'
+miniupnpc==2.2.3; sys_platform == 'win32'
+cryptography==36.0.1
 
 # For the rest api
 flask-cors==3.0.10
-flask-restful==0.3.8
-flask==1.1.1
-marshmallow==3.2.1
-webargs==6.0.0
+flask-restful==0.3.9
+flask==2.0.2
+marshmallow==3.14.1
+webargs==8.0.1
 
 #constraints
 setuptools==41.0.1  # constraint required by pyinstaller==3.5.0

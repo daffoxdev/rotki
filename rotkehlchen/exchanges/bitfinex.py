@@ -29,6 +29,7 @@ from gevent.lock import Semaphore
 from requests.adapters import Response
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import (
@@ -56,7 +57,8 @@ from rotkehlchen.typing import (
 )
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_list
 
 if TYPE_CHECKING:
@@ -122,15 +124,34 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     """
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
     ):
-        super().__init__(str(Location.BITFINEX), api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.BITFINEX,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.base_uri = 'https://api.bitfinex.com'
+        self.session.headers.update({'bfx-apikey': self.api_key})
         self.msg_aggregator = msg_aggregator
         self.nonce_lock = Semaphore()
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'bfx-apikey': self.api_key})
+        return changed
 
     def _api_query(
             self,
@@ -147,7 +168,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         """Request a Bitfinex API v2 endpoint (from `endpoint`).
         """
         call_options = options.copy() if options else {}
-        for header in ('Content-Type', 'bfx-apikey', 'bfx-nonce', 'bfx-signature'):
+        for header in ('Content-Type', 'bfx-nonce', 'bfx-signature'):
             self.session.headers.pop(header, None)
 
         if endpoint == 'configs_list_currency':
@@ -190,7 +211,6 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 ).hexdigest()
                 self.session.headers.update({
                     'Content-Type': 'application/json',
-                    'bfx-apikey': self.api_key,
                     'bfx-nonce': nonce,
                     'bfx-signature': signature,
                 })
@@ -440,6 +460,13 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     f'Failed to deserialize a {self.name} {case} result. '
                     f'Check logs for details. Ignoring it.',
                 )
+            except (UnknownAsset, UnsupportedAsset) as e:
+                msg = (
+                    f'Found {self.name} {case} with unknown/unsupported '
+                    f'asset {e.asset_name}'
+                )
+                log.warning(f'{msg}. raw_data={raw_result}')
+                self.msg_aggregator.add_warning(f'{msg}. Ignoring {case}')
                 continue
 
             results.append(result)  # type: ignore # type is known
@@ -458,7 +485,10 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         Timestamp is from MTS_STARTED (when the movement was created), and not
         from MTS_UPDATED (when it was completed/cancelled).
 
-        Can raise DeserializationError.
+        Can raise:
+         - DeserializationError.
+         - UnknownAsset
+         - UnsupportedAsset
 
         Schema reference in:
         https://docs.bitfinex.com/reference#rest-auth-movements
@@ -468,17 +498,10 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 f'Unexpected bitfinex movement with status: {raw_result[5]}. '
                 f'Only completed movements are processed. Raw movement: {raw_result}',
             )
-        try:
-            fee_asset = asset_from_bitfinex(
-                bitfinex_name=raw_result[1],
-                currency_map=self.currency_map,
-            )
-        except (UnknownAsset, UnsupportedAsset) as e:
-            asset_tag = 'Unknown' if isinstance(e, UnknownAsset) else 'Unsupported'
-            raise DeserializationError(
-                f'{asset_tag} {e.asset_name} found while processing movement asset '
-                f'due to: {str(e)}',
-            ) from e
+        fee_asset = asset_from_bitfinex(
+            bitfinex_name=raw_result[1],
+            currency_map=self.currency_map,
+        )
 
         amount = deserialize_asset_amount(raw_result[12])
         category = (
@@ -514,7 +537,10 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         Known pairs format: 'tETHUST', 'tETH:UST'.
 
-        Can raise DeserializationError.
+        Can raise:
+         - DeserializationError.
+         - UnknownAsset
+         - UnsupportedAsset
 
         Schema reference in:
         https://docs.bitfinex.com/reference#rest-auth-trades
@@ -529,24 +555,18 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             )
 
         bfx_base_asset_symbol, bfx_quote_asset_symbol = self.pair_bfx_symbols_map[bfx_pair]
-        try:
-            base_asset = asset_from_bitfinex(
-                bitfinex_name=bfx_base_asset_symbol,
-                currency_map=self.currency_map,
-            )
-            quote_asset = asset_from_bitfinex(
-                bitfinex_name=bfx_quote_asset_symbol,
-                currency_map=self.currency_map,
-            )
-            fee_asset = asset_from_bitfinex(
-                bitfinex_name=raw_result[10],
-                currency_map=self.currency_map,
-            )
-        except (UnknownAsset, UnsupportedAsset) as e:
-            asset_tag = 'Unknown' if isinstance(e, UnknownAsset) else 'Unsupported'
-            raise DeserializationError(
-                f'{asset_tag} {e.asset_name} found while processing trade pair due to: {str(e)}',
-            ) from e
+        base_asset = asset_from_bitfinex(
+            bitfinex_name=bfx_base_asset_symbol,
+            currency_map=self.currency_map,
+        )
+        quote_asset = asset_from_bitfinex(
+            bitfinex_name=bfx_quote_asset_symbol,
+            currency_map=self.currency_map,
+        )
+        fee_asset = asset_from_bitfinex(
+            bitfinex_name=raw_result[10],
+            currency_map=self.currency_map,
+        )
 
         trade = Trade(
             timestamp=Timestamp(int(raw_result[2] / 1000)),
@@ -871,7 +891,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         balance_index = 2
         assets_balance: DefaultDict[Asset, Balance] = defaultdict(Balance)
         for wallet in response_list:
-            if len(wallet) < API_WALLET_MIN_RESULT_LENGTH or wallet[balance_index] <= 0:
+            if len(wallet) < API_WALLET_MIN_RESULT_LENGTH:
                 log.error(
                     f'Error processing a {self.name} balance result. '
                     f'Found less items than expected',
@@ -882,6 +902,9 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     f'Check logs for details. Ignoring it.',
                 )
                 continue
+
+            if wallet[balance_index] <= 0:
+                continue  # bitfinex can show small negative balances for some coins. Ignore
 
             try:
                 asset = asset_from_bitfinex(
@@ -948,7 +971,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         """Return the account trades on Bitfinex.
 
         Endpoint documentation:
@@ -966,10 +989,10 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             options=options,
             case='trades',
         )
-        return trades
+        return trades, (start_ts, end_ts)
 
     def validate_api_key(self) -> Tuple[bool, str]:
-        """Validates that the Bitfinex API key is good for usage in Rotki.
+        """Validates that the Bitfinex API key is good for usage in rotki.
 
         Makes sure that the following permissions are given to the key:
         - Account History: get historical balances entries and trade information.
@@ -991,4 +1014,11 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for bitfinex
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for bitfinex

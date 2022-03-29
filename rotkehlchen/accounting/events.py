@@ -108,6 +108,8 @@ class TaxableEvents():
             fee_in_profit_currency: Fee,
             timestamp: Timestamp,
             is_from_prefork_virtual_buy: bool,
+            link: Optional[str],
+            notes: Optional[str],
     ) -> None:
         if is_from_prefork_virtual_buy:
             # This way we avoid double counting. For example BTC before BCH/BSV fork
@@ -123,9 +125,13 @@ class TaxableEvents():
                 paid_with_asset=paid_with_asset,
                 trade_rate=trade_rate,
                 fee_in_profit_currency=fee_in_profit_currency,
+                fee_currency=None,
+                fee_amount=Fee(ZERO),
                 timestamp=timestamp,
                 is_virtual=True,
                 is_from_prefork_virtual_buy=True,
+                link=link,
+                notes=notes,
             )
 
         if bought_asset == A_BTC and timestamp < BTC_BCH_FORK_TS:
@@ -137,9 +143,13 @@ class TaxableEvents():
                 paid_with_asset=paid_with_asset,
                 trade_rate=trade_rate,
                 fee_in_profit_currency=fee_in_profit_currency,
+                fee_currency=None,
+                fee_amount=Fee(ZERO),
                 timestamp=timestamp,
                 is_virtual=True,
                 is_from_prefork_virtual_buy=True,
+                link=link,
+                notes=notes,
             )
             self.add_buy(
                 location=location,
@@ -148,9 +158,13 @@ class TaxableEvents():
                 paid_with_asset=paid_with_asset,
                 trade_rate=trade_rate,
                 fee_in_profit_currency=fee_in_profit_currency,
+                fee_currency=None,
+                fee_amount=Fee(ZERO),
                 timestamp=timestamp,
                 is_virtual=True,
                 is_from_prefork_virtual_buy=True,
+                link=link,
+                notes=notes,
             )
 
         if bought_asset == A_BCH and timestamp < BCH_BSV_FORK_TS:
@@ -162,9 +176,13 @@ class TaxableEvents():
                 paid_with_asset=paid_with_asset,
                 trade_rate=trade_rate,
                 fee_in_profit_currency=fee_in_profit_currency,
+                fee_currency=None,
+                fee_amount=Fee(ZERO),
                 timestamp=timestamp,
                 is_virtual=True,
                 is_from_prefork_virtual_buy=True,
+                link=link,
+                notes=notes,
             )
 
     def handle_prefork_asset_sells(
@@ -213,7 +231,11 @@ class TaxableEvents():
             paid_with_asset: Asset,
             trade_rate: FVal,
             fee_in_profit_currency: Fee,
+            fee_currency: Optional[Asset],
+            fee_amount: Optional[Fee],
             timestamp: Timestamp,
+            link: Optional[str],
+            notes: Optional[str],
     ) -> None:
         """
         Account for the given buy and the corresponding sell if it's a crypto to crypto
@@ -232,8 +254,12 @@ class TaxableEvents():
             paid_with_asset=paid_with_asset,
             trade_rate=trade_rate,
             fee_in_profit_currency=fee_in_profit_currency,
+            fee_currency=fee_currency,
+            fee_amount=fee_amount,
             timestamp=timestamp,
             is_virtual=False,
+            link=link,
+            notes=notes,
         )
 
         if paid_with_asset.is_fiat() or not self.include_crypto2crypto:
@@ -262,7 +288,7 @@ class TaxableEvents():
 
         sold_amount = trade_rate * bought_amount
         if sold_amount == ZERO:
-            logger.error(
+            log.error(
                 f'Not adding a virtual sell event. Could not calculate it from '
                 f'trade_rate * bought_amount = {trade_rate} * {bought_amount}',
             )
@@ -290,9 +316,13 @@ class TaxableEvents():
             receiving_amount=receiving_amount,
             rate_in_profit_currency=rate_in_profit_currency,
             gain_in_profit_currency=gain_in_profit_currency,
-            total_fee_in_profit_currency=fee_in_profit_currency,
+            total_fee_in_profit_currency=Fee(ZERO),  # do not pay double fees
+            fee_currency=None,
+            fee_amount=Fee(ZERO),
             timestamp=timestamp,
             is_virtual=True,
+            link=link,
+            notes=notes,
         )
 
     def add_buy(
@@ -303,9 +333,13 @@ class TaxableEvents():
             paid_with_asset: Asset,
             trade_rate: FVal,
             fee_in_profit_currency: Fee,
+            fee_currency: Optional[Asset],
+            fee_amount: Optional[Fee],
             timestamp: Timestamp,
             is_virtual: bool = False,
             is_from_prefork_virtual_buy: bool = False,
+            link: Optional[str] = '',
+            notes: Optional[str] = '',
     ) -> None:
         """
         Account for the given buy
@@ -325,7 +359,7 @@ class TaxableEvents():
         if skip_trade:
             return
 
-        logger.debug(
+        log.debug(
             f'Processing buy trade of {bought_asset.identifier} with '
             f'{paid_with_asset.identifier} at {timestamp}',
         )
@@ -342,6 +376,8 @@ class TaxableEvents():
             fee_in_profit_currency=fee_in_profit_currency,
             timestamp=timestamp,
             is_from_prefork_virtual_buy=is_from_prefork_virtual_buy,
+            link=link,
+            notes=notes,
         )
 
         gross_cost = bought_amount * buy_rate
@@ -356,6 +392,13 @@ class TaxableEvents():
             rate=buy_rate,
             fee_in_profit_currency=fee_in_profit_currency,
         )
+        if fee_currency is not None and not fee_currency.is_fiat() and fee_amount is not None:
+            self.cost_basis.calculate_spend_cost_basis(
+                spending_amount=fee_amount,
+                spending_asset=fee_currency,
+                timestamp=timestamp,
+            )
+
         if timestamp >= self.query_start_ts:
             self.csv_exporter.add_buy(
                 location=location,
@@ -369,6 +412,8 @@ class TaxableEvents():
                 paid_with_asset_amount=trade_rate * bought_amount,
                 timestamp=timestamp,
                 is_virtual=is_virtual,
+                link=link,
+                notes=notes,
             )
 
     def add_sell_and_corresponding_buy(
@@ -380,9 +425,13 @@ class TaxableEvents():
             receiving_amount: FVal,
             gain_in_profit_currency: FVal,
             total_fee_in_profit_currency: Fee,
+            fee_currency: Optional[Asset],
+            fee_amount: Optional[Fee],
             trade_rate: FVal,
             rate_in_profit_currency: FVal,
             timestamp: Timestamp,
+            link: Optional[str],
+            notes: Optional[str],
     ) -> None:
         """
         Account for the given sell and the corresponding buy if it's a crypto to crypto
@@ -409,6 +458,19 @@ class TaxableEvents():
         - RemoteError if there is a problem reaching the price oracle server
         or with reading the response returned by the server
         """
+        # In the case where the fee asset is nominated in the asset that we receive
+        # take care that the fee is processed once we have the received asset in possesion.
+        if receiving_asset == fee_currency:
+            buy_fee_asset = fee_currency
+            buy_fee_amount: Optional[Fee] = fee_amount
+            sell_fee_asset = None
+            sell_fee_amount: Optional[Fee] = Fee(ZERO)
+        else:
+            buy_fee_asset = None
+            buy_fee_amount = Fee(ZERO)
+            sell_fee_asset = fee_currency
+            sell_fee_amount = fee_amount
+
         self.add_sell(
             location=location,
             selling_asset=selling_asset,
@@ -417,9 +479,13 @@ class TaxableEvents():
             receiving_amount=receiving_amount,
             gain_in_profit_currency=gain_in_profit_currency,
             total_fee_in_profit_currency=total_fee_in_profit_currency,
+            fee_currency=sell_fee_asset,
+            fee_amount=sell_fee_amount,
             rate_in_profit_currency=rate_in_profit_currency,
             timestamp=timestamp,
             is_virtual=False,
+            link=link,
+            notes=notes,
         )
 
         if receiving_asset.is_fiat() or not self.include_crypto2crypto:
@@ -436,9 +502,13 @@ class TaxableEvents():
             bought_amount=receiving_amount,
             paid_with_asset=selling_asset,
             trade_rate=1 / trade_rate,
-            fee_in_profit_currency=total_fee_in_profit_currency,
+            fee_in_profit_currency=Fee(ZERO),  # do not count fee twice
+            fee_currency=buy_fee_asset,
+            fee_amount=buy_fee_amount,
             timestamp=timestamp,
             is_virtual=True,
+            link=link,
+            notes=notes,
         )
 
     def add_sell(
@@ -450,10 +520,14 @@ class TaxableEvents():
             receiving_amount: Optional[FVal],
             gain_in_profit_currency: FVal,
             total_fee_in_profit_currency: Fee,
+            fee_currency: Optional[Asset],
+            fee_amount: Optional[Fee],
             rate_in_profit_currency: FVal,
             timestamp: Timestamp,
             loan_settlement: bool = False,
             is_virtual: bool = False,
+            link: Optional[str] = '',
+            notes: Optional[str] = '',
     ) -> None:
         """Account for the given sell action
 
@@ -473,14 +547,23 @@ class TaxableEvents():
             return
 
         if selling_amount == ZERO:
-            logger.error(
+            log.error(
                 f'Skipping sell trade of {selling_asset.identifier} for '
                 f'{receiving_asset.identifier if receiving_asset else "nothing"} at {timestamp}'
                 f' since the selling amount is 0',
             )
             return
 
-        logger.debug(
+        if selling_asset.is_fiat():
+            # Should be handled by a virtual buy
+            log.debug(
+                f'Skipping sell trade of {selling_asset.identifier} for '
+                f'{receiving_asset.identifier if receiving_asset else "nothing"} at {timestamp} '
+                f'since selling of FIAT of something will just be treated as a buy.',
+            )
+            return
+
+        log.debug(
             f'Processing sell trade of {selling_asset.identifier} for '
             f'{receiving_asset.identifier if receiving_asset else "nothing"} at {timestamp}',
         )
@@ -494,6 +577,12 @@ class TaxableEvents():
             fee_in_profit_currency=total_fee_in_profit_currency,
             gain_in_profit_currency=gain_in_profit_currency,
         )
+        if fee_currency is not None and not fee_currency.is_fiat() and fee_amount is not None:
+            self.cost_basis.calculate_spend_cost_basis(
+                spending_amount=fee_amount,
+                spending_asset=fee_currency,
+                timestamp=timestamp,
+            )
         self.handle_prefork_asset_sells(selling_asset, selling_amount, timestamp)
 
         # now search the acquisitions for `paid_with_asset` and calculate profit/loss
@@ -548,14 +637,12 @@ class TaxableEvents():
                 self.settlement_losses += settlement_loss
                 log.debug(
                     'Loan Settlement Loss',
-                    sensitive_log=True,
                     settlement_loss=settlement_loss,
                     profit_currency=self.profit_currency,
                 )
             else:
                 log.debug(
                     "After Sell Profit/Loss",
-                    sensitive_log=True,
                     taxable_profit_loss=taxable_profit_loss,
                     general_profit_loss=general_profit_loss,
                     profit_currency=self.profit_currency,
@@ -573,6 +660,8 @@ class TaxableEvents():
                     total_fee_in_profit_currency=total_fee_in_profit_currency,
                     timestamp=timestamp,
                     cost_basis_info=cost_basis_info,
+                    link=link,
+                    notes=notes,
                 )
             else:
                 assert receiving_asset, 'Here receiving asset should have a value'
@@ -595,6 +684,8 @@ class TaxableEvents():
                     cost_basis_info=cost_basis_info,
                     is_virtual=is_virtual,
                     total_bought_cost=total_bought_cost_in_profit_currency,
+                    link=link,
+                    notes=notes,
                 )
 
     def add_loan_gain(
@@ -606,6 +697,8 @@ class TaxableEvents():
             lent_amount: FVal,
             open_time: Timestamp,
             close_time: Timestamp,
+            link: Optional[str],
+            notes: Optional[str],
     ) -> None:
         """Account for gains from the given loan
         May raise:
@@ -635,7 +728,6 @@ class TaxableEvents():
         if timestamp >= self.query_start_ts:
             log.debug(
                 'Accounting for loan profit',
-                sensitive_log=True,
                 location=location,
                 gained_asset=gained_asset,
                 gained_amount=gained_amount,
@@ -654,6 +746,8 @@ class TaxableEvents():
                 lent_amount=lent_amount,
                 open_time=open_time,
                 close_time=close_time,
+                link=link,
+                notes=notes,
             )
 
     def add_margin_position(self, margin: MarginPosition) -> None:
@@ -708,7 +802,6 @@ class TaxableEvents():
 
             log.debug(
                 'Accounting for margin position',
-                sensitive_log=True,
                 notes=margin.notes,
                 gain_loss_asset=margin.pl_currency,
                 gain_loss_amount=margin.profit_loss,
@@ -723,13 +816,14 @@ class TaxableEvents():
                 gain_loss_amount=margin.profit_loss,
                 gain_loss_in_profit_currency=net_gain_loss_in_profit_currency,
                 timestamp=margin.close_time,
+                link=margin.link,
+                notes=margin.notes,
             )
 
     def add_defi_event(self, event: DefiEvent) -> None:
         event_description = str(event)
         log.debug(
             'Processing DeFi event',
-            sensitive_log=True,
             event=event_description,
         )
 
@@ -811,7 +905,6 @@ class TaxableEvents():
         profit_loss_list = []
         log.debug(
             'Accounting for DeFi event',
-            sensitive_log=True,
             event=event_description,
         )
 
@@ -860,7 +953,6 @@ class TaxableEvents():
         )
         log.debug(
             'Processing LedgerAction',
-            sensitive_log=True,
             action=action,
             rate_used=rate,
             account_for_action=account_for_action,

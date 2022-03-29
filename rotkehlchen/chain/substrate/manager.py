@@ -9,12 +9,13 @@ import gevent
 import requests
 from requests.adapters import Response
 from substrateinterface import SubstrateInterface
-from substrateinterface.exceptions import SubstrateRequestException
+from substrateinterface.exceptions import BlockNotFound, SubstrateRequestException
 from typing_extensions import Literal
 from websocket import WebSocketException
 
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
 from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset
 from rotkehlchen.fval import FVal
 from rotkehlchen.greenlets import GreenletManager
@@ -117,7 +118,7 @@ class SubstrateManager():
             connect_on_startup: bool,
             own_rpc_endpoint: str,
     ) -> None:
-        """An interface to any Substrate chain supported by Rotki.
+        """An interface to any Substrate chain supported by rotki.
 
         It uses Polkascan py-substrate-interface for interacting with the
         substrate blockchains and the Subscan API as a chain explorer.
@@ -297,6 +298,7 @@ class SubstrateManager():
                 ValueError,
                 WebSocketException,
                 gevent.Timeout,
+                BlockNotFound,
         ) as e:
             msg = str(e)
             if isinstance(e, gevent.Timeout):
@@ -313,6 +315,7 @@ class SubstrateManager():
             account=account,
             result=result,
         )
+
         balance = ZERO
         if result is not None:
             account_data = result.value['data']
@@ -433,7 +436,7 @@ class SubstrateManager():
                 type_registry_preset=si_attributes.type_registry_preset,
                 use_remote_preset=True,
             )
-        except (requests.exceptions.RequestException, WebSocketException) as e:
+        except (requests.exceptions.RequestException, WebSocketException, SubstrateRequestException) as e:  # noqa: E501
             message = (
                 f'{self.chain} could not connect to node at endpoint: {endpoint}. '
                 f'Connection error: {str(e)}.'
@@ -458,7 +461,7 @@ class SubstrateManager():
 
         log.debug(f'{self.chain} subscan API request', request_url=url)
         try:
-            response = requests.post(url=url)
+            response = requests.post(url=url, timeout=DEFAULT_TIMEOUT_TUPLE)
         except requests.exceptions.RequestException as e:
             message = f'{self.chain} failed to post request at {url}. Connection error: {str(e)}.'
             log.error(message)
@@ -553,8 +556,11 @@ class SubstrateManager():
         """
         return self._get_account_balance(account=account, node_interface=node_interface)
 
+    # # Create a generic TypeVar that can be either Kusama or PolkadotAddress
+    # T = TypeVar('T', KusamaAddress, PolkadotAddress)
     def get_accounts_balance(
             self,
+            # accounts: Union[List[KusamaAddress, PolkadotAddress]],
             accounts: List[SubstrateAddress],
     ) -> Dict[SubstrateAddress, FVal]:
         """Given a list of accounts get their amount of chain native token.

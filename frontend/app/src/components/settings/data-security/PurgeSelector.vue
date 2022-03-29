@@ -43,13 +43,13 @@
 
 <script lang="ts">
 import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
-import { DEFI_MODULES } from '@/components/defi/wizard/consts';
+import { SUPPORTED_MODULES } from '@/components/defi/wizard/consts';
 import ActionStatusIndicator from '@/components/error/ActionStatusIndicator.vue';
 import Fragment from '@/components/helper/Fragment';
 import { tradeLocations } from '@/components/history/consts';
 import {
-  ALL_DECENTRALIZED_EXCHANGES,
   ALL_CENTRALIZED_EXCHANGES,
+  ALL_DECENTRALIZED_EXCHANGES,
   ALL_MODULES,
   ALL_TRANSACTIONS,
   PURGABLE
@@ -93,7 +93,9 @@ export default class PurgeSelector extends Vue {
       }).toString();
     }
 
-    const module = DEFI_MODULES.find(({ identifier }) => identifier === source);
+    const module = SUPPORTED_MODULES.find(
+      ({ identifier }) => identifier === source
+    );
     if (module) {
       return this.$t('purge_selector.module', { name: module.name }).toString();
     }
@@ -111,5 +113,3 @@ export default class PurgeSelector extends Vue {
   }
 }
 </script>
-
-<style scoped lang="scss"></style>

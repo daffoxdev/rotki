@@ -15,12 +15,13 @@ from rotkehlchen.chain.ethereum.structures import (
     AaveRepayEvent,
 )
 from rotkehlchen.chain.ethereum.utils import token_normalized_value_decimals
-from rotkehlchen.constants.ethereum import ATOKEN_ABI
+from rotkehlchen.constants.ethereum import ATOKEN_ABI, ATOKEN_V2_ABI
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.errors import DeserializationError
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.price import query_usd_price_zero_if_error
 from rotkehlchen.inquirer import Inquirer
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
 from rotkehlchen.serialization.deserialize import deserialize_ethereum_address
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
@@ -32,16 +33,17 @@ from .common import (
     AaveHistory,
     AaveInquirer,
     _get_reserve_address_decimals,
-    aave_reserve_to_asset,
-    asset_to_aave_reserve,
+    aave_reserve_address_to_reserve_asset,
+    asset_to_aave_reserve_address,
+    asset_to_atoken,
 )
-from .constants import ASSET_TO_ATOKENV1
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
     from rotkehlchen.db.dbhandler import DBHandler
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 AAVE_GRAPH_RECENT_SECS = 600  # 10 mins
 
@@ -59,23 +61,6 @@ USER_RESERVES_QUERY = """
   }}
 }}"""
 
-
-DEPOSIT_EVENTS_QUERY = """
-  deposits (orderBy: timestamp, orderDirection: asc, where: {
-   user: $address, timestamp_lte: $end_ts, timestamp_gte: $start_ts
-  }) {
-    id
-    amount
-    referrer {
-      id
-    }
-    reserve {
-      id
-    }
-    timestamp
-  }
-}
-"""
 
 USER_EVENTS_QUERY = """
   users (where: {id: $address}) {
@@ -143,12 +128,74 @@ USER_EVENTS_QUERY = """
 }
 """
 
+USER_EVENTS_QUERY_V2 = """
+  users (where: {id: $address}) {
+    id
+    depositHistory {
+        id
+        amount
+        reserve {
+          id
+        }
+        timestamp
+    }
+    redeemUnderlyingHistory {
+        id
+        amount
+        reserve {
+          id
+        }
+        timestamp
+    }
+    borrowHistory {
+        id
+        amount
+        reserve {
+          id
+        }
+        timestamp
+        borrowRate
+        borrowRateMode
+    }
+    repayHistory {
+        id
+        amount
+        reserve {
+          id
+        }
+        timestamp
+    }
+    liquidationCallHistory {
+        id
+        collateralAmount
+        collateralReserve {
+          id
+        }
+        principalAmount
+        principalReserve {
+          id
+        }
+        timestamp
+    }
+    reserves{
+        id
+        aTokenBalanceHistory {
+          id
+          currentATokenBalance
+          timestamp
+        }
+    }
+  }
+}
+"""
+
 
 class ATokenBalanceHistory(NamedTuple):
     reserve_address: ChecksumEthAddress
     balance: FVal
     tx_hash: str
     timestamp: Timestamp
+    version: int
 
 
 class AaveUserReserve(NamedTuple):
@@ -161,6 +208,13 @@ class AaveEventProcessingResult(NamedTuple):
     total_earned_interest: Dict[Asset, Balance]
     total_lost: Dict[Asset, Balance]
     total_earned_liquidations: Dict[Asset, Balance]
+
+
+def _get_version_from_reserveid(pairs: List[str], index: int) -> int:
+    """Gets the aave version from the reserve address id"""
+    if pairs[index] == '24a42fd28c976a61df5d00d0599c34c4f90748c8':
+        return 1  # lending pool provider v1
+    return 2
 
 
 def _calculate_loss(
@@ -208,6 +262,7 @@ def _parse_common_event_data(
 ) -> Optional[Tuple[Timestamp, str, int]]:
     """Parses and returns the common data of each event.
 
+    Returns a tuple of timestamp, tx_hash and log index for success.
     Returns None if timestamp is out of range or if there is an error
     """
     timestamp = entry['timestamp']
@@ -257,8 +312,9 @@ def _parse_atoken_balance_history(
             )
             continue
 
+        version = _get_version_from_reserveid(pairs, 3)
         tx_hash = '0x' + pairs[4]
-        asset = aave_reserve_to_asset(reserve_address)
+        asset = aave_reserve_address_to_reserve_asset(reserve_address)
         if asset is None:
             log.error(
                 f'Unknown aave reserve address returned by atoken balance history '
@@ -267,12 +323,22 @@ def _parse_atoken_balance_history(
             continue
 
         _, decimals = _get_reserve_address_decimals(asset)
-        balance = token_normalized_value_decimals(int(entry['balance']), token_decimals=decimals)
+        if 'currentATokenBalance' in entry:
+            balance = token_normalized_value_decimals(
+                int(entry['currentATokenBalance']),
+                token_decimals=decimals,
+            )
+        else:
+            balance = token_normalized_value_decimals(
+                int(entry['balance']),
+                token_decimals=decimals,
+            )
         result.append(ATokenBalanceHistory(
             reserve_address=reserve_address,
             balance=balance,
             tx_hash=tx_hash,
             timestamp=timestamp,
+            version=version,
         ))
 
     return result
@@ -289,7 +355,7 @@ def _get_reserve_asset_and_decimals(
         log.error(f'Failed to Deserialize reserve address {entry[reserve_key]["id"]}')
         return None
 
-    asset = aave_reserve_to_asset(reserve_address)
+    asset = aave_reserve_address_to_reserve_asset(reserve_address)
     if asset is None:
         log.error(
             f'Unknown aave reserve address returned by graph query: '
@@ -319,6 +385,7 @@ class AaveGraphInquirer(AaveInquirer):
             msg_aggregator=msg_aggregator,
         )
         self.graph = Graph('https://api.thegraph.com/subgraphs/name/aave/protocol-multy-raw')
+        self.graph_v2 = Graph('https://api.thegraph.com/subgraphs/name/aave/protocol-v2')
 
     def get_history_for_addresses(
             self,
@@ -352,8 +419,11 @@ class AaveGraphInquirer(AaveInquirer):
         query = self.graph.query(
             querystr=USER_RESERVES_QUERY.format(address=address.lower()),
         )
+        query_v2 = self.graph_v2.query(
+            querystr=USER_RESERVES_QUERY.format(address=address.lower()),
+        )
         result = []
-        for entry in query['userReserves']:
+        for entry in query['userReserves'] + query_v2['userReserves']:
             reserve = entry['reserve']
             try:
                 result.append(AaveUserReserve(
@@ -424,7 +494,7 @@ class AaveGraphInquirer(AaveInquirer):
             else:  # withdrawal
                 atoken_balances[action.asset] -= action.value.amount
 
-            action_reserve_address = asset_to_aave_reserve(action.asset)
+            action_reserve_address = asset_to_aave_reserve_address(action.asset)
             if action_reserve_address is None:
                 log.error(
                     f'Could not find aave reserve address for asset'
@@ -451,7 +521,7 @@ class AaveGraphInquirer(AaveInquirer):
                     diff = entry.balance - atoken_balances[action.asset]
                     if diff != ZERO:
                         atoken_balances[action.asset] = entry.balance
-                        asset = ASSET_TO_ATOKENV1.get(action.asset, None)
+                        asset = asset_to_atoken(asset=action.asset, version=entry.version)
                         if asset is None:
                             log.error(
                                 f'Could not find corresponding aToken to '
@@ -463,7 +533,7 @@ class AaveGraphInquirer(AaveInquirer):
                         usd_price = query_usd_price_zero_if_error(
                             asset=asset,
                             time=timestamp,
-                            location='aave interest event from graph query',
+                            location=f'aave interest event {entry.tx_hash} from graph query',
                             msg_aggregator=self.msg_aggregator,
                         )
                         earned_balance = Balance(amount=diff, usd_value=diff * usd_price)
@@ -503,18 +573,26 @@ class AaveGraphInquirer(AaveInquirer):
 
         # Take aave unpaid interest into account
         for balance_asset, lending_balance in balances.lending.items():
-            atoken = ASSET_TO_ATOKENV1.get(balance_asset, None)
+            atoken = asset_to_atoken(balance_asset, version=lending_balance.version)
             if atoken is None:
                 log.error(
-                    f'Could not find corresponding aToken to '
-                    f'{balance_asset.identifier} during an aave graph unpair interest '
+                    f'Could not find corresponding v{lending_balance.version} aToken to '
+                    f'{balance_asset.identifier} during an aave graph unpaid interest '
                     f'query. Skipping entry...',
                 )
                 continue
+
+            if lending_balance.version == 1:
+                method = 'principalBalanceOf'
+                abi = ATOKEN_ABI
+            else:
+                method = 'scaledBalanceOf'
+                abi = ATOKEN_V2_ABI
+
             principal_balance = self.ethereum.call_contract(
                 contract_address=atoken.ethereum_address,
-                abi=ATOKEN_ABI,
-                method_name='principalBalanceOf',
+                abi=abi,
+                method_name=method,
                 arguments=[user_address],
             )
             unpaid_interest = lending_balance.balance.amount - (principal_balance / (FVal(10) ** FVal(atoken.decimals)))  # noqa: E501
@@ -582,6 +660,54 @@ class AaveGraphInquirer(AaveInquirer):
             total_earned_liquidations=total_earned_liquidations,
         )
 
+    def _process_graph_query_result(
+        self,
+        query: Dict[str, Any],
+        deposits: List[AaveDepositWithdrawalEvent],
+        withdrawals: List[AaveDepositWithdrawalEvent],
+        borrows: List[AaveBorrowEvent],
+        repays: List[AaveRepayEvent],
+        liquidation_calls: List[AaveLiquidationEvent],
+        user_merged_data: Dict[str, Any],
+        from_ts: Timestamp,
+        to_ts: Timestamp,
+    ) -> None:
+        """
+        Given a query result from the graph this function extracts information for:
+        - deposits
+        - withdrawals
+        - borrows
+        - repays
+        - liquidation_calls
+        and extends the corresponding arguments with the obtained information.
+        """
+        if 'users' not in query or len(query['users']) == 0:
+            # If there is no information on the query finish the execution
+            log.debug(f'Aave subgraph query has no information for user. {str(query)}')
+            return
+        user_result = query['users'][0]
+        msg = 'Failed to obtain a valid result from Aave graph.'
+        try:
+            deposits += self._parse_deposits(user_result['depositHistory'], from_ts, to_ts)
+            withdrawals += self._parse_withdrawals(
+                withdrawals=user_result['redeemUnderlyingHistory'],
+                from_ts=from_ts,
+                to_ts=to_ts,
+            )
+            borrows += self._parse_borrows(user_result['borrowHistory'], from_ts, to_ts)
+            repays += self._parse_repays(user_result['repayHistory'], from_ts, to_ts)
+            liquidation_calls += self._parse_liquidations(
+                liquidations=user_result['liquidationCallHistory'],
+                from_ts=from_ts,
+                to_ts=to_ts,
+            )
+        except KeyError as e:
+            self.msg_aggregator.add_warning(msg + f' Missing key {str(e)}')
+            return
+
+        for key, value in user_result.items():
+            user_merged_data[key].extend(value)
+
     def _get_user_data(
             self,
             from_ts: Timestamp,
@@ -598,35 +724,54 @@ class AaveGraphInquirer(AaveInquirer):
             last_query_ts = last_query[1]
             from_ts = Timestamp(last_query_ts + 1)
 
-        deposits = withdrawals = borrows = repays = liquidation_calls = []
+        deposits: List[AaveDepositWithdrawalEvent] = []
+        withdrawals: List[AaveDepositWithdrawalEvent] = []
+        borrows: List[AaveBorrowEvent] = []
+        repays: List[AaveRepayEvent] = []
+        liquidation_calls: List[AaveLiquidationEvent] = []
         query = self.graph.query(
             querystr=USER_EVENTS_QUERY,
             param_types={'$address': 'ID!'},
             param_values={'address': address.lower()},
         )
-        user_result = query['users'][0]
+        query_v2 = self.graph_v2.query(
+            querystr=USER_EVENTS_QUERY_V2,
+            param_types={'$address': 'ID!'},
+            param_values={'address': address.lower()},
+        )
+
+        user_merged_data: Dict[str, Any] = defaultdict(list)
         if now - last_query_ts > AAVE_GRAPH_RECENT_SECS:
             # In theory if these were individual queries we should do them only if
             # we have not queried recently. In practise since we only do 1 query above
             # this is useless for now, but keeping the mechanism in case we change
             # the way we query the subgraph
-            deposits = self._parse_deposits(user_result['depositHistory'], from_ts, to_ts)
-            withdrawals = self._parse_withdrawals(
-                withdrawals=user_result['redeemUnderlyingHistory'],
+            self._process_graph_query_result(
+                query=query,
+                deposits=deposits,
+                withdrawals=withdrawals,
+                borrows=borrows,
+                repays=repays,
+                liquidation_calls=liquidation_calls,
+                user_merged_data=user_merged_data,
                 from_ts=from_ts,
                 to_ts=to_ts,
             )
-            borrows = self._parse_borrows(user_result['borrowHistory'], from_ts, to_ts)
-            repays = self._parse_repays(user_result['repayHistory'], from_ts, to_ts)
-            liquidation_calls = self._parse_liquidations(
-                user_result['liquidationCallHistory'],
-                from_ts,
-                to_ts,
+            self._process_graph_query_result(
+                query=query_v2,
+                deposits=deposits,
+                withdrawals=withdrawals,
+                borrows=borrows,
+                repays=repays,
+                liquidation_calls=liquidation_calls,
+                user_merged_data=user_merged_data,
+                from_ts=from_ts,
+                to_ts=to_ts,
             )
 
         result = self._process_events(
             user_address=address,
-            user_result=user_result,
+            user_result=user_merged_data,
             from_ts=from_ts,
             to_ts=to_ts,
             deposits=deposits,
@@ -677,14 +822,26 @@ class AaveGraphInquirer(AaveInquirer):
                 timestamp=timestamp,
                 reserve_key='reserve',
                 amount_key='amount',
-                location='aave deposit from graph query',
+                location=f'aave deposit {tx_hash} from graph query',
             )
             if result is None:
                 continue  # problem parsing, error already logged
+
+            pairs = entry['reserve']['id'].split('0x')
+            if len(pairs) != 3:
+                log.error(
+                    f'Could not parse the id entry for an aave deposit entry as '
+                    f'returned by graph: {entry}.  Skipping entry ...',
+                )
+                continue
+
+            version = _get_version_from_reserveid(pairs, 2)
             asset, balance = result
-            atoken = ASSET_TO_ATOKENV1.get(asset, None)
+            atoken = asset_to_atoken(asset=asset, version=version)
             if atoken is None:
-                log.error(f'Could not find an aToken for asset {asset} during aave deposit')
+                log.error(
+                    f'Could not find a v{version} aToken for asset {asset} during aave deposit',
+                )
                 continue
 
             events.append(AaveDepositWithdrawalEvent(
@@ -717,14 +874,26 @@ class AaveGraphInquirer(AaveInquirer):
                 timestamp=timestamp,
                 reserve_key='reserve',
                 amount_key='amount',
-                location='aave withdrawal from graph query',
+                location=f'aave withdrawal {tx_hash} from graph query',
             )
             if result is None:
                 continue  # problem parsing, error already logged
+
+            pairs = entry['reserve']['id'].split('0x')
+            if len(pairs) != 3:
+                log.error(
+                    f'Could not parse the id entry for an aave withdrawals entry as '
+                    f'returned by graph: {entry}.  Skipping entry ...',
+                )
+                continue
+
+            version = _get_version_from_reserveid(pairs, 2)
             asset, balance = result
-            atoken = ASSET_TO_ATOKENV1.get(asset, None)
+            atoken = asset_to_atoken(asset=asset, version=version)
             if atoken is None:
-                log.error(f'Could not find an aToken for asset {asset} during aave withdraw')
+                log.error(
+                    f'Could not find a v{version} aToken for asset {asset} during aave withdraw',
+                )
                 continue
 
             events.append(AaveDepositWithdrawalEvent(
@@ -757,14 +926,15 @@ class AaveGraphInquirer(AaveInquirer):
                 timestamp=timestamp,
                 reserve_key='reserve',
                 amount_key='amount',
-                location='aave borrow from graph query',
+                location=f'aave borrow {tx_hash} from graph query',
             )
             if result is None:
                 continue  # problem parsing, error already logged
             asset, balance = result
             borrow_rate = FVal(entry['borrowRate']) / RAY
             borrow_rate_mode = entry['borrowRateMode']
-            accrued_borrow_interest = entry['accruedBorrowInterest']
+            # accruedBorrowInterest is not present in the V2 subgraph
+            accrued_borrow_interest = entry.get('accruedBorrowInterest', ZERO)
             events.append(AaveBorrowEvent(
                 event_type='borrow',
                 asset=asset,
@@ -796,15 +966,23 @@ class AaveGraphInquirer(AaveInquirer):
             if result is None:
                 continue  # problem parsing, error already logged
             asset, decimals = result
-            amount_after_fee = token_normalized_value_decimals(
-                int(entry['amountAfterFee']),
-                token_decimals=decimals,
-            )
-            fee = token_normalized_value_decimals(int(entry['fee']), token_decimals=decimals)
+            if 'amountAfterFee' in entry:
+                amount_after_fee = token_normalized_value_decimals(
+                    int(entry['amountAfterFee']),
+                    token_decimals=decimals,
+                )
+                fee = token_normalized_value_decimals(int(entry['fee']), token_decimals=decimals)
+            else:
+                # In the V2 subgraph the amountAfterFee and Fee keys are replaced by amount
+                amount_after_fee = token_normalized_value_decimals(
+                    int(entry['amount']),
+                    token_decimals=decimals,
+                )
+                fee = ZERO
             usd_price = query_usd_price_zero_if_error(
                 asset=asset,
                 time=timestamp,
-                location='aave repay from graph query',
+                location=f'aave repay event {tx_hash} from graph query',
                 msg_aggregator=self.msg_aggregator,
             )
             events.append(AaveRepayEvent(
@@ -837,7 +1015,7 @@ class AaveGraphInquirer(AaveInquirer):
                 timestamp=timestamp,
                 reserve_key='collateralReserve',
                 amount_key='collateralAmount',
-                location='aave liquidation from graph query',
+                location=f'aave liquidation {tx_hash} from graph query',
             )
             if result is None:
                 continue  # problem parsing, error already logged
@@ -848,7 +1026,7 @@ class AaveGraphInquirer(AaveInquirer):
                 timestamp=timestamp,
                 reserve_key='principalReserve',
                 amount_key='principalAmount',
-                location='aave liquidation from graph query',
+                location=f'aave liquidation {tx_hash} from graph query',
             )
             if result is None:
                 continue  # problem parsing, error already logged

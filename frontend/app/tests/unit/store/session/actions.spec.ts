@@ -4,6 +4,7 @@ import {
   QueriedAddressPayload
 } from '@/services/session/types';
 import store from '@/store/store';
+import { Module } from '@/types/modules';
 
 jest.mock('@/services/rotkehlchen-api');
 
@@ -38,7 +39,7 @@ describe('session:actions', () => {
   test('addQueriedAddress', async () => {
     expect.assertions(2);
     const payload: QueriedAddressPayload = {
-      module: 'makerdao_dsr',
+      module: Module.MAKERDAO_DSR,
       address: '0x52bc44d5378309EE2abF1539BF71dE1b7d7bE3b5'
     };
     const response: QueriedAddresses = {
@@ -53,7 +54,7 @@ describe('session:actions', () => {
   test('addQueriedAddress fails', async () => {
     expect.assertions(3);
     const payload: QueriedAddressPayload = {
-      module: 'makerdao_dsr',
+      module: Module.MAKERDAO_DSR,
       address: '0x52bc44d5378309EE2abF1539BF71dE1b7d7bE3b5'
     };
 
@@ -73,7 +74,7 @@ describe('session:actions', () => {
     };
     store.commit('session/queriedAddresses', originalState);
     const payload: QueriedAddressPayload = {
-      module: 'makerdao_dsr',
+      module: Module.MAKERDAO_DSR,
       address: '0x52bc44d5378309EE2abF1539BF71dE1b7d7bE3b5'
     };
 
@@ -90,7 +91,7 @@ describe('session:actions', () => {
     };
     store.commit('session/queriedAddresses', originalState);
     const payload: QueriedAddressPayload = {
-      module: 'makerdao_dsr',
+      module: Module.MAKERDAO_DSR,
       address: '0x52bc44d5378309EE2abF1539BF71dE1b7d7bE3b5'
     };
 

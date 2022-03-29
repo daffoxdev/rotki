@@ -2,9 +2,9 @@ import { mount, Wrapper } from '@vue/test-utils';
 import Vue from 'vue';
 import Vuetify from 'vuetify';
 import DefiWizard from '@/components/defi/wizard/DefiWizard.vue';
-import { DEFI_SETUP_DONE } from '@/store/settings/consts';
 import store from '@/store/store';
 import '../../../i18n';
+import { DEFI_SETUP_DONE } from '@/types/frontend-settings';
 
 Vue.use(Vuetify);
 
@@ -15,7 +15,7 @@ describe('DefiWizard.vue', () => {
     return mount(DefiWizard, {
       store,
       vuetify,
-      stubs: ['v-tooltip', 'defi-module-selector', 'defi-address-selector']
+      stubs: ['v-tooltip', 'module-selector', 'module-address-selector', 'card']
     });
   }
 

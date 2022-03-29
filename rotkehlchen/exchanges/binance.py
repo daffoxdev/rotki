@@ -4,34 +4,40 @@ import json
 import logging
 from collections import defaultdict
 from json.decoder import JSONDecodeError
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    DefaultDict,
-    Dict,
-    List,
-    NamedTuple,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlencode
 
 import gevent
 import requests
-from gevent.lock import Semaphore
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_binance
-from rotkehlchen.constants import BINANCE_BASE_URL, BINANCE_US_BASE_URL
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
-from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade, TradeType
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
+from rotkehlchen.db.constants import BINANCE_MARKETS_KEY
+from rotkehlchen.errors import (
+    DeserializationError,
+    InputError,
+    RemoteError,
+    UnknownAsset,
+    UnsupportedAsset,
+)
+from rotkehlchen.exchanges.data_structures import (
+    AssetMovement,
+    BinancePair,
+    MarginPosition,
+    Trade,
+    TradeType,
+)
 from rotkehlchen.exchanges.exchange import ExchangeInterface, ExchangeQueryBalances
-from rotkehlchen.exchanges.utils import deserialize_asset_movement_address, get_key_if_has_val
+from rotkehlchen.exchanges.utils import (
+    deserialize_asset_movement_address,
+    get_key_if_has_val,
+    query_binance_exchange_pairs,
+)
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.deserialization import deserialize_price
 from rotkehlchen.inquirer import Inquirer
@@ -41,11 +47,13 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount_force_positive,
     deserialize_fee,
     deserialize_timestamp_from_binance,
+    deserialize_timestamp_from_date,
 )
 from rotkehlchen.typing import ApiKey, ApiSecret, AssetMovementCategory, Fee, Location, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 
 if TYPE_CHECKING:
     from rotkehlchen.db.dbhandler import DBHandler
@@ -57,34 +65,15 @@ log = RotkehlchenLogsAdapter(logger)
 # https://www.binance.com/en/support/articles/115000599831-Binance-Exchange-Launched-Date-Set
 BINANCE_LAUNCH_TS = Timestamp(1500001200)
 API_TIME_INTERVAL_CONSTRAINT_TS = Timestamp(7776000)  # 90 days
+
 V3_METHODS = (
     'account',
     'myTrades',
     'openOrders',
-)
-
-V1_METHODS = (
     'exchangeInfo',
     'time',
 )
-
-WAPI_METHODS = (
-    'depositHistory.html',
-    'withdrawHistory.html',
-)
-
-SAPI_METHODS = (
-    'futures/loan/wallet',
-    'lending/daily/token/position',
-    'lending/daily/product/list',
-    'lending/union/account',
-    'bswap/liquidity',
-)
-
-FAPI_METHODS = (
-    'balance',
-    'account',
-)
+PUBLIC_METHODS = ('exchangeInfo', 'time')
 
 RETRY_AFTER_LIMIT = 60
 # Binance api error codes we check for (all below apis seem to have the same)
@@ -94,7 +83,10 @@ RETRY_AFTER_LIMIT = 60
 REJECTED_MBX_KEY = -2015
 
 
-BINANCE_API_TYPE = Literal['api', 'sapi', 'wapi', 'dapi', 'fapi']
+BINANCE_API_TYPE = Literal['api', 'sapi', 'dapi', 'fapi']
+
+BINANCE_BASE_URL = 'binance.com/'
+BINANCEUS_BASE_URL = 'binance.us/'
 
 
 class BinancePermissionError(RemoteError):
@@ -103,19 +95,10 @@ class BinancePermissionError(RemoteError):
     Example is when there is no margin account to query or insufficient api key permissions."""
 
 
-class BinancePair(NamedTuple):
-    """A binance pair. Contains the symbol in the Binance mode e.g. "ETHBTC" and
-    the base and quote assets of that symbol as parsed from exchangeinfo endpoint
-    result"""
-    symbol: str
-    binance_base_asset: str
-    binance_quote_asset: str
-
-
 def trade_from_binance(
         binance_trade: Dict,
         binance_symbols_to_pair: Dict[str, BinancePair],
-        name: str = 'binance',
+        location: Location,
 ) -> Trade:
     """Turn a binance trade returned from trade history to our common trade
     history format
@@ -135,15 +118,15 @@ def trade_from_binance(
     rate = deserialize_price(binance_trade['price'])
     if binance_trade['symbol'] not in binance_symbols_to_pair:
         raise DeserializationError(
-            f'Error reading a {name} trade. Could not find '
+            f'Error reading a {str(location)} trade. Could not find '
             f'{binance_trade["symbol"]} in binance_symbols_to_pair',
         )
 
     binance_pair = binance_symbols_to_pair[binance_trade['symbol']]
     timestamp = deserialize_timestamp_from_binance(binance_trade['time'])
 
-    base_asset = asset_from_binance(binance_pair.binance_base_asset)
-    quote_asset = asset_from_binance(binance_pair.binance_quote_asset)
+    base_asset = binance_pair.base_asset
+    quote_asset = binance_pair.quote_asset
 
     if binance_trade['isBuyer']:
         order_type = TradeType.BUY
@@ -155,8 +138,7 @@ def trade_from_binance(
     fee = deserialize_fee(binance_trade['commission'])
 
     log.debug(
-        f'Processing {name} Trade',
-        sensitive_log=True,
+        f'Processing {str(location)} Trade',
         amount=amount,
         rate=rate,
         timestamp=timestamp,
@@ -167,8 +149,6 @@ def trade_from_binance(
         commision_asset=binance_trade['commissionAsset'],
         fee=fee,
     )
-
-    location = Location.BINANCE if name == str(Location.BINANCE) else Location.BINANCE_US  # noqa: E501
     return Trade(
         timestamp=timestamp,
         location=location,
@@ -183,29 +163,10 @@ def trade_from_binance(
     )
 
 
-def create_binance_symbols_to_pair(exchange_data: Dict[str, Any]) -> Dict[str, BinancePair]:
-    """Parses the result of 'exchangeInfo' endpoint and creates the symbols_to_pair mapping
-    """
-    symbols_to_pair: Dict[str, BinancePair] = {}
-    for symbol in exchange_data['symbols']:
-        symbol_str = symbol['symbol']
-        if isinstance(symbol_str, FVal):
-            # the to_int here may rase but should never due to the if check above
-            symbol_str = str(symbol_str.to_int(exact=True))
-
-        symbols_to_pair[symbol_str] = BinancePair(
-            symbol=symbol_str,
-            binance_base_asset=symbol['baseAsset'],
-            binance_quote_asset=symbol['quoteAsset'],
-        )
-
-    return symbols_to_pair
-
-
 class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     """This class supports:
       - Binance: when instantiated with default uri, equals BINANCE_BASE_URL.
-      - Binance US: when instantiated with uri equals BINANCE_US_BASE_URL.
+      - Binance US: when instantiated with uri equals BINANCEUS_BASE_URL.
 
     Binance exchange api docs:
     https://github.com/binance-exchange/binance-official-api-docs/
@@ -218,25 +179,33 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     """
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
             uri: str = BINANCE_BASE_URL,
+            PAIRS: Optional[List[str]] = None,  # noqa: N803
     ):
-        exchange_name = str(Location.BINANCE)
-        if uri == BINANCE_US_BASE_URL:
-            exchange_name = str(Location.BINANCE_US)
+        exchange_location = Location.BINANCE
+        if uri == BINANCEUS_BASE_URL:
+            exchange_location = Location.BINANCEUS
 
-        super().__init__(exchange_name, api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=exchange_location,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.uri = uri
         self.session.headers.update({
             'Accept': 'application/json',
             'X-MBX-APIKEY': self.api_key,
         })
         self.msg_aggregator = msg_aggregator
-        self.nonce_lock = Semaphore()
         self.offset_ms = 0
+        self.selected_pairs = PAIRS
 
     def first_connection(self) -> None:
         if self.first_connection_made:
@@ -244,16 +213,58 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         # If it's the first time, populate the binance pair trade symbols
         # We know exchangeInfo returns a dict
-        exchange_data = self.api_query_dict('api', 'exchangeInfo')
-        self._symbols_to_pair = create_binance_symbols_to_pair(exchange_data)
+        try:
+            self._symbols_to_pair = query_binance_exchange_pairs(location=self.location)
+        except InputError as e:
+            self.msg_aggregator.add_error(
+                f'Binance exchange couldnt be properly initialized. '
+                f'Missing the exchange markets. {str(e)}',
+            )
+            self._symbols_to_pair = {}
 
         server_time = self.api_query_dict('api', 'time')
         self.offset_ms = server_time['serverTime'] - ts_now_in_ms()
 
         self.first_connection_made = True
 
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'X-MBX-APIKEY': api_key})
+        return changed
+
+    def edit_exchange(
+            self,
+            name: Optional[str],
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            **kwargs: Any,
+    ) -> Tuple[bool, str]:
+        success, msg = super().edit_exchange(
+            name=name,
+            api_key=api_key,
+            api_secret=api_secret,
+            **kwargs,
+        )
+        if success is False:
+            return success, msg
+
+        binance_markets = kwargs.get(BINANCE_MARKETS_KEY)
+        if binance_markets is None:
+            return success, msg
+
+        # here we can finally update the account type
+        self.selected_pairs = binance_markets
+        return True, ''
+
     @property
     def symbols_to_pair(self) -> Dict[str, BinancePair]:
+        """Returns binance symbols to pair if in memory otherwise queries binance"""
         self.first_connection()
         return self._symbols_to_pair
 
@@ -294,61 +305,47 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         call_options = options.copy() if options else {}
 
         while True:
-            with self.nonce_lock:
-                # Protect this region with a lock since binance will reject
-                # non-increasing nonces. So if two greenlets come in here at
-                # the same time one of them will fail
-                if 'signature' in call_options:
-                    del call_options['signature']
+            if 'signature' in call_options:
+                del call_options['signature']
 
-                is_v3_api_method = api_type == 'api' and method in V3_METHODS
-                is_new_futures_api = api_type in ('fapi', 'dapi')
-                call_needs_signature = (
-                    (api_type == 'fapi' and method in FAPI_METHODS) or
-                    (api_type == 'dapi' and method in FAPI_METHODS) or  # same as fapi
-                    (api_type == 'sapi' and method in SAPI_METHODS) or
-                    (api_type == 'wapi' and method in WAPI_METHODS) or
-                    is_v3_api_method
-                )
-                if call_needs_signature:
-                    if api_type in ('sapi', 'dapi'):
-                        api_version = 1
-                    elif api_type == 'fapi':
-                        api_version = 2
-                    elif api_type == 'wapi' or is_v3_api_method:
-                        api_version = 3
-                    else:
-                        raise AssertionError(
-                            f'Should never get to signed binance api call for '
-                            f'api_type: {api_type} and method {method}',
-                        )
-
-                    # Recommended recvWindows is 5000 but we get timeouts with it
-                    call_options['recvWindow'] = 10000
-                    call_options['timestamp'] = str(ts_now_in_ms() + self.offset_ms)
-                    signature = hmac.new(
-                        self.secret,
-                        urlencode(call_options).encode('utf-8'),
-                        hashlib.sha256,
-                    ).hexdigest()
-                    call_options['signature'] = signature
-                elif api_type == 'api' and method in V1_METHODS:
+            is_v3_api_method = api_type == 'api' and method in V3_METHODS
+            is_new_futures_api = api_type in ('fapi', 'dapi')
+            api_version = 3  # public methos are v3
+            if method not in PUBLIC_METHODS:  # api call needs signature
+                if api_type in ('sapi', 'dapi'):
                     api_version = 1
+                elif api_type == 'fapi':
+                    api_version = 2
+                elif is_v3_api_method:
+                    api_version = 3
                 else:
-                    raise AssertionError(f'Unexpected {self.name} API method {method}')
+                    raise AssertionError(
+                        f'Should never get to signed binance api call for '
+                        f'api_type: {api_type} and method {method}',
+                    )
 
-                api_subdomain = api_type if is_new_futures_api else 'api'
-                request_url = (
-                    f'https://{api_subdomain}.{self.uri}{api_type}/v{str(api_version)}/{method}?'
-                )
-                request_url += urlencode(call_options)
-                log.debug(f'{self.name} API request', request_url=request_url)
-                try:
-                    response = self.session.get(request_url)
-                except requests.exceptions.RequestException as e:
-                    raise RemoteError(
-                        f'{self.name} API request failed due to {str(e)}',
-                    ) from e
+                # Recommended recvWindows is 5000 but we get timeouts with it
+                call_options['recvWindow'] = 10000
+                call_options['timestamp'] = str(ts_now_in_ms() + self.offset_ms)
+                signature = hmac.new(
+                    self.secret,
+                    urlencode(call_options).encode('utf-8'),
+                    hashlib.sha256,
+                ).hexdigest()
+                call_options['signature'] = signature
+
+            api_subdomain = api_type if is_new_futures_api else 'api'
+            request_url = (
+                f'https://{api_subdomain}.{self.uri}{api_type}/v{str(api_version)}/{method}?'
+            )
+            request_url += urlencode(call_options)
+            log.debug(f'{self.name} API request', request_url=request_url)
+            try:
+                response = self.session.get(request_url, timeout=DEFAULT_TIMEOUT_TUPLE)
+            except requests.exceptions.RequestException as e:
+                raise RemoteError(
+                    f'{self.name} API request failed due to {str(e)}',
+                ) from e
 
             if response.status_code not in (200, 418, 429):
                 code = 'no code found'
@@ -361,9 +358,18 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 except JSONDecodeError:
                     pass
 
+                if 'Invalid symbol' in msg and method == 'myTrades':
+                    assert options, 'We always provide options for myTrades call'
+                    symbol = options.get('symbol', 'no symbol given')
+                    # Binance does not return trades for delisted markets. It also may
+                    # return a delisted market in the active market endpoints, so we
+                    # need to handle it here.
+                    log.debug(f'Couldnt query {self.name} trades for {symbol} since its delisted')
+                    return []
+
                 exception_class: Union[Type[RemoteError], Type[BinancePermissionError]]
                 if response.status_code == 401 and code == REJECTED_MBX_KEY:
-                    # Either API key permission error or if futures/dapi then not enables yet
+                    # Either API key permission error or if futures/dapi then not enabled yet
                     exception_class = BinancePermissionError
                 else:
                     exception_class = RemoteError
@@ -428,7 +434,11 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     ) -> Dict:
         """May raise RemoteError and BinancePermissionError due to api_query"""
         result = self.api_query(api_type, method, options)
-        assert isinstance(result, Dict)  # pylint: disable=isinstance-second-argument-not-valid-type  # noqa: E501
+        if not isinstance(result, dict):
+            error_msg = f'Expected dict but did not get it in {self.name} api response.'
+            log.error(f'{error_msg}. Got: {result}')
+            raise RemoteError(error_msg)
+
         return result
 
     def api_query_list(
@@ -439,7 +449,22 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     ) -> List:
         """May raise RemoteError and BinancePermissionError due to api_query"""
         result = self.api_query(api_type, method, options)
-        assert isinstance(result, List)  # pylint: disable=isinstance-second-argument-not-valid-type  # noqa: E501
+        if isinstance(result, Dict):
+            if 'data' in result:
+                result = result['data']
+            elif 'total' in result and result['total'] == 0:
+                # This is a completely undocumented behavior of their api seen in the wild.
+                # At least one endpoint (/sapi/v1/fiat/payments) can omit the data
+                # key in the response object instead of returning an empty list like
+                # other endpoints.
+                # {'code': '000000', 'message': 'success', 'success': True, 'total': 0}
+                return []
+
+        if not isinstance(result, list):
+            error_msg = f'Expected list but did not get it in {self.name} api response.'
+            log.error(f'{error_msg}. Got: {result}')
+            raise RemoteError(error_msg)
+
         return result
 
     def _query_spot_balances(
@@ -783,7 +808,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self.first_connection()
             returned_balances: DefaultDict[Asset, Balance] = defaultdict(Balance)
             returned_balances = self._query_spot_balances(returned_balances)
-            if self.name != str(Location.BINANCE_US):
+            if self.location != Location.BINANCEUS:
                 returned_balances = self._query_lending_balances(returned_balances)
                 returned_balances = self._query_cross_collateral_futures_balances(returned_balances)  # noqa: E501
                 returned_balances = self._query_margined_futures_balances('fapi', returned_balances)  # noqa: E501
@@ -800,7 +825,6 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         log.debug(
             f'{self.name} balance query result',
-            sensitive_log=True,
             balances=returned_balances,
         )
         return dict(returned_balances), ''
@@ -809,8 +833,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-            markets: Optional[List[str]] = None,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         """
 
         May raise due to api query and unexpected id:
@@ -818,11 +841,10 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         - BinancePermissionError
         """
         self.first_connection()
-
-        if not markets:
-            iter_markets = list(self._symbols_to_pair.keys())
+        if self.selected_pairs is not None:
+            iter_markets = list(set(self.selected_pairs).intersection(set(self._symbols_to_pair.keys())))  # noqa: E501
         else:
-            iter_markets = markets
+            iter_markets = list(self._symbols_to_pair.keys())
 
         raw_data = []
         # Limit of results to return. 1000 is max limit according to docs
@@ -866,7 +888,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 trade = trade_from_binance(
                     binance_trade=raw_trade,
                     binance_symbols_to_pair=self.symbols_to_pair,
-                    name=self.name,
+                    location=self.location,
                 )
             except UnknownAsset as e:
                 self.msg_aggregator.add_warning(
@@ -904,7 +926,172 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
             trades.append(trade)
 
+        fiat_payments = self._query_online_fiat_payments(start_ts=start_ts, end_ts=end_ts)
+        if fiat_payments:
+            trades += fiat_payments
+            trades.sort(key=lambda x: x.timestamp)
+
+        return trades, (start_ts, end_ts)
+
+    def _query_online_fiat_payments(self, start_ts: Timestamp, end_ts: Timestamp) -> List[Trade]:
+        if self.location == Location.BINANCEUS:
+            return []  # dont exist for Binance US: https://github.com/rotki/rotki/issues/3664
+
+        fiat_buys = self._api_query_list_within_time_delta(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
+            api_type='sapi',
+            method='fiat/payments',
+            additional_options={'transactionType': 0},
+        )
+        log.debug(f'{self.name} fiat buys history result', results_num=len(fiat_buys))
+        fiat_sells = self._api_query_list_within_time_delta(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
+            api_type='sapi',
+            method='fiat/payments',
+            additional_options={'transactionType': 1},
+        )
+        log.debug(f'{self.name} fiat sells history result', results_num=len(fiat_sells))
+
+        trades = []
+        for idx, raw_fiat in enumerate(fiat_buys + fiat_sells):
+            trade_type = TradeType.BUY if idx < len(fiat_buys) else TradeType.SELL
+            trade = self._deserialize_fiat_payment(raw_fiat, trade_type=trade_type)
+            if trade:
+                trades.append(trade)
+
         return trades
+
+    def _deserialize_fiat_payment(
+            self,
+            raw_data: Dict[str, Any],
+            trade_type: TradeType,
+    ) -> Optional[Trade]:
+        """Processes a single deposit/withdrawal from binance and deserializes it
+
+        Can log error/warning and return None if something went wrong at deserialization
+        """
+        try:
+            if 'status' not in raw_data or raw_data['status'] != 'Completed':
+                log.error(
+                    f'Found {str(self.location)} fiat payment with failed status. Ignoring it.',
+                )
+                return None
+
+            fiat_asset = asset_from_binance(raw_data['fiatCurrency'])
+            tx_id = get_key_if_has_val(raw_data, 'orderNo')
+            timestamp = deserialize_timestamp_from_binance(raw_data['createTime'])
+            fee = Fee(deserialize_asset_amount(raw_data['totalFee']))
+            link_str = str(tx_id) if tx_id else ''
+            crypto_asset = asset_from_binance(raw_data['cryptoCurrency'])
+            obtain_amount = deserialize_asset_amount_force_positive(
+                raw_data['obtainAmount'],
+            )
+            rate = deserialize_price(raw_data['price'])
+            base_asset = crypto_asset
+            quote_asset = fiat_asset
+            return Trade(
+                timestamp=timestamp,
+                location=self.location,
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+                trade_type=trade_type,
+                amount=obtain_amount,
+                rate=rate,
+                fee=fee,
+                fee_currency=quote_asset,
+                link=link_str,
+            )
+
+        except UnknownAsset as e:
+            self.msg_aggregator.add_warning(
+                f'Found {str(self.location)} fiat payment with unknown asset '
+                f'{e.asset_name}. Ignoring it.',
+            )
+        except UnsupportedAsset as e:
+            self.msg_aggregator.add_warning(
+                f'Found {str(self.location)} fiat payment with unsupported asset '
+                f'{e.asset_name}. Ignoring it.',
+            )
+        except (DeserializationError, KeyError) as e:
+            msg = str(e)
+            if isinstance(e, KeyError):
+                msg = f'Missing key entry for {msg}.'
+            self.msg_aggregator.add_error(
+                f'Error processing a {str(self.location)} fiat payment. Check logs '
+                f'for details. Ignoring it.',
+            )
+            log.error(
+                f'Error processing a {str(self.location)} fiat payment',
+                asset_movement=raw_data,
+                error=msg,
+            )
+
+        return None
+
+    def _deserialize_fiat_movement(
+            self,
+            raw_data: Dict[str, Any],
+            category: AssetMovementCategory,
+    ) -> Optional[AssetMovement]:
+        """Processes a single deposit/withdrawal from binance and deserializes it
+
+        Can log error/warning and return None if something went wrong at deserialization
+        """
+        try:
+            if 'status' not in raw_data or raw_data['status'] not in ('Successful', 'Finished'):
+                log.error(
+                    f'Found {str(self.location)} fiat deposit/withdrawal with failed status. Ignoring it.',  # noqa: E501
+                )
+                return None
+
+            asset = asset_from_binance(raw_data['fiatCurrency'])
+            tx_id = get_key_if_has_val(raw_data, 'orderNo')
+            timestamp = deserialize_timestamp_from_binance(raw_data['createTime'])
+            fee = Fee(deserialize_asset_amount(raw_data['totalFee']))
+            link_str = str(tx_id) if tx_id else ''
+            amount = deserialize_asset_amount_force_positive(raw_data['amount'])
+            return AssetMovement(
+                location=self.location,
+                category=category,
+                address=deserialize_asset_movement_address(raw_data, 'address', asset),
+                transaction_id=tx_id,
+                timestamp=timestamp,
+                asset=asset,
+                amount=amount,
+                fee_asset=asset,
+                fee=fee,
+                link=link_str,
+            )
+
+        except UnknownAsset as e:
+            self.msg_aggregator.add_warning(
+                f'Found {str(self.location)} fiat deposit/withdrawal with unknown asset '
+                f'{e.asset_name}. Ignoring it.',
+            )
+        except UnsupportedAsset as e:
+            self.msg_aggregator.add_warning(
+                f'Found {str(self.location)} fiat deposit/withdrawal with unsupported asset '
+                f'{e.asset_name}. Ignoring it.',
+            )
+        except (DeserializationError, KeyError) as e:
+            msg = str(e)
+            if isinstance(e, KeyError):
+                msg = f'Missing key entry for {msg}.'
+            self.msg_aggregator.add_error(
+                f'Error processing a {str(self.location)} fiat deposit/withdrawal. Check logs '
+                f'for details. Ignoring it.',
+            )
+            log.error(
+                f'Error processing a {str(self.location)} fiat deposit/withdrawal',
+                asset_movement=raw_data,
+                error=msg,
+            )
+
+        return None
 
     def _deserialize_asset_movement(self, raw_data: Dict[str, Any]) -> Optional[AssetMovement]:
         """Processes a single deposit/withdrawal from binance and deserializes it
@@ -914,36 +1101,43 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         try:
             if 'insertTime' in raw_data:
                 category = AssetMovementCategory.DEPOSIT
-                time_key = 'insertTime'
+                timestamp = deserialize_timestamp_from_binance(raw_data['insertTime'])
+                fee = Fee(ZERO)
             else:
                 category = AssetMovementCategory.WITHDRAWAL
-                time_key = 'applyTime'
+                timestamp = deserialize_timestamp_from_date(
+                    date=raw_data['applyTime'],
+                    formatstr='%Y-%m-%d %H:%M:%S',
+                    location='binance withdrawal',
+                    skip_milliseconds=True,
+                )
+                fee = Fee(deserialize_asset_amount(raw_data['transactionFee']))
 
-            timestamp = deserialize_timestamp_from_binance(raw_data[time_key])
-            asset = asset_from_binance(raw_data['asset'])
-            location = Location.BINANCE if self.name == str(Location.BINANCE) else Location.BINANCE_US  # noqa: E501
+            asset = asset_from_binance(raw_data['coin'])
+            tx_id = get_key_if_has_val(raw_data, 'txId')
+            internal_id = get_key_if_has_val(raw_data, 'id')
+            link_str = str(internal_id) if internal_id else str(tx_id) if tx_id else ''
             return AssetMovement(
-                location=location,
+                location=self.location,
                 category=category,
                 address=deserialize_asset_movement_address(raw_data, 'address', asset),
-                transaction_id=get_key_if_has_val(raw_data, 'txId'),
+                transaction_id=tx_id,
                 timestamp=timestamp,
                 asset=asset,
                 amount=deserialize_asset_amount_force_positive(raw_data['amount']),
                 fee_asset=asset,
-                # Binance does not include withdrawal fees neither in the API nor in their UI
-                fee=Fee(ZERO),
-                link=str(raw_data['txId']),
+                fee=fee,
+                link=link_str,
             )
 
         except UnknownAsset as e:
             self.msg_aggregator.add_warning(
-                f'Found {self.name} deposit/withdrawal with unknown asset '
+                f'Found {str(self.location)} deposit/withdrawal with unknown asset '
                 f'{e.asset_name}. Ignoring it.',
             )
         except UnsupportedAsset as e:
             self.msg_aggregator.add_warning(
-                f'Found {self.name} deposit/withdrawal with unsupported asset '
+                f'Found {str(self.location)} deposit/withdrawal with unsupported asset '
                 f'{e.asset_name}. Ignoring it.',
             )
         except (DeserializationError, KeyError) as e:
@@ -951,24 +1145,30 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             if isinstance(e, KeyError):
                 msg = f'Missing key entry for {msg}.'
             self.msg_aggregator.add_error(
-                f'Error processing a {self.name} deposit/withdrawal. Check logs '
+                f'Error processing a {str(self.location)} deposit/withdrawal. Check logs '
                 f'for details. Ignoring it.',
             )
             log.error(
-                f'Error processing a {self.name} deposit_withdrawal',
+                f'Error processing a {str(self.location)} deposit/withdrawal',
                 asset_movement=raw_data,
                 error=msg,
             )
 
         return None
 
-    def _api_query_dict_within_time_delta(
+    def _api_query_list_within_time_delta(
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
             time_delta: Timestamp,
             api_type: BINANCE_API_TYPE,
-            method: Literal['depositHistory.html', 'withdrawHistory.html'],
+            method: Literal[
+                'capital/deposit/hisrec',
+                'capital/withdraw/history',
+                'fiat/orders',
+                'fiat/payments',
+            ],
+            additional_options: Dict = None,
     ) -> List[Dict[str, Any]]:
         """Request via `api_query_dict()` from `start_ts` `end_ts` using a time
         delta (offset) less than `time_delta`.
@@ -979,15 +1179,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
           `used_query_ranges` table, but 0.
           - Timestamps are converted to milliseconds.
         """
-        if method == 'depositHistory.html':
-            query_schema = 'depositList'
-        elif method == 'withdrawHistory.html':
-            query_schema = 'withdrawList'
-        else:
-            raise AssertionError(f'Unexpected {self.name} method case: {method}.')
-
         results: List[Dict[str, Any]] = []
-
         # Create required time references in milliseconds
         start_ts = Timestamp(start_ts * 1000)
         end_ts = Timestamp(end_ts * 1000)
@@ -1008,8 +1200,10 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 'startTime': from_ts,
                 'endTime': to_ts,
             }
-            result = self.api_query_dict(api_type, method, options=options)
-            results.extend(result.get(query_schema, []))
+            if additional_options:
+                options.update(additional_options)
+            result = self.api_query_list(api_type, method, options=options)
+            results.extend(result)
             # Case stop requesting
             if to_ts >= end_ts:
                 break
@@ -1033,27 +1227,56 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         https://binance-docs.github.io/apidocs/spot/en/#deposit-history-user_data
         https://binance-docs.github.io/apidocs/spot/en/#withdraw-history-user_data
         """
-        deposits = self._api_query_dict_within_time_delta(
+        deposits = self._api_query_list_within_time_delta(
             start_ts=start_ts,
             end_ts=end_ts,
             time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
-            api_type='wapi',
-            method='depositHistory.html',
+            api_type='sapi',
+            method='capital/deposit/hisrec',
         )
         log.debug(f'{self.name} deposit history result', results_num=len(deposits))
 
-        withdraws = self._api_query_dict_within_time_delta(
+        withdraws = self._api_query_list_within_time_delta(
             start_ts=start_ts,
             end_ts=end_ts,
             time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
-            api_type='wapi',
-            method='withdrawHistory.html',
+            api_type='sapi',
+            method='capital/withdraw/history',
         )
         log.debug(f'{self.name} withdraw history result', results_num=len(withdraws))
+
+        if self.location != Location.BINANCEUS:
+            # dont exist for Binance US: https://github.com/rotki/rotki/issues/3664
+            fiat_deposits = self._api_query_list_within_time_delta(
+                start_ts=Timestamp(0),
+                end_ts=end_ts,
+                time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
+                api_type='sapi',
+                method='fiat/orders',
+                additional_options={'transactionType': 0},
+            )
+            log.debug(f'{self.name} fiat deposit history result', results_num=len(fiat_deposits))
+            fiat_withdraws = self._api_query_list_within_time_delta(
+                start_ts=Timestamp(0),
+                end_ts=end_ts,
+                time_delta=API_TIME_INTERVAL_CONSTRAINT_TS,
+                api_type='sapi',
+                method='fiat/orders',
+                additional_options={'transactionType': 1},
+            )
+            log.debug(f'{self.name} fiat withdraw history result', results_num=len(fiat_withdraws))
+        else:
+            fiat_deposits = fiat_withdraws = []
 
         movements = []
         for raw_movement in deposits + withdraws:
             movement = self._deserialize_asset_movement(raw_movement)
+            if movement:
+                movements.append(movement)
+
+        for idx, fiat_movement in enumerate(fiat_deposits + fiat_withdraws):
+            category = AssetMovementCategory.DEPOSIT if idx < len(fiat_deposits) else AssetMovementCategory.WITHDRAWAL  # noqa: E501
+            movement = self._deserialize_fiat_movement(fiat_movement, category=category)
             if movement:
                 movements.append(movement)
 
@@ -1064,4 +1287,11 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for binance
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for binance

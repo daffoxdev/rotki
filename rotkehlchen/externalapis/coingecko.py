@@ -1,6 +1,5 @@
 import json
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Union, overload
 from urllib.parse import urlencode
 
@@ -11,7 +10,7 @@ from typing_extensions import Literal
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants import ZERO
 from rotkehlchen.constants.resolver import strethaddress_to_identifier
-from rotkehlchen.constants.timing import DAY_IN_SECONDS
+from rotkehlchen.constants.timing import DAY_IN_SECONDS, DEFAULT_TIMEOUT_TUPLE
 from rotkehlchen.errors import RemoteError, UnsupportedAsset
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb.handler import GlobalDBHandler
@@ -26,18 +25,12 @@ log = RotkehlchenLogsAdapter(logger)
 COINGECKO_QUERY_RETRY_TIMES = 4
 
 
-class CoingeckoImageURLs(NamedTuple):
-    thumb: str
-    small: str
-    large: str
-
-
 class CoingeckoAssetData(NamedTuple):
     identifier: str
     symbol: str
     name: str
     description: str
-    images: CoingeckoImageURLs
+    image_url: str
 
 
 DELISTED_ASSETS = [
@@ -175,6 +168,57 @@ DELISTED_ASSETS = [
     strethaddress_to_identifier('0x851017523AE205adc9195e7F97D029f4Cfe7794c'),
     strethaddress_to_identifier('0x7f65BE7FAd0c22813e51746E7e8f13a20bAa9411'),
     strethaddress_to_identifier('0xe431a4c5DB8B73c773e06cf2587dA1EB53c41373'),
+    strethaddress_to_identifier('0xAef38fBFBF932D1AeF3B808Bc8fBd8Cd8E1f8BC5'),
+    strethaddress_to_identifier('0xd341d1680Eeee3255b8C4c75bCCE7EB57f144dAe'),
+    'FLO',
+    strethaddress_to_identifier('0x06147110022B768BA8F99A8f385df11a151A9cc8'),
+    strethaddress_to_identifier('0x27695E09149AdC738A978e9A678F99E4c39e9eb9'),
+    'FCN',
+    'BITB',
+    'SMC',
+    'POP',
+    'DRM',
+    'CRYPT',
+    'CPC-2',
+    'BSD',
+    'BITS',
+    strethaddress_to_identifier('0x1695936d6a953df699C38CA21c2140d497C08BD9'),
+    strethaddress_to_identifier('0xD6014EA05BDe904448B743833dDF07c3C7837481'),
+    strethaddress_to_identifier('0x054C64741dBafDC19784505494029823D89c3b13'),
+    strethaddress_to_identifier('0x2ecB13A8c458c379c4d9a7259e202De03c8F3D19'),
+    strethaddress_to_identifier('0x4a6058666cf1057eaC3CD3A5a614620547559fc9'),
+    strethaddress_to_identifier('0x6F919D67967a97EA36195A2346d9244E60FE0dDB'),
+    strethaddress_to_identifier('0x8dB54ca569D3019A2ba126D03C37c44b5eF81EF6'),
+    strethaddress_to_identifier('0xb62d18DeA74045E822352CE4B3EE77319DC5ff2F'),
+    strethaddress_to_identifier('0x884181554dfA9e578d36379919C05C25dC4a15bB'),
+    strethaddress_to_identifier('0xfF18DBc487b4c2E3222d115952bABfDa8BA52F5F'),
+    strethaddress_to_identifier('0x957c30aB0426e0C93CD8241E2c60392d08c6aC8e'),
+    strethaddress_to_identifier('0x263c618480DBe35C300D8d5EcDA19bbB986AcaeD'),
+    strethaddress_to_identifier('0x076C97e1c869072eE22f8c91978C99B4bcB02591'),
+    strethaddress_to_identifier('0x8eFFd494eB698cc399AF6231fCcd39E08fd20B15'),
+    strethaddress_to_identifier('0x53066cdDBc0099eb6c96785d9b3DF2AAeEDE5DA3'),
+    strethaddress_to_identifier('0x9214eC02CB71CbA0ADA6896b8dA260736a67ab10'),
+    strethaddress_to_identifier('0xabC1280A0187a2020cC675437aed400185F86Db6'),
+    strethaddress_to_identifier('0x23b75Bc7AaF28e2d6628C3f424B3882F8f072a3c'),
+    'BTCS',
+    strethaddress_to_identifier('0x491C9A23DB85623EEd455a8EfDd6AbA9b911C5dF'),
+    strethaddress_to_identifier('0x8aA33A7899FCC8eA5fBe6A608A109c3893A1B8b2'),
+    'ARB-2',
+    'BAY',
+    'UNITY',
+    strethaddress_to_identifier('0x8d80de8A78198396329dfA769aD54d24bF90E7aa'),
+    strethaddress_to_identifier('0x5bEaBAEBB3146685Dd74176f68a0721F91297D37'),
+    strethaddress_to_identifier('0x82f4dED9Cec9B5750FBFf5C2185AEe35AfC16587'),
+    strethaddress_to_identifier('0x74CEDa77281b339142A36817Fa5F9E29412bAb85'),
+    strethaddress_to_identifier('0xDDe12a12A6f67156e0DA672be05c374e1B0a3e57'),
+    strethaddress_to_identifier('0x2bDC0D42996017fCe214b21607a515DA41A9E0C5'),
+    strethaddress_to_identifier('0x1c79ab32C66aCAa1e9E81952B8AAa581B43e54E7'),
+    strethaddress_to_identifier('0xD3C00772B24D997A812249ca637a921e81357701'),
+    'DCT',
+    'NOTE',
+    'SLR',
+    'SXC',
+    strethaddress_to_identifier('0x6fFF3806Bbac52A20e0d79BC538d527f6a22c96b'),
 ]
 
 COINGECKO_SIMPLE_VS_CURRENCIES = [
@@ -241,10 +285,10 @@ COINGECKO_SIMPLE_VS_CURRENCIES = [
 
 class Coingecko():
 
-    def __init__(self, data_directory: Path) -> None:
+    def __init__(self) -> None:
         self.session = requests.session()
         self.session.headers.update({'User-Agent': 'rotkehlchen'})
-        self.data_directory = data_directory
+        self.all_coins_cache: Optional[Dict[str, Dict[str, Any]]] = None
 
     @overload
     def _query(
@@ -281,11 +325,14 @@ class Coingecko():
         if subpath:
             url += subpath
 
-        logger.debug(f'Querying coingecko: {url}?{urlencode(options)}')
+        log.debug(f'Querying coingecko: {url}?{urlencode(options)}')
         tries = COINGECKO_QUERY_RETRY_TIMES
         while tries >= 0:
             try:
-                response = self.session.get(f'{url}?{urlencode(options)}')
+                response = self.session.get(
+                    f'{url}?{urlencode(options)}',
+                    timeout=DEFAULT_TIMEOUT_TUPLE,
+                )
             except requests.exceptions.RequestException as e:
                 raise RemoteError(f'Coingecko API request failed due to {str(e)}') from e
 
@@ -355,17 +402,14 @@ class Coingecko():
             options=options,
         )
 
+        # https://github.com/PyCQA/pylint/issues/4739
         try:
             parsed_data = CoingeckoAssetData(
                 identifier=gecko_id,
-                symbol=data['symbol'],
-                name=data['name'],
-                description=data['description']['en'],
-                images=CoingeckoImageURLs(
-                    thumb=data['image']['thumb'],
-                    small=data['image']['small'],
-                    large=data['image']['large'],
-                ),
+                symbol=data['symbol'],  # pylint: disable=unsubscriptable-object
+                name=data['name'],  # pylint: disable=unsubscriptable-object
+                description=data['description']['en'],  # pylint: disable=unsubscriptable-object
+                image_url=data['image']['small'],  # pylint: disable=unsubscriptable-object
             )
         except KeyError as e:
             raise RemoteError(
@@ -374,8 +418,22 @@ class Coingecko():
 
         return parsed_data
 
-    def all_coins(self) -> List[Dict[str, Any]]:
-        return self._query(module='coins/list')
+    def all_coins(self) -> Dict[str, Dict[str, Any]]:
+        if self.all_coins_cache is None:
+            response = self._query(module='coins/list')
+            self.all_coins_cache = {}
+            for entry in response:
+                if entry['id'] in self.all_coins_cache:
+                    log.warning(
+                        f'Found duplicate coingecko identifier {entry["id"]} when querying '
+                        f'the list of coingecko assets. Ignoring...',
+                    )
+                    continue
+
+                identifier = entry.pop('id')
+                self.all_coins_cache[identifier] = entry
+
+        return self.all_coins_cache
 
     @staticmethod
     def check_vs_currencies(from_asset: Asset, to_asset: Asset, location: str) -> Optional[str]:
@@ -423,8 +481,9 @@ class Coingecko():
                 'vs_currencies': vs_currency,
             })
 
+        # https://github.com/PyCQA/pylint/issues/4739
         try:
-            return Price(FVal(result[from_coingecko_id][vs_currency]))
+            return Price(FVal(result[from_coingecko_id][vs_currency]))  # pylint: disable=unsubscriptable-object  # noqa: E501
         except KeyError as e:
             log.warning(
                 f'Queried coingecko simple price from {from_asset.identifier} '
@@ -493,8 +552,9 @@ class Coingecko():
             },
         )
 
+        # https://github.com/PyCQA/pylint/issues/4739
         try:
-            price = Price(FVal(result['market_data']['current_price'][vs_currency]))
+            price = Price(FVal(result['market_data']['current_price'][vs_currency]))  # pylint: disable=unsubscriptable-object  # noqa: E501
         except KeyError as e:
             log.warning(
                 f'Queried coingecko historical price from {from_asset.identifier} '

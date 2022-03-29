@@ -1,11 +1,12 @@
 import pytest
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction, LedgerActionType
-from rotkehlchen.constants.assets import A_BTC, A_ETH, A_USD
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR, A_USD
+from rotkehlchen.db.filtering import LedgerActionsFilterQuery
 from rotkehlchen.db.ledger_actions import DBLedgerActions
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.accounting import accounting_history_process
-from rotkehlchen.tests.utils.constants import A_EUR, A_XMR
+from rotkehlchen.tests.utils.constants import A_XMR
 from rotkehlchen.tests.utils.history import prices
 from rotkehlchen.typing import AssetAmount, Location
 
@@ -47,7 +48,10 @@ def test_all_action_types_writtable_in_db(database, function_scope_messages_aggr
         # Check that changes have been committed to db
         cursor.execute(query, (identifier,))
         assert cursor.fetchone() == (1,)
-    assert len(db.get_ledger_actions(None, None, None)) == len(LedgerActionType)
+    assert len(db.get_ledger_actions(
+        filter_query=LedgerActionsFilterQuery.make(),
+        has_premium=True,
+    )) == len(LedgerActionType)
 
 
 def test_ledger_action_can_be_removed(database, function_scope_messages_aggregator):
@@ -179,14 +183,14 @@ def test_taxable_ledger_action_setting(accountant, expected_pnl):
             notes='hoo',
         ),
     ]
-    result = accounting_history_process(
-        accountant,
-        1436979735,
-        1519693374,
+    report, _ = accounting_history_process(
+        accountant=accountant,
+        start_ts=1436979735,
+        end_ts=1519693374,
         history_list=[],
         ledger_actions_list=ledger_actions_list,
     )
-    assert FVal(result['overview']['total_taxable_profit_loss']).is_close(expected_pnl)
+    assert FVal(report['total_taxable_profit_loss']).is_close(expected_pnl)
 
 
 @pytest.mark.parametrize('mocked_price_queries', [prices])
@@ -265,7 +269,7 @@ def test_ledger_actions_accounting(accountant):
         notes='we give a rate here too but doesnt matter',
     )]
 
-    result = accounting_history_process(
+    report, _ = accounting_history_process(
         accountant=accountant,
         start_ts=1436979735,
         end_ts=1519693374,
@@ -277,6 +281,6 @@ def test_ledger_actions_accounting(accountant):
     assert accountant.events.cost_basis.get_calculated_asset_amount(A_XMR).is_close('10')
     # 400 * 1 + 0.4 * 10 - 1 * 0.1  - 500 * 0.9004 * 0.1 = 358.88
     expected_pnl = '358.88'
-    assert FVal(result['overview']['ledger_actions_profit_loss']).is_close(expected_pnl)
-    assert FVal(result['overview']['total_profit_loss']).is_close(expected_pnl)
-    assert FVal(result['overview']['total_taxable_profit_loss']).is_close(expected_pnl)
+    assert FVal(report['ledger_actions_profit_loss']).is_close(expected_pnl)
+    assert FVal(report['total_profit_loss']).is_close(expected_pnl)
+    assert FVal(report['total_taxable_profit_loss']).is_close(expected_pnl)

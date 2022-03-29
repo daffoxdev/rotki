@@ -4,10 +4,11 @@ from unittest.mock import _patch, patch
 
 import requests
 
-from rotkehlchen.accounting.structures import BalanceType
+from rotkehlchen.accounting.structures import Balance, BalanceType
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
-from rotkehlchen.constants.assets import A_BTC, A_ETH
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
+from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.db.utils import DBAssetBalance, LocationData
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.blockchain import (
@@ -15,10 +16,11 @@ from rotkehlchen.tests.utils.blockchain import (
     mock_bitcoin_balances_query,
     mock_etherscan_query,
 )
-from rotkehlchen.tests.utils.constants import A_EUR, A_RDN, A_XMR
+from rotkehlchen.tests.utils.constants import A_RDN, A_XMR
 from rotkehlchen.tests.utils.exchanges import (
     patch_binance_balances_query,
     patch_poloniex_balances_query,
+    try_get_first_exchange,
 )
 from rotkehlchen.typing import BTCAddress, ChecksumEthAddress, Location, Timestamp
 
@@ -36,6 +38,7 @@ class BalancesTestSetup(NamedTuple):
     beaconchain_patch: _patch
     ethtokens_max_chunks_patch: _patch
     bitcoin_patch: _patch
+    defi_balances_patch: Optional[_patch]
 
     def enter_all_patches(self, stack: ExitStack):
         stack.enter_context(self.poloniex_patch)
@@ -52,6 +55,8 @@ class BalancesTestSetup(NamedTuple):
         stack.enter_context(self.etherscan_patch)
         stack.enter_context(self.ethtokens_max_chunks_patch)
         stack.enter_context(self.beaconchain_patch)
+        if self.defi_balances_patch is not None:
+            stack.enter_context(self.defi_balances_patch)
         return stack
 
 
@@ -61,6 +66,7 @@ def setup_balances(
         btc_accounts: Optional[List[BTCAddress]],
         eth_balances: Optional[List[str]] = None,
         token_balances: Optional[Dict[EthereumToken, List[str]]] = None,
+        liabilities: Optional[Dict[EthereumToken, List[str]]] = None,
         btc_balances: Optional[List[str]] = None,
         manually_tracked_balances: Optional[List[ManuallyTrackedBalance]] = None,
         original_queries: Optional[List[str]] = None,
@@ -123,14 +129,45 @@ def setup_balances(
         for token in token_balances:
             eth_map[acc][token] = token_balances[token][idx]
 
+    defi_balances_patch = None
+    if liabilities is not None:
+        def mock_add_defi_balances_to_token_and_totals():
+            # super hacky way of mocking this but well fuck it
+            if len(rotki.chain_manager.balances.eth) == 4:
+                d_liabilities = liabilities.copy()
+            else:  # we know the only test this is used removes index 0 and 2
+                msg = 'Should be at removal of accounts and only have 2 left'
+                assert len(rotki.chain_manager.balances.eth) == 2, msg
+                d_liabilities = {
+                    k: [
+                        x for idx, x in enumerate(v) if idx not in (0, 2)
+                    ] for k, v in liabilities.items()
+                }
+
+            for token, balances in d_liabilities.items():
+                for idx, balance in enumerate(balances):
+                    balance = FVal(balance)
+                    if balance == ZERO:
+                        continue
+
+                    account = ethereum_accounts[idx]
+                    rotki.chain_manager.balances.eth[account].liabilities[token] = Balance(balance)
+                    rotki.chain_manager.totals.liabilities[token] += Balance(balance)
+
+        defi_balances_patch = patch.object(
+            rotki.chain_manager,
+            'add_defi_balances_to_token_and_totals',
+            side_effect=mock_add_defi_balances_to_token_and_totals,
+        )
+
     btc_map: Dict[BTCAddress, str] = {}
     for idx, btc_acc in enumerate(btc_accounts):
         btc_map[btc_acc] = btc_balances[idx]
 
-    binance = rotki.exchange_manager.connected_exchanges.get('binance', None)
-    binance_patch = patch_binance_balances_query(binance) if binance else None
-    poloniex = rotki.exchange_manager.connected_exchanges.get('poloniex', None)
-    poloniex_patch = patch_poloniex_balances_query(poloniex) if poloniex else None
+    binance = try_get_first_exchange(rotki.exchange_manager, Location.BINANCE)
+    binance_patch = patch_binance_balances_query(binance) if binance else None  # type: ignore
+    poloniex = try_get_first_exchange(rotki.exchange_manager, Location.POLONIEX)
+    poloniex_patch = patch_poloniex_balances_query(poloniex) if poloniex else None  # type: ignore
     etherscan_patch = mock_etherscan_query(
         eth_map=eth_map,
         etherscan=rotki.etherscan,
@@ -175,6 +212,7 @@ def setup_balances(
         ethtokens_max_chunks_patch=ethtokens_max_chunks_patch,
         bitcoin_patch=bitcoin_patch,
         beaconchain_patch=beaconchain_patch,
+        defi_balances_patch=defi_balances_patch,
     )
 
 
@@ -208,78 +246,127 @@ def add_starting_balances(datahandler) -> List[DBAssetBalance]:
         ),
     ]
     datahandler.db.add_multiple_balances(balances)
-    # Also add an unknown/invalid asset. This will generate a warning
-    cursor = datahandler.db.conn.cursor()
-    cursor.execute(
-        'INSERT INTO timed_balances('
-        '    time, currency, amount, usd_value) '
-        ' VALUES(?, ?, ?, ?)',
-        (1469326500, 'ADSADX', '10.1', '100.5'),
-    )
     datahandler.db.conn.commit()
 
     location_data = [
         LocationData(
             time=Timestamp(1451606400),
-            location=Location.KRAKEN.serialize_for_db(),
+            location=Location.KRAKEN.serialize_for_db(),  # pylint: disable=no-member
             usd_value='100',
         ),
         LocationData(
             time=Timestamp(1451606400),
-            location=Location.BANKS.serialize_for_db(),
+            location=Location.BANKS.serialize_for_db(),  # pylint: disable=no-member
             usd_value='1000',
         ),
         LocationData(
             time=Timestamp(1461606500),
-            location=Location.POLONIEX.serialize_for_db(),
+            location=Location.POLONIEX.serialize_for_db(),  # pylint: disable=no-member
             usd_value='50',
         ),
         LocationData(
             time=Timestamp(1461606500),
-            location=Location.KRAKEN.serialize_for_db(),
+            location=Location.KRAKEN.serialize_for_db(),  # pylint: disable=no-member
             usd_value='200',
         ),
         LocationData(
             time=Timestamp(1461606500),
-            location=Location.BANKS.serialize_for_db(),
+            location=Location.BANKS.serialize_for_db(),  # pylint: disable=no-member
             usd_value='50000',
         ),
         LocationData(
             time=Timestamp(1491607800),
-            location=Location.POLONIEX.serialize_for_db(),
+            location=Location.POLONIEX.serialize_for_db(),  # pylint: disable=no-member
             usd_value='100',
         ),
         LocationData(
             time=Timestamp(1491607800),
-            location=Location.KRAKEN.serialize_for_db(),
+            location=Location.KRAKEN.serialize_for_db(),  # pylint: disable=no-member
             usd_value='2000',
         ),
         LocationData(
             time=Timestamp(1491607800),
-            location=Location.BANKS.serialize_for_db(),
+            location=Location.BANKS.serialize_for_db(),  # pylint: disable=no-member
             usd_value='10000',
         ),
         LocationData(
             time=Timestamp(1491607800),
-            location=Location.BLOCKCHAIN.serialize_for_db(),
+            location=Location.BLOCKCHAIN.serialize_for_db(),  # pylint: disable=no-member
             usd_value='200000',
         ),
         LocationData(
             time=Timestamp(1451606400),
-            location=Location.TOTAL.serialize_for_db(),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
             usd_value='1500',
         ),
         LocationData(
             time=Timestamp(1461606500),
-            location=Location.TOTAL.serialize_for_db(),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
             usd_value='4500',
         ),
         LocationData(
             time=Timestamp(1491607800),
-            location=Location.TOTAL.serialize_for_db(),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
             usd_value='10700.5',
         ),
     ]
     datahandler.db.add_multiple_location_data(location_data)
 
     return balances
+
+
+def add_starting_nfts(datahandler):
+    """Adds a time series for an account owning a NFT"""
+    datahandler.db.add_asset_identifiers(['_nft_pickle'])
+    balances = [
+        DBAssetBalance(
+            category=BalanceType.ASSET,
+            time=Timestamp(1488326400),
+            asset=Asset('_nft_pickle'),
+            amount='1',
+            usd_value='1000',
+        ), DBAssetBalance(
+            category=BalanceType.ASSET,
+            time=Timestamp(1488426400),
+            asset=Asset('_nft_pickle'),
+            amount='1',
+            usd_value='1000',
+        ), DBAssetBalance(
+            category=BalanceType.ASSET,
+            time=Timestamp(1488526400),
+            asset=Asset('_nft_pickle'),
+            amount='2',
+            usd_value='2000',
+        ), DBAssetBalance(
+            category=BalanceType.ASSET,
+            time=Timestamp(1488626400),
+            asset=Asset('_nft_pickle'),
+            amount='1',
+            usd_value='1000',
+        ),
+    ]
+    datahandler.db.add_multiple_balances(balances)
+    datahandler.db.conn.commit()
+    location_data = [
+        LocationData(
+            time=Timestamp(1488326400),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
+            usd_value='3000',
+        ),
+        LocationData(
+            time=Timestamp(1488426400),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
+            usd_value='4000',
+        ),
+        LocationData(
+            time=Timestamp(1488526400),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
+            usd_value='5000',
+        ),
+        LocationData(
+            time=Timestamp(1488626400),
+            location=Location.TOTAL.serialize_for_db(),  # pylint: disable=no-member
+            usd_value='5500',
+        ),
+    ]
+    datahandler.db.add_multiple_location_data(location_data)

@@ -1,72 +1,103 @@
-import { AxiosInstance, AxiosTransformer } from 'axios';
+import { ActionResult } from '@rotki/common/lib/data';
+import {
+  GitcoinGrantEventsPayload,
+  GitcoinGrantReport,
+  GitcoinReportPayload
+} from '@rotki/common/lib/gitcoin';
+import { AxiosInstance, AxiosRequestTransformer } from 'axios';
 import {
   axiosSnakeCaseTransformer,
+  getUpdatedKey,
   setupTransformer
 } from '@/services/axios-tranformers';
 import {
   balanceAxiosTransformer,
   basicAxiosTransformer
 } from '@/services/consts';
-import { tradeNumericKeys } from '@/services/history/const';
+import { IgnoredActions } from '@/services/history/const';
 import {
-  LedgerActionResult,
+  AssetMovement,
+  AssetMovementCollectionResponse,
+  AssetMovementRequestPayload,
+  EntryWithMeta,
+  EthTransaction,
+  EthTransactionCollectionResponse,
+  LedgerAction,
+  LedgerActionCollectionResponse,
+  LedgerActionRequestPayload,
+  NewLedgerAction,
   NewTrade,
   Trade,
-  TradeLocation
+  TradeCollectionResponse,
+  TradeLocation,
+  TradeRequestPayload,
+  TransactionRequestPayload
 } from '@/services/history/types';
-import {
-  ActionResult,
-  EntryWithMeta,
-  LimitedResponse,
-  PendingTask
-} from '@/services/types-api';
+import { PendingTask } from '@/services/types-api';
 import {
   handleResponse,
   validStatus,
   validWithParamsSessionAndExternalService,
   validWithSessionStatus
 } from '@/services/utils';
-import { LedgerAction } from '@/store/history/types';
-import { ReportProgress } from '@/store/reports/types';
-import { assert } from '@/utils/assertions';
+import { CollectionResponse } from '@/types/collection';
+import { ReportProgress } from '@/types/reports';
 
 export class HistoryApi {
   private readonly axios: AxiosInstance;
-  private readonly responseTransformer: AxiosTransformer[] = setupTransformer(
-    tradeNumericKeys
-  );
-  private readonly requestTransformer: AxiosTransformer[];
+  private readonly requestTransformer: AxiosRequestTransformer[];
 
   constructor(axios: AxiosInstance) {
     this.axios = axios;
     this.requestTransformer = [axiosSnakeCaseTransformer].concat(
-      axios.defaults.transformRequest as AxiosTransformer[]
+      axios.defaults.transformRequest as AxiosRequestTransformer[]
     );
   }
 
-  async trades(
-    location?: TradeLocation,
-    onlyCache?: boolean
-  ): Promise<PendingTask> {
-    const params = {
-      asyncQuery: true,
-      onlyCache: onlyCache ? onlyCache : undefined,
-      location
-    };
+  async associatedLocations(): Promise<TradeLocation[]> {
     return this.axios
-      .get<ActionResult<PendingTask>>('/trades', {
-        params: axiosSnakeCaseTransformer(params),
+      .get<ActionResult<TradeLocation[]>>('/locations/associated', {
         validateStatus: validStatus,
-        transformResponse: this.responseTransformer
+        transformResponse: basicAxiosTransformer
       })
       .then(handleResponse);
+  }
+
+  async internalTrades<T>(
+    payload: TradeRequestPayload,
+    async: boolean
+  ): Promise<T> {
+    return this.axios
+      .get<ActionResult<T>>('/trades', {
+        params: axiosSnakeCaseTransformer({
+          asyncQuery: async,
+          ...payload
+        }),
+        validateStatus: validWithParamsSessionAndExternalService,
+        transformResponse: basicAxiosTransformer
+      })
+      .then(handleResponse);
+  }
+
+  async tradesTask(payload: TradeRequestPayload): Promise<PendingTask> {
+    return this.internalTrades<PendingTask>(payload, true);
+  }
+
+  async trades(
+    payload: TradeRequestPayload
+  ): Promise<CollectionResponse<EntryWithMeta<Trade>>> {
+    const response = await this.internalTrades<
+      CollectionResponse<EntryWithMeta<Trade>>
+    >(payload, false);
+
+    return TradeCollectionResponse.parse(response);
   }
 
   async addExternalTrade(trade: NewTrade): Promise<Trade> {
     return this.axios
       .put<ActionResult<Trade>>('/trades', trade, {
         validateStatus: validStatus,
-        transformResponse: this.responseTransformer,
+        transformResponse: basicAxiosTransformer,
         transformRequest: this.requestTransformer
       })
       .then(handleResponse);
@@ -76,7 +107,7 @@ export class HistoryApi {
     return this.axios
       .patch<ActionResult<Trade>>('/trades', trade, {
         validateStatus: validStatus,
-        transformResponse: this.responseTransformer,
+        transformResponse: basicAxiosTransformer,
         transformRequest: this.requestTransformer
       })
       .then(handleResponse);
@@ -91,114 +122,200 @@ export class HistoryApi {
       .then(handleResponse);
   }
 
-  async assetMovements(
-    location?: TradeLocation,
-    onlyCache?: boolean
-  ): Promise<any> {
-    const params = {
-      asyncQuery: true,
-      onlyCache: onlyCache ? onlyCache : undefined,
-      location
-    };
+  async internalAssetMovements<T>(
+    payload: AssetMovementRequestPayload,
+    async: boolean
+  ): Promise<T> {
     return this.axios
-      .get<ActionResult<PendingTask>>('/asset_movements', {
-        params: axiosSnakeCaseTransformer(params),
-        validateStatus: validWithParamsSessionAndExternalService,
-        transformResponse: setupTransformer([])
-      })
-      .then(handleResponse);
-  }
-
-  async ethTransactions(
-    address: string,
-    onlyCache: boolean
-  ): Promise<PendingTask> {
-    assert(address.length > 0);
-    return this.axios
-      .get<ActionResult<PendingTask>>(
-        `/blockchains/ETH/transactions/${address}`,
-        {
-          params: axiosSnakeCaseTransformer({
-            asyncQuery: true,
-            onlyCache: onlyCache ? onlyCache : undefined
-          }),
-          validateStatus: validWithParamsSessionAndExternalService,
-          transformResponse: setupTransformer([])
-        }
-      )
-      .then(handleResponse);
-  }
-
-  async ledgerActions(
-    start: number = 0,
-    end: number | undefined = undefined,
-    location: string | undefined = undefined
-  ): Promise<PendingTask> {
-    return this.axios
-      .get<ActionResult<PendingTask>>(`/ledgeractions`, {
+      .get<ActionResult<T>>('/asset_movements', {
         params: axiosSnakeCaseTransformer({
-          asyncQuery: true,
-          fromTimestamp: start,
-          toTimestamp: end ? end : undefined,
-          location: location ? location : undefined
+          asyncQuery: async,
+          ...payload
         }),
-        validateStatus: validStatus,
+        validateStatus: validWithParamsSessionAndExternalService,
         transformResponse: basicAxiosTransformer
       })
       .then(handleResponse);
   }
 
-  async addLedgerAction(
-    action: Omit<LedgerAction, 'identifier'>
-  ): Promise<LedgerActionResult> {
+  async assetMovementsTask(
+    payload: AssetMovementRequestPayload
+  ): Promise<PendingTask> {
+    return this.internalAssetMovements<PendingTask>(payload, true);
+  }
+
+  async assetMovements(
+    payload: AssetMovementRequestPayload
+  ): Promise<CollectionResponse<EntryWithMeta<AssetMovement>>> {
+    const response = await this.internalAssetMovements<
+      CollectionResponse<EntryWithMeta<AssetMovement>>
+    >(payload, false);
+
+    return AssetMovementCollectionResponse.parse(response);
+  }
+
+  private internalEthTransactions<T>(
+    payload: TransactionRequestPayload,
+    async: boolean
+  ): Promise<T> {
+    let url = `/blockchains/ETH/transactions`;
+    const { address, ...data } = payload;
+    if (address) {
+      url += `/${address}`;
+    }
     return this.axios
-      .put<ActionResult<LedgerActionResult>>(
+      .get<ActionResult<T>>(url, {
+        params: axiosSnakeCaseTransformer({
+          asyncQuery: async,
+          ...data,
+          orderByAttribute: getUpdatedKey(payload.orderByAttribute, false)
+        }),
+        validateStatus: validWithParamsSessionAndExternalService,
+        transformResponse: basicAxiosTransformer
+      })
+      .then(handleResponse);
+  }
+
+  async ethTransactionsTask(
+    payload: TransactionRequestPayload
+  ): Promise<PendingTask> {
+    return this.internalEthTransactions<PendingTask>(payload, true);
+  }
+
+  async ethTransactions(
+    payload: TransactionRequestPayload
+  ): Promise<CollectionResponse<EntryWithMeta<EthTransaction>>> {
+    const response = await this.internalEthTransactions<
+      CollectionResponse<EntryWithMeta<EthTransaction>>
+    >(payload, false);
+
+    return EthTransactionCollectionResponse.parse(response);
+  }
+
+  async internalLedgerActions<T>(
+    payload: LedgerActionRequestPayload,
+    async: boolean
+  ): Promise<T> {
+    return this.axios
+      .get<ActionResult<T>>('/ledgeractions', {
+        params: axiosSnakeCaseTransformer({
+          asyncQuery: async,
+          ...payload
+        }),
+        validateStatus: validWithParamsSessionAndExternalService,
+        transformResponse: basicAxiosTransformer
+      })
+      .then(handleResponse);
+  }
+
+  async ledgerActionsTask(
+    payload: LedgerActionRequestPayload
+  ): Promise<PendingTask> {
+    return this.internalLedgerActions<PendingTask>(payload, true);
+  }
+
+  async ledgerActions(
+    payload: LedgerActionRequestPayload
+  ): Promise<CollectionResponse<EntryWithMeta<LedgerAction>>> {
+    const response = await this.internalLedgerActions<
+      CollectionResponse<EntryWithMeta<LedgerAction>>
+    >(payload, false);
+
+    return LedgerActionCollectionResponse.parse(response);
+  }
+
+  async addLedgerAction(ledgerAction: NewLedgerAction): Promise<LedgerAction> {
+    return this.axios
+      .put<ActionResult<LedgerAction>>(
         '/ledgeractions',
-        axiosSnakeCaseTransformer(action),
+        axiosSnakeCaseTransformer(ledgerAction),
         {
           validateStatus: validStatus,
-          transformResponse: balanceAxiosTransformer
+          transformResponse: basicAxiosTransformer,
+          transformRequest: this.requestTransformer
         }
       )
       .then(handleResponse);
   }
 
-  async editLedgerAction(
-    action: LedgerAction
-  ): Promise<LimitedResponse<EntryWithMeta<LedgerAction>>> {
+  async editLedgerAction(ledgerAction: LedgerAction): Promise<LedgerAction> {
     return this.axios
-      .patch<ActionResult<LimitedResponse<EntryWithMeta<LedgerAction>>>>(
+      .patch<ActionResult<LedgerAction>>(
         '/ledgeractions',
-        axiosSnakeCaseTransformer({ action }),
+        { action: ledgerAction },
         {
           validateStatus: validStatus,
-          transformResponse: balanceAxiosTransformer
+          transformResponse: basicAxiosTransformer,
+          transformRequest: this.requestTransformer
         }
       )
       .then(handleResponse);
   }
 
-  async deleteLedgerAction(
-    identifier: number
-  ): Promise<LimitedResponse<EntryWithMeta<LedgerAction>>> {
+  async deleteLedgerAction(identifier: number): Promise<boolean> {
     return this.axios
-      .delete<ActionResult<LimitedResponse<EntryWithMeta<LedgerAction>>>>(
-        '/ledgeractions',
-        {
-          data: axiosSnakeCaseTransformer({ identifier }),
-          validateStatus: validStatus,
-          transformResponse: balanceAxiosTransformer
-        }
-      )
+      .delete<ActionResult<boolean>>('/ledgeractions', {
+        data: axiosSnakeCaseTransformer({ identifier }),
+        validateStatus: validStatus
+      })
       .then(handleResponse);
   }
 
   async getProgress(): Promise<ReportProgress> {
-    return this.axios
-      .get<ActionResult<ReportProgress>>(`/history/status`, {
+    const response = await this.axios.get<ActionResult<ReportProgress>>(
+      `/history/status`,
+      {
         validateStatus: validWithSessionStatus,
         transformResponse: basicAxiosTransformer
+      }
+    );
+    const data = handleResponse(response);
+    return ReportProgress.parse(data);
+  }
+
+  async gatherGitcoinGrandEvents(
+    payload: GitcoinGrantEventsPayload
+  ): Promise<PendingTask> {
+    return this.axios
+      .post<ActionResult<PendingTask>>(
+        '/gitcoin/events',
+        axiosSnakeCaseTransformer({ ...payload, asyncQuery: true }),
+        {
+          validateStatus: validStatus,
+          transformResponse: balanceAxiosTransformer
+        }
+      )
+      .then(handleResponse);
+  }
+
+  async deleteGitcoinGrantEvents(grantId: number): Promise<boolean> {
+    return this.axios
+      .delete<ActionResult<boolean>>('/gitcoin/events', {
+        data: axiosSnakeCaseTransformer({ grantId }),
+        validateStatus: validStatus
       })
       .then(handleResponse);
+  }
+
+  async generateReport(
+    payload: GitcoinReportPayload
+  ): Promise<GitcoinGrantReport> {
+    return this.axios
+      .put<ActionResult<GitcoinGrantReport>>('/gitcoin/report', payload, {
+        validateStatus: validStatus,
+        transformResponse: setupTransformer(['total', 'amount', 'value']),
+        transformRequest: this.requestTransformer
+      })
+      .then(handleResponse);
+  }
+
+  fetchIgnored(): Promise<IgnoredActions> {
+    return this.axios
+      .get<ActionResult<IgnoredActions>>('/actions/ignored', {
+        validateStatus: validStatus,
+        transformResponse: setupTransformer([])
+      })
+      .then(handleResponse)
+      .then(result => IgnoredActions.parse(result));
   }
 }

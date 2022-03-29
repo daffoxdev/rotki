@@ -1,23 +1,16 @@
 import { TradeLocationData } from '@/components/history/type';
+import FOXIcon from '@/components/icons/FOXIcon.vue';
+import UpholdIcon from '@/components/icons/UpholdIcon.vue';
 import {
   EXCHANGE_BALANCER,
-  EXCHANGE_BINANCE,
-  EXCHANGE_BINANCE_US,
-  EXCHANGE_BITCOIN_DE,
-  EXCHANGE_BITFINEX,
-  EXCHANGE_BITMEX,
-  EXCHANGE_BITSTAMP,
-  EXCHANGE_BITTREX,
-  EXCHANGE_COINBASE,
-  EXCHANGE_COINBASEPRO,
+  EXCHANGE_BISQ,
+  EXCHANGE_BLOCKFI,
   EXCHANGE_CRYPTOCOM,
-  EXCHANGE_FTX,
-  EXCHANGE_GEMINI,
-  EXCHANGE_ICONOMI,
-  EXCHANGE_KRAKEN,
-  EXCHANGE_KUCOIN,
-  EXCHANGE_POLONIEX,
+  EXCHANGE_NEXO,
+  EXCHANGE_SHAPESHIFT,
+  EXCHANGE_SUSHISWAP,
   EXCHANGE_UNISWAP,
+  EXCHANGE_UPHOLD,
   TRADE_LOCATION_BANKS,
   TRADE_LOCATION_BLOCKCHAIN,
   TRADE_LOCATION_COMMODITIES,
@@ -27,88 +20,96 @@ import {
 } from '@/data/defaults';
 import i18n from '@/i18n';
 import { TradeLocation } from '@/services/history/types';
+import { SupportedExchange } from '@/types/exchanges';
 import { assert } from '@/utils/assertions';
 
 export const tradeLocations: TradeLocationData[] = [
   {
-    identifier: EXCHANGE_KRAKEN,
+    identifier: SupportedExchange.KRAKEN,
     name: 'Kraken',
     icon: require('@/assets/images/kraken.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_POLONIEX,
+    identifier: SupportedExchange.POLONIEX,
     name: 'Poloniex',
     icon: require('@/assets/images/poloniex.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BITMEX,
+    identifier: SupportedExchange.BITMEX,
     name: 'Bitmex',
     icon: require('@/assets/images/bitmex.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BINANCE,
+    identifier: SupportedExchange.BITPANDA,
+    name: 'Bitpanda',
+    icon: require('@/assets/images/exchanges/bitpanda.svg'),
+    imageIcon: true,
+    exchange: true
+  },
+  {
+    identifier: SupportedExchange.BINANCE,
     name: 'Binance',
     icon: require('@/assets/images/binance.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BINANCE_US,
+    identifier: SupportedExchange.BINANCEUS,
     name: 'Binance US',
     icon: require('@/assets/images/binance.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BITTREX,
+    identifier: SupportedExchange.BITTREX,
     name: 'Bittrex',
     icon: require('@/assets/images/bittrex.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BITFINEX,
+    identifier: SupportedExchange.BITFINEX,
     name: 'Bitfinex',
     icon: require('@/assets/images/bitfinex.svg'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_BITCOIN_DE,
+    identifier: SupportedExchange.BITCOIN_DE,
     name: 'bitcoin.de',
     icon: require('@/assets/images/btcde.svg'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_ICONOMI,
+    identifier: SupportedExchange.ICONOMI,
     name: 'Iconomi',
     icon: require('@/assets/images/iconomi.svg'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_GEMINI,
+    identifier: SupportedExchange.GEMINI,
     name: 'Gemini',
     icon: require('@/assets/images/gemini.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_COINBASE,
+    identifier: SupportedExchange.COINBASE,
     name: 'Coinbase',
     icon: require('@/assets/images/coinbase.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_COINBASEPRO,
+    identifier: SupportedExchange.COINBASEPRO,
     name: 'Coinbase Pro',
     icon: require('@/assets/images/coinbasepro.png'),
     imageIcon: true,
@@ -129,6 +130,20 @@ export const tradeLocations: TradeLocationData[] = [
     exchange: false
   },
   {
+    identifier: EXCHANGE_SUSHISWAP,
+    name: 'Sushiswap',
+    icon: require('@/assets/images/modules/sushiswap.svg'),
+    imageIcon: true,
+    exchange: false
+  },
+  {
+    identifier: EXCHANGE_BLOCKFI,
+    name: 'BlockFi',
+    icon: require('@/assets/images/blockfi.png'),
+    imageIcon: true,
+    exchange: true
+  },
+  {
     identifier: EXCHANGE_CRYPTOCOM,
     name: 'Crypto.com',
     icon: require('@/assets/images/crypto.com.png'),
@@ -136,23 +151,60 @@ export const tradeLocations: TradeLocationData[] = [
     exchange: false
   },
   {
-    identifier: EXCHANGE_BITSTAMP,
+    identifier: EXCHANGE_NEXO,
+    name: 'Nexo',
+    icon: require('@/assets/images/nexo.png'),
+    imageIcon: true,
+    exchange: true
+  },
+  {
+    identifier: SupportedExchange.BITSTAMP,
     name: 'Bitstamp',
     icon: require('@/assets/images/bitstamp.png'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_KUCOIN,
+    identifier: SupportedExchange.KUCOIN,
     name: 'KuCoin',
     icon: require('@/assets/images/exchanges/kucoin.svg'),
     imageIcon: true,
     exchange: true
   },
   {
-    identifier: EXCHANGE_FTX,
+    identifier: SupportedExchange.FTX,
     name: 'FTX',
     icon: require('@/assets/images/exchanges/ftx.png'),
+    imageIcon: true,
+    exchange: true
+  },
+  {
+    identifier: EXCHANGE_SHAPESHIFT,
+    name: 'ShapeShift',
+    icon: '',
+    imageIcon: false,
+    component: FOXIcon,
+    exchange: true
+  },
+  {
+    identifier: SupportedExchange.INDEPENDENTRESERVE,
+    name: 'IndependentReserve',
+    icon: require('@/assets/images/exchanges/independentreserve.png'),
+    imageIcon: true,
+    exchange: true
+  },
+  {
+    identifier: EXCHANGE_UPHOLD,
+    name: 'uphold',
+    icon: '',
+    imageIcon: false,
+    component: UpholdIcon,
+    exchange: true
+  },
+  {
+    identifier: EXCHANGE_BISQ,
+    name: 'bisq',
+    icon: require('@/assets/images/bisq.svg'),
     imageIcon: true,
     exchange: true
   },
@@ -196,6 +248,13 @@ export const tradeLocations: TradeLocationData[] = [
     name: i18n.t('trade_location.commodities').toString(),
     icon: 'mdi-basket',
     imageIcon: false,
+    exchange: false
+  },
+  {
+    identifier: 'gitcoin',
+    name: 'Gitcoin',
+    icon: require('@/assets/images/gitcoin.png'),
+    imageIcon: true,
     exchange: false
   }
 ];

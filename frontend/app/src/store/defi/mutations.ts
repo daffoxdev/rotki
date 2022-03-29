@@ -1,27 +1,29 @@
+import { AaveBalances, AaveHistory } from '@rotki/common/lib/defi/aave';
+import {
+  BalancerBalances,
+  BalancerEvents
+} from '@rotki/common/lib/defi/balancer';
+import { XswapBalances, XswapEvents } from '@rotki/common/lib/defi/xswap';
 import { MutationTree } from 'vuex';
-import { AaveBalances, AaveHistory } from '@/services/defi/types/aave';
 import {
   CompoundBalances,
   CompoundHistory
 } from '@/services/defi/types/compound';
-import { UniswapBalances } from '@/services/defi/types/uniswap';
 import {
   YearnVaultsBalances,
   YearnVaultsHistory
 } from '@/services/defi/types/yearn';
+import { DefiMutations } from '@/store/defi/mutation-types';
 import { defaultState } from '@/store/defi/state';
 import {
   Airdrops,
   AllDefiProtocols,
-  BalancerBalances,
   DefiState,
+  DexTrades,
   DSRBalances,
   DSRHistory,
   MakerDAOVault,
-  MakerDAOVaultDetails,
-  UniswapEvents,
-  DexTrades,
-  BalancerEvents
+  MakerDAOVaultDetails
 } from '@/store/defi/types';
 
 export const mutations: MutationTree<DefiState> = {
@@ -55,19 +57,37 @@ export const mutations: MutationTree<DefiState> = {
   compoundHistory(state: DefiState, history: CompoundHistory) {
     state.compoundHistory = history;
   },
-  yearnVaultsHistory(state: DefiState, history: YearnVaultsHistory) {
-    state.yearnVaultsHistory = history;
-  },
-  yearnVaultsBalances(state: DefiState, balances: YearnVaultsBalances) {
+  [DefiMutations.YEARN_VAULTS_BALANCES](
+    state: DefiState,
+    balances: YearnVaultsBalances
+  ) {
     state.yearnVaultsBalances = balances;
   },
-  uniswapBalances(state: DefiState, balances: UniswapBalances) {
+  [DefiMutations.YEARN_VAULTS_HISTORY](
+    state: DefiState,
+    history: YearnVaultsHistory
+  ) {
+    state.yearnVaultsHistory = history;
+  },
+  [DefiMutations.YEARN_VAULTS_V2_BALANCES](
+    state: DefiState,
+    balances: YearnVaultsBalances
+  ) {
+    state.yearnVaultsV2Balances = balances;
+  },
+  [DefiMutations.YEARN_VAULTS_V2_HISTORY](
+    state: DefiState,
+    history: YearnVaultsHistory
+  ) {
+    state.yearnVaultsV2History = history;
+  },
+  uniswapBalances(state: DefiState, balances: XswapBalances) {
     state.uniswapBalances = balances;
   },
   uniswapTrades(state: DefiState, trades: DexTrades) {
     state.uniswapTrades = trades;
   },
-  uniswapEvents(state: DefiState, events: UniswapEvents) {
+  uniswapEvents(state: DefiState, events: XswapEvents) {
     state.uniswapEvents = events;
   },
   airdrops(state: DefiState, airdrops: Airdrops) {

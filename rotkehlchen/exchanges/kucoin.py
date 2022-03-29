@@ -26,11 +26,12 @@ import requests
 from requests.adapters import Response
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_kucoin
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.constants.timing import MONTH_IN_SECONDS, WEEK_IN_SECONDS
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE, MONTH_IN_SECONDS, WEEK_IN_SECONDS
 from rotkehlchen.errors import (
     DeserializationError,
     RemoteError,
@@ -59,7 +60,8 @@ from rotkehlchen.typing import (
 )
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_dict
 
 if TYPE_CHECKING:
@@ -81,10 +83,10 @@ API_KEY_ERROR_CODE_ACTION = {
     411100: 'Contact KuCoin support to unfreeze your account',
 }
 API_PAGE_SIZE_LIMIT = 500
-# Rate limit is 1800 requests per minute, exceed it multiple times the system
-# will restrict the IP
-API_REQUEST_RETRY_TIMES = 2
-API_REQUEST_RETRIES_AFTER_SECONDS = 1
+# Once the rate limit is exceeded, the system will restrict your use of your IP or account for 10s.
+# https://docs.kucoin.com/#request-rate-limit
+API_REQUEST_RETRY_TIMES = 4
+API_REQUEST_RETRIES_AFTER_SECONDS = 10
 
 API_V2_TIMESTART = Timestamp(1550448000)  # 2019-02-18T00:00:00Z
 API_V2_TIMESTART_MS = API_V2_TIMESTART * 1000
@@ -157,6 +159,7 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     """
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
@@ -164,7 +167,13 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             passphrase: str,
             base_uri: str = 'https://api.kucoin.com',
     ):
-        super().__init__(str(Location.KUCOIN), api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.KUCOIN,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.base_uri = base_uri
         self.api_passphrase = passphrase
         self.session.headers.update({
@@ -173,6 +182,23 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             'KC-API-KEY-VERSION': '2',
         })
         self.msg_aggregator = msg_aggregator
+
+    def update_passphrase(self, new_passphrase: str) -> None:
+        self.api_passphrase = new_passphrase
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'KC-API-KEY': self.api_key})
+        if passphrase is not None:
+            self.update_passphrase(passphrase)
+
+        return changed
 
     def _api_query(
             self,
@@ -243,7 +269,7 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             })
             log.debug('Kucoin API request', request_url=request_url)
             try:
-                response = self.session.get(url=request_url)
+                response = self.session.get(url=request_url, timeout=DEFAULT_TIMEOUT_TUPLE)
             except requests.exceptions.RequestException as e:
                 raise RemoteError(
                     f'Kucoin {method} request at {request_url} connection error: {str(e)}.',
@@ -685,7 +711,7 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         except DeserializationError as e:
             raise RemoteError(f'Could not read Kucoin error code {error_code} as an int') from e
 
-        if error_code in API_KEY_ERROR_CODE_ACTION.keys():
+        if error_code in API_KEY_ERROR_CODE_ACTION:
             msg = API_KEY_ERROR_CODE_ACTION[error_code]
         else:
             reason = response_dict.get('msg', None) or response.text
@@ -769,7 +795,7 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         """Return the account trades
 
         May raise RemoteError
@@ -786,10 +812,10 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts=start_ts,
             end_ts=end_ts,
         )
-        return trades
+        return trades, (start_ts, end_ts)
 
     def validate_api_key(self) -> Tuple[bool, str]:
-        """Validates that the KuCoin API key is good for usage in Rotki
+        """Validates that the KuCoin API key is good for usage in rotki
 
         May raise RemoteError
         """
@@ -809,4 +835,11 @@ class Kucoin(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for kucoin
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for kucoin

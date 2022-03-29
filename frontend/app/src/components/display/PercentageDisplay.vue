@@ -1,14 +1,18 @@
 <template>
   <v-row
     no-gutters
-    class="percentage-display"
+    class="percentage-display flex-nowrap"
     :justify="justify"
     align="center"
   >
     <v-col
       :cols="justify === 'end' ? null : 'auto'"
-      :style="privacyStyle"
-      :class="justify === 'end' ? 'text-end' : 'text-start'"
+      class="percentage-display__amount"
+      :class="{
+        'blur-content': !shouldShowPercentage,
+        'text-end': justify === 'end',
+        'text-start': justify !== 'start'
+      }"
     >
       {{ displayValue }}
     </v-col>
@@ -25,15 +29,16 @@
 </template>
 
 <script lang="ts">
-import { Component, Prop, Mixins } from 'vue-property-decorator';
-import PrivacyMixin from '@/mixins/privacy-mixin';
+import { Component, Mixins, Prop } from 'vue-property-decorator';
+import { mapGetters } from 'vuex';
 import ScrambleMixin from '@/mixins/scramble-mixin';
 
-@Component({})
-export default class PercentageDisplay extends Mixins(
-  ScrambleMixin,
-  PrivacyMixin
-) {
+@Component({
+  computed: {
+    ...mapGetters('session', ['shouldShowPercentage'])
+  }
+})
+export default class PercentageDisplay extends Mixins(ScrambleMixin) {
   @Prop({
     required: true,
     validator: (value: any) => typeof value === 'string' || value === null
@@ -55,6 +60,7 @@ export default class PercentageDisplay extends Mixins(
     validator: chars => chars >= 0 && chars <= 5
   })
   assetPadding!: number;
+  shouldShowPercentage!: boolean;
 
   get displayValue(): string {
     if (this.scrambleData) {
@@ -84,6 +90,12 @@ export default class PercentageDisplay extends Mixins(
 
 <style scoped lang="scss">
 .percentage-display {
+  &__amount {
+    &.blur-content {
+      filter: blur(0.75em);
+    }
+  }
+
   &__symbol {
     font-size: 0.8em;
   }

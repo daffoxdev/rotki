@@ -1,156 +1,194 @@
 <template>
-  <v-container class="accounting-settings">
+  <div class="accounting-settings">
     <v-row no-gutters>
       <v-col>
-        <v-card>
-          <v-card-title>
-            <card-title>{{ $t('accounting_settings.title') }}</card-title>
-          </v-card-title>
-          <v-card-text>
-            <v-switch
-              v-model="crypto2CryptoTrades"
-              class="accounting-settings__crypto2crypto"
-              :label="$t('accounting_settings.labels.crypto_to_crypto')"
-              color="primary"
-              :success-messages="settingsMessages['crypto2crypto'].success"
-              :error-messages="settingsMessages['crypto2crypto'].error"
-              @change="onCrypto2CryptoChange($event)"
-            />
-            <v-switch
-              v-model="gasCosts"
-              class="accounting-settings__include-gas-costs"
-              :label="$t('accounting_settings.labels.gas_costs')"
-              :success-messages="settingsMessages['gasCostChange'].success"
-              :error-messages="settingsMessages['gasCostChange'].error"
-              color="primary"
-              @change="onGasCostChange($event)"
-            />
-            <v-switch
-              v-model="taxFreePeriod"
-              class="accounting-settings__taxfree-period"
-              :success-messages="settingsMessages['taxFreePeriod'].success"
-              :error-messages="settingsMessages['taxFreePeriod'].error"
-              :label="$t('accounting_settings.labels.tax_free')"
-              color="primary"
-              @change="onTaxFreeChange($event)"
-            />
-            <v-text-field
-              v-model="taxFreeAfterPeriod"
-              class="accounting-settings__taxfree-period-days"
-              :success-messages="settingsMessages['taxFreePeriodAfter'].success"
-              :error-messages="settingsMessages['taxFreePeriodAfter'].error"
-              :disabled="!taxFreePeriod"
-              :rules="taxFreeRules"
-              :label="$t('accounting_settings.labels.tax_free_period')"
-              type="number"
-              @change="onTaxFreePeriodChange($event)"
-            />
-            <v-switch
-              v-model="accountForAssetsMovements"
-              class="accounting-settings__account-for-assets-movements"
-              :success-messages="
-                settingsMessages['accountForAssetsMovements'].success
-              "
-              :error-messages="
-                settingsMessages['accountForAssetsMovements'].error
-              "
-              :label="
-                $t('accounting_settings.labels.account_for_assets_movements')
-              "
-              color="primary"
-              @change="onAccountForAssetsMovements($event)"
-            />
-            <v-switch
-              v-model="calculatePastCostBasis"
-              class="accounting-settings__past-cost-basis"
-              :success-messages="
-                settingsMessages['calculatePastCostBasis'].success
-              "
-              :error-messages="settingsMessages['calculatePastCostBasis'].error"
-              :label="
-                $t('accounting_settings.labels.calculate_past_cost_basis')
-              "
-              color="primary"
-              @change="onCalculatePastCostBasisChange($event)"
-            />
-          </v-card-text>
-        </v-card>
+        <card>
+          <template #title>
+            {{ $t('accounting_settings.title') }}
+          </template>
+
+          <v-switch
+            v-model="crypto2CryptoTrades"
+            class="accounting-settings__crypto2crypto"
+            :label="$t('accounting_settings.labels.crypto_to_crypto')"
+            color="primary"
+            :success-messages="settingsMessages['crypto2crypto'].success"
+            :error-messages="settingsMessages['crypto2crypto'].error"
+            @change="onCrypto2CryptoChange($event)"
+          />
+          <v-switch
+            v-model="gasCosts"
+            class="accounting-settings__include-gas-costs"
+            :label="$t('accounting_settings.labels.gas_costs')"
+            :success-messages="settingsMessages['gasCostChange'].success"
+            :error-messages="settingsMessages['gasCostChange'].error"
+            color="primary"
+            @change="onGasCostChange($event)"
+          />
+          <v-switch
+            v-model="taxFreePeriod"
+            class="accounting-settings__taxfree-period"
+            :success-messages="settingsMessages['taxFreePeriod'].success"
+            :error-messages="settingsMessages['taxFreePeriod'].error"
+            :label="$t('accounting_settings.labels.tax_free')"
+            color="primary"
+            @change="onTaxFreeChange($event)"
+          />
+          <v-text-field
+            v-model="taxFreeAfterPeriod"
+            outlined
+            class="accounting-settings__taxfree-period-days"
+            :success-messages="settingsMessages['taxFreePeriodAfter'].success"
+            :error-messages="settingsMessages['taxFreePeriodAfter'].error"
+            :disabled="!taxFreePeriod"
+            :rules="taxFreeRules"
+            :label="$t('accounting_settings.labels.tax_free_period')"
+            type="number"
+            @change="onTaxFreePeriodChange($event)"
+          />
+          <v-switch
+            v-model="accountForAssetsMovements"
+            class="accounting-settings__account-for-assets-movements"
+            :success-messages="
+              settingsMessages['accountForAssetsMovements'].success
+            "
+            :error-messages="
+              settingsMessages['accountForAssetsMovements'].error
+            "
+            :label="
+              $t('accounting_settings.labels.account_for_assets_movements')
+            "
+            color="primary"
+            @change="onAccountForAssetsMovements($event)"
+          />
+          <v-switch
+            v-model="calculatePastCostBasis"
+            class="accounting-settings__past-cost-basis"
+            :success-messages="
+              settingsMessages['calculatePastCostBasis'].success
+            "
+            :error-messages="settingsMessages['calculatePastCostBasis'].error"
+            :label="$t('accounting_settings.labels.calculate_past_cost_basis')"
+            color="primary"
+            @change="onCalculatePastCostBasisChange($event)"
+          />
+        </card>
       </v-col>
     </v-row>
     <v-row class="mt-8" no-gutters>
       <v-col>
-        <v-card>
-          <v-card-title>
-            <card-title>
-              {{ $t('account_settings.asset_settings.title') }}
-            </card-title>
-          </v-card-title>
-          <v-card-text>
-            <v-row>
-              <v-col cols="10">
-                <asset-select
-                  v-model="assetToIgnore"
-                  :label="$t('account_settings.asset_settings.labels.ignore')"
-                  :success-messages="settingsMessages['addIgnoreAsset'].success"
-                  :error-messages="settingsMessages['addIgnoreAsset'].error"
-                  :hint="$t('account_settings.asset_settings.ignore_tags_hint')"
-                  class="accounting-settings__asset-to-ignore"
-                />
-              </v-col>
-              <v-col cols="2">
-                <v-btn
-                  class="accounting-settings__buttons__add"
-                  text
-                  color="primary"
-                  :disabled="assetToIgnore === ''"
-                  @click="addAsset()"
-                >
-                  {{ $t('account_settings.asset_settings.actions.add') }}
-                </v-btn>
-              </v-col>
-            </v-row>
-            <v-row>
-              <v-col cols="10" class="d-flex">
-                <asset-select
-                  v-model="assetToRemove"
-                  :label="$t('account_settings.asset_settings.labels.unignore')"
-                  value="test"
-                  :items="ignoredAssets"
-                  :success-messages="settingsMessages['remIgnoreAsset'].success"
-                  :error-messages="settingsMessages['remIgnoreAsset'].error"
-                  :hint="
-                    $t('account_settings.asset_settings.labels.unignore_hint')
-                  "
-                  class="accounting-settings__ignored-assets"
-                />
-                <div slot="append-outer">
-                  <v-badge>
-                    <template #badge>
-                      <span class="accounting-settings__ignored-assets__badge">
-                        {{ ignoredAssets.length }}
-                      </span>
-                    </template>
-                  </v-badge>
-                </div>
-              </v-col>
-              <v-col cols="2">
-                <v-btn
-                  class="accounting-settings__buttons__remove"
-                  text
-                  color="primary"
-                  :disabled="assetToRemove === ''"
-                  @click="removeAsset()"
-                >
-                  {{ $t('account_settings.asset_settings.actions.remove') }}
-                </v-btn>
-              </v-col>
-            </v-row>
-          </v-card-text>
-        </v-card>
+        <card>
+          <template #title>
+            {{ $t('account_settings.asset_settings.title') }}
+          </template>
+
+          <v-row no-gutters>
+            <v-col>
+              <asset-select
+                v-model="assetToIgnore"
+                outlined
+                :label="$t('account_settings.asset_settings.labels.ignore')"
+                :success-messages="settingsMessages['addIgnoreAsset'].success"
+                :error-messages="settingsMessages['addIgnoreAsset'].error"
+                :hint="$t('account_settings.asset_settings.ignore_tags_hint')"
+                class="accounting-settings__asset-to-ignore"
+              />
+            </v-col>
+            <v-col cols="auto">
+              <v-btn
+                class="accounting-settings__buttons__add mt-3"
+                text
+                width="110px"
+                color="primary"
+                :disabled="assetToIgnore === ''"
+                @click="addAsset()"
+              >
+                {{ $t('account_settings.asset_settings.actions.add') }}
+              </v-btn>
+            </v-col>
+          </v-row>
+          <v-row no-gutters>
+            <v-col>
+              <asset-select
+                v-model="assetToRemove"
+                outlined
+                :label="$t('account_settings.asset_settings.labels.unignore')"
+                value="test"
+                :items="ignoredAssets"
+                :success-messages="settingsMessages['remIgnoreAsset'].success"
+                :error-messages="settingsMessages['remIgnoreAsset'].error"
+                :hint="
+                  $t('account_settings.asset_settings.labels.unignore_hint')
+                "
+                class="accounting-settings__ignored-assets"
+              />
+            </v-col>
+            <v-col cols="auto">
+              <v-btn
+                width="110px"
+                class="accounting-settings__buttons__remove mt-3"
+                text
+                color="primary"
+                :disabled="assetToRemove === ''"
+                @click="removeAsset()"
+              >
+                {{ $t('account_settings.asset_settings.actions.remove') }}
+              </v-btn>
+            </v-col>
+          </v-row>
+          <v-row no-gutters>
+            <v-col cols="auto">
+              {{ $t('accounting_settings.ignored_assets') }}
+            </v-col>
+            <v-col>
+              <v-badge class="pl-2">
+                <template #badge>
+                  <div class="accounting-settings__ignored-assets__badge">
+                    {{ ignoredAssets.length }}
+                  </div>
+                </template>
+              </v-badge>
+            </v-col>
+          </v-row>
+        </card>
       </v-col>
     </v-row>
     <ledger-action-settings class="mt-18" />
-  </v-container>
+    <v-row class="mt-8" no-gutters>
+      <v-col>
+        <card>
+          <template #title>
+            {{ $t('account_settings.csv_export_settings.title') }}
+          </template>
+
+          <v-switch
+            v-model="exportCSVFormulas"
+            class="csv_export_settings__exportCSVFormulas"
+            :label="
+              $t(
+                'account_settings.csv_export_settings.labels.export_csv_formulas'
+              )
+            "
+            color="primary"
+            :success-messages="settingsMessages['exportCSVFormulas'].success"
+            :error-messages="settingsMessages['exportCSVFormulas'].error"
+            @change="onExportCSVFormulasChange($event)"
+          />
+          <v-switch
+            v-model="haveCSVSummary"
+            class="csv_export_settings__haveCSVSummary"
+            :label="
+              $t('account_settings.csv_export_settings.labels.have_csv_summary')
+            "
+            color="primary"
+            :success-messages="settingsMessages['haveCSVSummary'].success"
+            :error-messages="settingsMessages['haveCSVSummary'].error"
+            @change="onHaveCSVSummaryChange($event)"
+          />
+        </card>
+      </v-col>
+    </v-row>
+  </div>
 </template>
 
 <script lang="ts">
@@ -163,6 +201,8 @@ import AssetMixin from '@/mixins/asset-mixin';
 import SettingsMixin from '@/mixins/settings-mixin';
 import { ActionStatus } from '@/store/types';
 
+const haveCSVSummary = 'haveCSVSummary';
+const exportCSVFormulas = 'exportCSVFormulas';
 const crypto2crypto = 'crypto2crypto';
 const gasCostChange = 'gasCostChange';
 const taxFreePeriod = 'taxFreePeriod';
@@ -173,6 +213,8 @@ const accountForAssetsMovements = 'accountForAssetsMovements';
 const calculatePastCostBasis = 'calculatePastCostBasis';
 
 const SETTINGS = [
+  haveCSVSummary,
+  exportCSVFormulas,
   crypto2crypto,
   gasCostChange,
   taxFreePeriod,
@@ -204,6 +246,8 @@ export default class Accounting extends Mixins<
   ignoreAsset!: (asset: string) => Promise<ActionStatus>;
   unignoreAsset!: (asset: string) => Promise<ActionStatus>;
 
+  haveCSVSummary: boolean = false;
+  exportCSVFormulas: boolean = false;
   crypto2CryptoTrades: boolean = false;
   gasCosts: boolean = false;
   taxFreeAfterPeriod: number | null = null;
@@ -228,18 +272,22 @@ export default class Accounting extends Mixins<
   }
 
   mounted() {
-    this.crypto2CryptoTrades = this.accountingSettings.includeCrypto2Crypto;
+    this.haveCSVSummary = this.accountingSettings.pnlCsvHaveSummary;
+    this.exportCSVFormulas = this.accountingSettings.pnlCsvWithFormulas;
+    this.crypto2CryptoTrades = this.accountingSettings.includeCrypto2crypto;
     this.gasCosts = this.accountingSettings.includeGasCosts;
-    if (this.accountingSettings.taxFreeAfterPeriod) {
+    if (this.accountingSettings.taxfreeAfterPeriod) {
       this.taxFreePeriod = true;
       this.taxFreeAfterPeriod =
-        this.accountingSettings.taxFreeAfterPeriod / 86400;
+        this.accountingSettings.taxfreeAfterPeriod / 86400;
     } else {
       this.taxFreePeriod = false;
       this.taxFreeAfterPeriod = null;
     }
-    this.accountForAssetsMovements = this.accountingSettings.accountForAssetsMovements;
-    this.calculatePastCostBasis = this.accountingSettings.calculatePastCostBasis;
+    this.accountForAssetsMovements =
+      this.accountingSettings.accountForAssetsMovements;
+    this.calculatePastCostBasis =
+      this.accountingSettings.calculatePastCostBasis;
   }
 
   onTaxFreeChange(enabled: boolean) {
@@ -248,7 +296,7 @@ export default class Accounting extends Mixins<
     if (!enabled) {
       taxFreeAfterPeriod = null;
     } else {
-      const period = this.accountingSettings.taxFreeAfterPeriod;
+      const period = this.accountingSettings.taxfreeAfterPeriod;
       if (period) {
         taxFreeAfterPeriod = period / 86400;
       } else {
@@ -264,7 +312,7 @@ export default class Accounting extends Mixins<
       this.taxFreeAfterPeriod = null;
     }
     this.$api
-      .setSettings({ taxfree_after_period: taxFreeAfterPeriod! })
+      .setSettings({ taxfreeAfterPeriod: taxFreeAfterPeriod! })
       .then(settings => {
         this.validateSettingChange(
           'taxFreePeriod',
@@ -276,7 +324,7 @@ export default class Accounting extends Mixins<
 
         commit('session/accountingSettings', {
           ...this.accountingSettings,
-          taxFreeAfterPeriod: settings.taxfree_after_period
+          taxfreeAfterPeriod: settings.accounting.taxfreeAfterPeriod
         });
       })
       .catch((reason: Error) => {
@@ -299,7 +347,7 @@ export default class Accounting extends Mixins<
     const { commit } = this.$store;
 
     this.$api
-      .setSettings({ taxfree_after_period: period })
+      .setSettings({ taxfreeAfterPeriod: period })
       .then(settings => {
         this.validateSettingChange(
           'taxFreePeriodAfter',
@@ -311,7 +359,7 @@ export default class Accounting extends Mixins<
 
         commit('session/accountingSettings', {
           ...this.accountingSettings,
-          taxFreeAfterPeriod: settings.taxfree_after_period
+          taxfreeAfterPeriod: settings.accounting.taxfreeAfterPeriod
         });
       })
       .catch((reason: Error) => {
@@ -328,11 +376,11 @@ export default class Accounting extends Mixins<
     const { commit } = this.$store;
 
     this.$api
-      .setSettings({ include_crypto2crypto: enabled })
+      .setSettings({ includeCrypto2crypto: enabled })
       .then(settings => {
         commit('session/accountingSettings', {
           ...this.accountingSettings,
-          includeCrypto2Crypto: settings.include_crypto2crypto
+          includeCrypto2crypto: settings.accounting.includeCrypto2crypto
         });
         this.validateSettingChange('crypto2crypto', 'success');
       })
@@ -351,11 +399,11 @@ export default class Accounting extends Mixins<
     const { commit } = this.$store;
 
     this.$api
-      .setSettings({ include_gas_costs: enabled })
+      .setSettings({ includeGasCosts: enabled })
       .then(settings => {
         commit('session/accountingSettings', {
           ...this.accountingSettings,
-          includeGasCosts: settings.include_gas_costs
+          includeGasCosts: settings.accounting.includeGasCosts
         });
         this.validateSettingChange('gasCostChange', 'success');
       })
@@ -374,11 +422,12 @@ export default class Accounting extends Mixins<
     const { commit } = this.$store;
 
     this.$api
-      .setSettings({ account_for_assets_movements: enabled })
+      .setSettings({ accountForAssetsMovements: enabled })
       .then(settings => {
         commit('session/accountingSettings', {
           ...this.accountingSettings,
-          accountForAssetsMovements: settings.account_for_assets_movements
+          accountForAssetsMovements:
+            settings.accounting.accountForAssetsMovements
         });
         this.validateSettingChange('accountForAssetsMovements', 'success');
       })
@@ -397,9 +446,55 @@ export default class Accounting extends Mixins<
       });
   }
 
+  onHaveCSVSummaryChange(enabled: boolean) {
+    const { commit } = this.$store;
+
+    this.$api
+      .setSettings({ pnlCsvHaveSummary: enabled })
+      .then(settings => {
+        commit('session/accountingSettings', {
+          ...this.accountingSettings,
+          pnlCsvHaveSummary: settings.accounting.pnlCsvHaveSummary
+        });
+        this.validateSettingChange('haveCSVSummary', 'success');
+      })
+      .catch(reason => {
+        this.validateSettingChange(
+          'haveCSVSummary',
+          'error',
+          this.$tc('account_settings.messages.have_csv_summary', 0, {
+            message: reason.message
+          })
+        );
+      });
+  }
+
+  onExportCSVFormulasChange(enabled: boolean) {
+    const { commit } = this.$store;
+
+    this.$api
+      .setSettings({ pnlCsvWithFormulas: enabled })
+      .then(settings => {
+        commit('session/accountingSettings', {
+          ...this.accountingSettings,
+          pnlCsvWithFormulas: settings.accounting.pnlCsvWithFormulas
+        });
+        this.validateSettingChange('exportCSVFormulas', 'success');
+      })
+      .catch(reason => {
+        this.validateSettingChange(
+          'exportCSVFormulas',
+          'error',
+          this.$tc('account_settings.messages.export_csv_formulas', 0, {
+            message: reason.message
+          })
+        );
+      });
+  }
+
   async onCalculatePastCostBasisChange(enabled: boolean) {
     const { success, message } = await this.settingsUpdate({
-      calculate_past_cost_basis: enabled
+      calculatePastCostBasis: enabled
     });
     this.validateSettingChange(
       'calculatePastCostBasis',

@@ -1,4 +1,5 @@
 import csv
+import logging
 from collections import defaultdict
 from json.decoder import JSONDecodeError
 from pathlib import Path
@@ -12,15 +13,26 @@ from rotkehlchen.constants.assets import (
     A_COMBO,
     A_CORN,
     A_CRV,
+    A_CVX,
+    A_ENS,
+    A_FOX,
     A_GRAIN,
     A_LDO,
+    A_PSP,
+    A_SDL,
     A_TORN,
     A_UNI,
 )
-from rotkehlchen.errors import RemoteError
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
+from rotkehlchen.errors import RemoteError, UnableToDecryptRemoteData
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import ChecksumEthAddress
 from rotkehlchen.utils.serialization import jsonloads_dict, rlk_jsondumps
 
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
+
+SMALLEST_AIRDROP_SIZE = 20900
 AIRDROPS = {
     'uniswap': (
         # is checksummed
@@ -36,7 +48,7 @@ AIRDROPS = {
     ),
     'tornado': (
         # is checksummed
-        'https://raw.githubusercontent.com/tornadocash/airdrop/master/airdrop.csv',
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/tornado.csv',
         A_TORN,
         'https://tornado.cash/',
     ),
@@ -69,6 +81,31 @@ AIRDROPS = {
         'https://gist.githubusercontent.com/LefterisJP/9a37e5342ddb6219a805a82bcd3d63fe/raw/71e89f0e95ea8ef5503fb1ac569447fea63f1ede/curve_airdrop.csv',  # noqa: E501
         A_CRV,
         'https://www.curve.fi/',
+    ),
+    'convex': (
+        'https://gist.githubusercontent.com/LefterisJP/fd0ebccbc645f7de2b142907bd207363/raw/0613689dd5212b81788ed1a108c751b29b2ce93a/convex_airdrop.csv',  # noqa: E501
+        A_CVX,
+        'https://www.convexfinance.com/',
+    ),
+    'fox': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/shapeshift.csv',
+        A_FOX,
+        'https://shapeshift.com/shapeshift-decentralize-airdrop',
+    ),
+    'ens': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/ens.csv',
+        A_ENS,
+        'https://claim.ens.domains/',
+    ),
+    'psp': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/psp.csv',
+        A_PSP,
+        'https://paraswap.io/',
+    ),
+    'sdl': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/saddle_finance.csv',
+        A_SDL,
+        'https://saddle.exchange/#/',
     ),
 }
 
@@ -179,13 +216,24 @@ def get_airdrop_data(name: str, data_dir: Path) -> Tuple[Iterator, TextIO]:
     if not filename.is_file():
         # if not cached, get it from the gist
         try:
-            request = requests.get(AIRDROPS[name][0])
+            response = requests.get(url=AIRDROPS[name][0], timeout=DEFAULT_TIMEOUT_TUPLE)
         except requests.exceptions.RequestException as e:
             raise RemoteError(f'Airdrops Gist request failed due to {str(e)}') from e
-
-        with open(filename, 'w') as f:
-            f.write(request.content.decode('utf-8'))
-
+        try:
+            content = response.text
+            if (
+                not csv.Sniffer().has_header(content) or
+                len(response.content) < SMALLEST_AIRDROP_SIZE
+            ):
+                raise csv.Error
+            with open(filename, 'w') as f:
+                f.write(content)
+        except csv.Error as e:
+            log.debug(f'airdrop file {filename} contains invalid data {content}')
+            raise UnableToDecryptRemoteData(
+                f'File {filename} contains invalid data. Check logs.',
+            ) from e
+    # Verify the CSV file
     csvfile = open(filename, 'r')
     iterator = csv.reader(csvfile)
     next(iterator)  # skip header
@@ -199,7 +247,7 @@ def get_poap_airdrop_data(name: str, data_dir: Path) -> Dict[str, Any]:
     if not filename.is_file():
         # if not cached, get it from the gist
         try:
-            request = requests.get(POAP_AIRDROPS[name][0])
+            request = requests.get(url=POAP_AIRDROPS[name][0], timeout=DEFAULT_TIMEOUT_TUPLE)
         except requests.exceptions.RequestException as e:
             raise RemoteError(f'POAP airdrops Gist request failed due to {str(e)}') from e
 
@@ -228,10 +276,15 @@ def check_airdrops(
     found_data: Dict[ChecksumEthAddress, Dict] = defaultdict(lambda: defaultdict(dict))
     for protocol_name, airdrop_data in AIRDROPS.items():
         data, csvfile = get_airdrop_data(protocol_name, data_dir)
-        for addr, amount, *_ in data:
+        for row in data:
+            if len(row) < 2:
+                raise UnableToDecryptRemoteData(
+                    f'Airdrop CSV for {protocol_name} contains an invalid row: {row}',
+                )
+            addr, amount, *_ = row
             # not doing to_checksum_address() here since the file addresses are checksummed
             # and doing to_checksum_address() so many times hits performance
-            if protocol_name in ('cornichon', 'tornado', 'grain', 'lido'):
+            if protocol_name in ('cornichon', 'tornado', 'grain', 'lido', 'sdl'):
                 amount = token_normalized_value_decimals(int(amount), 18)
             if addr in addresses:
                 found_data[addr][protocol_name] = {

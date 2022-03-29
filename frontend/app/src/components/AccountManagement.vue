@@ -1,17 +1,31 @@
 <template>
   <v-overlay opacity="1" color="grey lighten-4">
-    <div class="account-management__loading" />
+    <div
+      :class="{
+        'account-management__loading': !xsOnly
+      }"
+    />
     <div v-if="!premiumVisible">
-      <v-card class="account-management__card pb-6" width="500px" light>
+      <v-card class="account-management__card pb-4" :width="width" light>
         <div
-          class="pt-6 pb-3 text-h2 font-weight-black white--text account-management__card__title"
+          class="
+            pt-6
+            pb-3
+            text-h2
+            font-weight-black
+            white--text
+            account-management__card__title
+          "
         >
           <span class="px-6">{{ $t('app.name') }}</span>
           <span class="d-block mb-3 pl-6 text-caption">
             {{ $t('app.moto') }}
           </span>
         </div>
-        <connection-loading v-if="!connectionFailure" :connected="connected" />
+        <connection-loading
+          v-if="!connectionFailure"
+          :connected="connected && !autolog"
+        />
         <connection-failure v-else />
         <v-slide-y-transition>
           <login
@@ -20,7 +34,7 @@
             :sync-conflict="syncConflict"
             :errors="errors"
             @touched="errors = []"
-            @login="login($event)"
+            @login="userLogin($event)"
             @backend-changed="backendChanged($event)"
             @new-account="accountCreation = true"
           />
@@ -32,16 +46,29 @@
             :error="accountCreationError"
             @error:clear="accountCreationError = ''"
             @cancel="accountCreation = false"
-            @confirm="createAccount($event)"
+            @confirm="createNewAccount($event)"
           />
         </v-slide-y-transition>
       </v-card>
       <privacy-notice />
       <div v-if="$interop.isPackaged" class="account-management__log-level">
-        <log-level
-          :value="loglevel"
-          @input="startBackendWithLogLevel($event)"
-        />
+        <backend-settings-button />
+      </div>
+      <div v-if="!$interop.isPackaged" class="account-management__about">
+        <v-tooltip open-delay="400" top>
+          <template #activator="{ on, attrs }">
+            <v-btn
+              icon
+              color="primary"
+              v-bind="attrs"
+              @click="$emit('about')"
+              v-on="on"
+            >
+              <v-icon>mdi-information</v-icon>
+            </v-btn>
+          </template>
+          <span>{{ $t('account_management.about_tooltip') }}</span>
+        </v-tooltip>
       </div>
     </div>
 
@@ -54,7 +81,7 @@
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
+import { Component, Emit, Mixins, Prop, Watch } from 'vue-property-decorator';
 import { mapActions, mapGetters, mapMutations, mapState } from 'vuex';
 import ConnectionFailure from '@/components/account-management/ConnectionFailure.vue';
 import ConnectionLoading from '@/components/account-management/ConnectionLoading.vue';
@@ -63,68 +90,71 @@ import Login from '@/components/account-management/Login.vue';
 import PremiumReminder from '@/components/account-management/PremiumReminder.vue';
 import {
   deleteBackendUrl,
-  getBackendUrl
+  getBackendUrl,
+  setLastLogin
 } from '@/components/account-management/utils';
-import LogLevel from '@/components/helper/LogLevel.vue';
+import BackendSettingsButton from '@/components/helper/BackendSettingsButton.vue';
 import PrivacyNotice from '@/components/PrivacyNotice.vue';
+import BackendMixin from '@/mixins/backend-mixin';
 import { SyncConflict } from '@/store/session/types';
 import { ActionStatus, Message } from '@/store/types';
-import { Credentials, UnlockPayload } from '@/typing/types';
-import {
-  CRITICAL,
-  currentLogLevel,
-  DEBUG,
-  Level,
-  LOG_LEVEL
-} from '@/utils/log-level';
+import { CreateAccountPayload, LoginCredentials } from '@/types/login';
 
 @Component({
   components: {
+    BackendSettingsButton,
     ConnectionFailure,
     PrivacyNotice,
     ConnectionLoading,
     PremiumReminder,
-    LogLevel,
     Login,
     CreateAccount
   },
   computed: {
-    ...mapState(['connectionFailure']),
+    ...mapState(['connectionFailure', 'newUser']),
     ...mapState('session', ['syncConflict', 'premium']),
     ...mapState(['message', 'connected']),
     ...mapGetters(['updateNeeded', 'message'])
   },
   methods: {
-    ...mapActions('session', ['unlock']),
+    ...mapActions('session', ['login', 'createAccount']),
     ...mapMutations(['setMessage'])
   }
 })
-export default class AccountManagement extends Vue {
+export default class AccountManagement extends Mixins(BackendMixin) {
   accountCreation: boolean = false;
   premium!: boolean;
   loading: boolean = false;
+  autolog: boolean = false;
   message!: Message;
   connected!: boolean;
   syncConflict!: SyncConflict;
-  unlock!: (payload: UnlockPayload) => Promise<ActionStatus>;
+  login!: (payload: LoginCredentials) => Promise<ActionStatus>;
+  createAccount!: (payload: CreateAccountPayload) => Promise<ActionStatus>;
   setMessage!: (message: Message) => void;
   errors: string[] = [];
   accountCreationError: string = '';
-
-  loglevel: Level = process.env.NODE_ENV === 'development' ? DEBUG : CRITICAL;
 
   premiumVisible = false;
 
   @Prop({ required: true, type: Boolean })
   logged!: boolean;
   connectionFailure!: boolean;
+  newUser!: boolean;
+
+  get xsOnly(): boolean {
+    return this.$vuetify.breakpoint.xsOnly;
+  }
+
+  get width(): string {
+    return this.xsOnly ? '100%' : '500px';
+  }
 
   get displayPremium(): boolean {
     return !this.premium && !this.message.title && this.premiumVisible;
   }
 
   async created() {
-    this.loglevel = currentLogLevel();
     if (this.connected) {
       return;
     }
@@ -133,7 +163,7 @@ export default class AccountManagement extends Vue {
     if (!!url && !sessionOnly) {
       await this.backendChanged(url);
     } else {
-      await this.startBackendWithLogLevel(this.loglevel);
+      await this.restartBackend();
     }
   }
 
@@ -141,7 +171,18 @@ export default class AccountManagement extends Vue {
     const { sessionOnly } = getBackendUrl();
     if (sessionOnly) {
       deleteBackendUrl();
-      await this.startBackendWithLogLevel(this.loglevel);
+      await this.restartBackend();
+    }
+
+    this.autolog = true;
+    await this.login({ username: '', password: '' });
+    if (this.logged) {
+      this.showPremiumDialog();
+      this.showGetPremiumButton();
+    }
+    this.autolog = false;
+    if (this.newUser) {
+      this.accountCreation = true;
     }
   }
 
@@ -150,36 +191,25 @@ export default class AccountManagement extends Vue {
     this.dismiss();
   }
 
-  async backendChanged(url: string | null) {
-    await this.$store.commit('setConnected', false);
-    const { success } = await this.$store.dispatch('connect', url);
-    if (!success) {
-      this.setMessage({
-        success: false,
-        description: this.$t(
-          'account_management.custom_backend.failed.description',
-          { url }
-        ).toString(),
-        title: this.$t(
-          'account_management.custom_backend.failed.title'
-        ).toString()
-      });
-      deleteBackendUrl();
-      await this.startBackendWithLogLevel(this.loglevel);
+  @Watch('newUser')
+  onNewUser(newUser: boolean) {
+    if (newUser) {
+      this.accountCreation = true;
     }
   }
 
-  async startBackendWithLogLevel(level: Level) {
-    localStorage.setItem(LOG_LEVEL, level);
+  async backendChanged(url: string | null) {
     await this.$store.commit('setConnected', false);
-    await this.$interop.restartBackend(level);
-    await this.$store.dispatch('connect');
+    if (!url) {
+      await this.restartBackend();
+    }
+    await this.$store.dispatch('connect', url);
   }
 
-  async login(credentials: Credentials) {
+  async userLogin(credentials: LoginCredentials) {
     const { username, password, syncApproval } = credentials;
     this.loading = true;
-    const { message } = await this.unlock({
+    const { message } = await this.login({
       username,
       password,
       syncApproval
@@ -190,30 +220,16 @@ export default class AccountManagement extends Vue {
     }
     this.loading = false;
     if (this.logged) {
+      setLastLogin(username);
       this.showPremiumDialog();
       this.showGetPremiumButton();
     }
   }
 
-  async createAccount(credentials: Credentials) {
-    const {
-      username,
-      password,
-      apiKey,
-      apiSecret,
-      submitUsageAnalytics
-    } = credentials;
+  async createNewAccount(payload: CreateAccountPayload) {
     this.loading = true;
     this.accountCreationError = '';
-    const { message, success } = await this.unlock({
-      username,
-      password,
-      create: true,
-      syncApproval: 'unknown',
-      apiKey,
-      apiSecret,
-      submitUsageAnalytics
-    });
+    const { message, success } = await this.createAccount(payload);
     this.loading = false;
 
     if (success) {
@@ -298,7 +314,8 @@ export default class AccountManagement extends Vue {
     animation-iteration-count: infinite;
   }
 
-  &__log-level {
+  &__log-level,
+  &__about {
     position: absolute !important;
     width: 56px !important;
     right: 12px !important;

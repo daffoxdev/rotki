@@ -1,26 +1,39 @@
 <template>
-  <v-container
+  <div
     :style="`height: calc(100vh - ${top + 64}px);`"
     class="d-flex flex-column align-center justify-center"
   >
     <div class="module-not-active__container">
       <v-row align="center" justify="center">
         <v-col v-for="module in modules" :key="module" cols="auto">
-          <v-img max-width="82px" contain :src="icon(module)" />
+          <v-img width="82px" contain :src="icon(module)" />
         </v-col>
       </v-row>
       <v-row align="center" justify="center" class="mt-16">
         <v-col cols="auto" class="text--secondary">
-          <i18n tag="span" path="module_not_active.not_active">
+          <i18n
+            tag="span"
+            path="module_not_active.not_active"
+            class="text-center"
+          >
             <template #link>
-              <v-btn
-                class="module-not-active__link font-weight-regular text-body-1"
+              <router-link
+                class="
+                  module-not-active__link
+                  font-weight-regular
+                  text-body-1 text-decoration-none
+                "
                 text
-                to="/settings/defi"
+                to="/settings/modules"
                 small
               >
                 {{ $t('module_not_active.settings_link') }}
-              </v-btn>
+              </router-link>
+            </template>
+            <template #text>
+              <div v-if="modules.length > 1">
+                {{ $t('module_not_active.at_least_one') }}
+              </div>
             </template>
             <template #module>
               <span
@@ -35,32 +48,31 @@
         </v-col>
       </v-row>
     </div>
-  </v-container>
+  </div>
 </template>
 
 <script lang="ts">
 import { Component, Prop, Vue } from 'vue-property-decorator';
-import { DEFI_MODULES } from '@/components/defi/wizard/consts';
-import { MODULES } from '@/services/session/consts';
-import { SupportedModules } from '@/services/session/types';
+import { SUPPORTED_MODULES } from '@/components/defi/wizard/consts';
+import { Module } from '@/types/modules';
 
 @Component({})
 export default class ModuleNotActive extends Vue {
   @Prop({
     required: true,
     type: Array,
-    validator: (value: SupportedModules[]) =>
-      value.every(module => MODULES.includes(module))
+    validator: (value: Module[]) =>
+      value.every(module => Object.values(Module).includes(module))
   })
-  modules!: SupportedModules;
+  modules!: Module;
 
   name(module: string): string {
-    const data = DEFI_MODULES.find(value => value.identifier === module);
+    const data = SUPPORTED_MODULES.find(value => value.identifier === module);
     return data?.name ?? '';
   }
 
-  icon(module: SupportedModules): string {
-    const data = DEFI_MODULES.find(value => value.identifier === module);
+  icon(module: Module): string {
+    const data = SUPPORTED_MODULES.find(value => value.identifier === module);
     return data?.icon ?? '';
   }
 

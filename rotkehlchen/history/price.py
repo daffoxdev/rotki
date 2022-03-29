@@ -3,10 +3,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.constants.assets import A_USD
+from rotkehlchen.constants.assets import A_KFEE, A_USD
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.errors import NoPriceForGivenTimestamp, PriceQueryUnsupportedAsset, RemoteError
 from rotkehlchen.fval import FVal
+from rotkehlchen.globaldb.manual_price_oracle import ManualPriceOracle
 from rotkehlchen.inquirer import Inquirer
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import Price, Timestamp
@@ -16,7 +17,7 @@ from rotkehlchen.utils.misc import timestamp_to_date
 from .typing import HistoricalPriceOracle, HistoricalPriceOracleInstance
 
 if TYPE_CHECKING:
-    from rotkehlchen.accounting.structures import AssetBalance, Balance
+    from rotkehlchen.accounting.structures import Balance
     from rotkehlchen.externalapis.coingecko import Coingecko
     from rotkehlchen.externalapis.cryptocompare import Cryptocompare
 
@@ -38,7 +39,7 @@ def query_usd_price_or_use_default(
         )
     except (RemoteError, NoPriceForGivenTimestamp):
         log.error(
-            f'Could not query usd price for {asset.identifier} and time {time}'
+            f'Could not query usd price for {asset.identifier} and time {time} '
             f'when processing {location}. Assuming price of ${str(default_value)}',
         )
         usd_price = Price(default_value)
@@ -91,29 +92,11 @@ def get_balance_asset_rate_at_time_zero_if_error(
     return usd_rate / price
 
 
-def get_asset_balance_rate_at_time_zero_if_error(
-        asset_balance: 'AssetBalance',
-        timestamp: Timestamp,
-        location_hint: str,
-        msg_aggregator: MessagesAggregator,
-) -> FVal:
-    """How many of asset, 1 unit of balance is worth at the given timestamp
-
-    If an error occurs at query we return an asset rate of zero
-    """
-    return get_balance_asset_rate_at_time_zero_if_error(
-        balance=asset_balance.balance,
-        asset=asset_balance.asset,
-        timestamp=timestamp,
-        location_hint=location_hint,
-        msg_aggregator=msg_aggregator,
-    )
-
-
 class PriceHistorian():
     __instance: Optional['PriceHistorian'] = None
     _cryptocompare: 'Cryptocompare'
     _coingecko: 'Coingecko'
+    _manual: ManualPriceOracle  # This is used when iterating through all oracles
     _oracles: Optional[List[HistoricalPriceOracle]] = None
     _oracle_instances: Optional[List[HistoricalPriceOracleInstance]] = None
 
@@ -133,6 +116,7 @@ class PriceHistorian():
         PriceHistorian.__instance = object.__new__(cls)
         PriceHistorian._cryptocompare = cryptocompare
         PriceHistorian._coingecko = coingecko
+        PriceHistorian._manual = ManualPriceOracle()
 
         return PriceHistorian.__instance
 
@@ -144,6 +128,43 @@ class PriceHistorian():
         instance = PriceHistorian()
         instance._oracles = oracles
         instance._oracle_instances = [getattr(instance, f'_{str(oracle)}') for oracle in oracles]
+
+    @staticmethod
+    def get_price_for_special_asset(
+        from_asset: Asset,
+        to_asset: Asset,
+        timestamp: Timestamp,
+    ) -> Optional[Price]:
+        """
+        Query the historical price on `timestamp` for `from_asset` in `to_asset`
+        for the case where `from_asset` needs a special handling.
+
+        Can return None if the from asset is not in the list of special cases
+
+        Args:
+            from_asset: The ticker symbol of the asset for which we want to know
+                        the price.
+            to_asset: The ticker symbol of the asset against which we want to
+                      know the price.
+            timestamp: The timestamp at which to query the price
+
+        May raise:
+        - NoPriceForGivenTimestamp if we can't find a price for the asset in the given
+        timestamp from the external service.
+        """
+        if from_asset == A_KFEE:
+            # For KFEE the price is fixed at 0.01$
+            usd_price = Price(FVal(0.01))
+            if to_asset == A_USD:
+                return usd_price
+
+            price_mapping = PriceHistorian().query_historical_price(
+                from_asset=A_USD,
+                to_asset=to_asset,
+                timestamp=timestamp,
+            )
+            return Price(usd_price * price_mapping)
+        return None
 
     @staticmethod
     def query_historical_price(
@@ -174,6 +195,14 @@ class PriceHistorian():
         )
         if from_asset == to_asset:
             return Price(FVal('1'))
+
+        special_asset_price = PriceHistorian().get_price_for_special_asset(
+            from_asset=from_asset,
+            to_asset=to_asset,
+            timestamp=timestamp,
+        )
+        if special_asset_price is not None:
+            return special_asset_price
 
         # Querying historical forex data is attempted first via the external apis
         # and then via any price oracle that has fiat to fiat.
@@ -208,16 +237,8 @@ class PriceHistorian():
                     to_asset=to_asset,
                     timestamp=timestamp,
                 )
-            except (PriceQueryUnsupportedAsset, NoPriceForGivenTimestamp, RemoteError) as e:
-                log.warning(
-                    f'Historical price oracle {oracle} failed to request '
-                    f'due to: {str(e)}.',
-                    from_asset=from_asset,
-                    to_asset=to_asset,
-                    timestamp=timestamp,
-                )
+            except (PriceQueryUnsupportedAsset, NoPriceForGivenTimestamp, RemoteError):
                 continue
-
             if price != Price(ZERO):
                 log.debug(
                     f'Historical price oracle {oracle} got price',

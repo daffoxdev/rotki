@@ -36,17 +36,17 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
 import { Component, Mixins } from 'vue-property-decorator';
 import { mapState } from 'vuex';
 import RoundingSelector from '@/components/settings/explorers/RoundingSelector.vue';
 import SettingsMixin from '@/mixins/settings-mixin';
 import {
   AMOUNT_ROUNDING_MODE,
+  RoundingMode,
   VALUE_ROUNDING_MODE
-} from '@/store/settings/consts';
+} from '@/types/frontend-settings';
 import { bigNumberify } from '@/utils/bignumbers';
-import RoundingMode = BigNumber.RoundingMode;
 
 @Component({
   components: { RoundingSelector },
@@ -74,5 +74,3 @@ export default class RoundingSettings extends Mixins(SettingsMixin) {
   }
 }
 </script>
-
-<style scoped lang="scss"></style>

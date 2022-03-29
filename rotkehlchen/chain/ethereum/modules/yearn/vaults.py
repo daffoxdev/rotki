@@ -4,10 +4,10 @@ from gevent.lock import Semaphore
 
 from rotkehlchen.accounting.structures import AssetBalance, Balance, DefiEvent, DefiEventType
 from rotkehlchen.assets.asset import Asset, EthereumToken
-from rotkehlchen.chain.ethereum.modules.aave.constants import A_ALINK_V1
 from rotkehlchen.chain.ethereum.structures import YearnVault, YearnVaultEvent
 from rotkehlchen.chain.ethereum.utils import token_normalized_value
 from rotkehlchen.constants.assets import (
+    A_ALINK_V1,
     A_CRV_3CRV,
     A_CRVP_DAIUSDCTBUSD,
     A_CRVP_DAIUSDCTTUSD,
@@ -20,9 +20,17 @@ from rotkehlchen.constants.assets import (
     A_WETH,
     A_YFI,
     A_YV1_3CRV,
+    A_YV1_ALINK,
+    A_YV1_DAI,
     A_YV1_DAIUSDCTBUSD,
     A_YV1_DAIUSDCTTUSD,
+    A_YV1_GUSD,
     A_YV1_RENWSBTC,
+    A_YV1_TUSD,
+    A_YV1_USDC,
+    A_YV1_USDT,
+    A_YV1_WETH,
+    A_YV1_YFI,
 )
 from rotkehlchen.constants.ethereum import (
     ERC20TOKEN_ABI,
@@ -48,7 +56,7 @@ from rotkehlchen.fval import FVal
 from rotkehlchen.history.price import query_usd_price_zero_if_error
 from rotkehlchen.inquirer import Inquirer
 from rotkehlchen.premium.premium import Premium
-from rotkehlchen.typing import ChecksumEthAddress, Price, Timestamp
+from rotkehlchen.typing import YEARN_VAULTS_V2_PROTOCOL, ChecksumEthAddress, Price, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.interfaces import EthereumModule
 from rotkehlchen.utils.misc import address_to_bytes32, hexstr_to_int, ts_now
@@ -75,49 +83,49 @@ YEARN_VAULTS = {
         name='YDAI Vault',
         contract=YEARN_DAI_VAULT,
         underlying_token=A_DAI,
-        token=EthereumToken('0xACd43E627e64355f1861cEC6d3a6688B31a6F952'),
+        token=A_YV1_DAI,
     ),
     'yWETH': YearnVault(
         name='YWETH Vault',
         contract=YEARN_WETH_VAULT,
         underlying_token=A_WETH,
-        token=EthereumToken('0xe1237aA7f535b0CC33Fd973D66cBf830354D16c7'),
+        token=A_YV1_WETH,
     ),
     'yYFI': YearnVault(
         name='YYFI Vault',
         contract=YEARN_YFI_VAULT,
         underlying_token=A_YFI,
-        token=EthereumToken('0xBA2E7Fed597fd0E3e70f5130BcDbbFE06bB94fe1'),
+        token=A_YV1_YFI,
     ),
     'yaLINK': YearnVault(
         name='YALINK Vault',
         contract=YEARN_ALINK_VAULT,
         underlying_token=A_ALINK_V1,
-        token=EthereumToken('0x29E240CFD7946BA20895a7a02eDb25C210f9f324'),
+        token=A_YV1_ALINK,
     ),
     'yUSDT': YearnVault(
         name='YUSDT Vault',
         contract=YEARN_USDT_VAULT,
         underlying_token=A_USDT,
-        token=EthereumToken('0x2f08119C6f07c006695E079AAFc638b8789FAf18'),
+        token=A_YV1_USDT,
     ),
     'yUSDC': YearnVault(
         name='YUSDC Vault',
         contract=YEARN_USDC_VAULT,
         underlying_token=A_USDC,
-        token=EthereumToken('0x597aD1e0c13Bfe8025993D9e79C69E1c0233522e'),
+        token=A_YV1_USDC,
     ),
     'yTUSD': YearnVault(
         name='YTUSD Vault',
         contract=YEARN_TUSD_VAULT,
         underlying_token=A_TUSD,
-        token=EthereumToken('0x37d19d1c4E1fa9DC47bD1eA12f742a0887eDa74a'),
+        token=A_YV1_TUSD,
     ),
     'yGUSD': YearnVault(
         name='GUSD Vault',
         contract=YEARN_GUSD_VAULT,
         underlying_token=A_GUSD,
-        token=EthereumToken('0xec0d8D3ED5477106c6D4ea27D90a60e594693C90'),
+        token=A_YV1_GUSD,
     ),
     'yyDAI+yUSDC+yUSDT+yBUSD': YearnVault(
         name='YBCURVE Vault',
@@ -174,7 +182,10 @@ def get_usd_price_zero_if_error(
     This can be solved when we have an archive node.
     """
     inquirer = Inquirer()
-    if asset in inquirer.special_tokens:
+    if (
+        asset in inquirer.special_tokens or
+        isinstance(asset, EthereumToken) and asset.protocol == YEARN_VAULTS_V2_PROTOCOL
+    ):
         return inquirer.find_usd_price(asset)
 
     return query_usd_price_zero_if_error(
@@ -331,13 +342,13 @@ class YearnVaults(EthereumModule):
             deposit_usd_price = get_usd_price_zero_if_error(
                 asset=vault.underlying_token,
                 time=timestamp,
-                location='yearn vault deposit',
+                location=f'yearn vault deposit {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             mint_usd_price = get_usd_price_zero_if_error(
                 asset=vault.token,
                 time=timestamp,
-                location='yearn vault deposit',
+                location=f'yearn vault mint {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             events.append(YearnVaultEvent(
@@ -357,6 +368,7 @@ class YearnVaults(EthereumModule):
                 realized_pnl=None,
                 tx_hash=tx_hash,
                 log_index=deposit_index,
+                version=1,
             ))
 
         return events
@@ -412,13 +424,13 @@ class YearnVaults(EthereumModule):
             withdraw_usd_price = get_usd_price_zero_if_error(
                 asset=vault.underlying_token,
                 time=timestamp,
-                location='yearn vault withdraw',
+                location=f'yearn vault withdraw {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             burn_usd_price = get_usd_price_zero_if_error(
                 asset=vault.token,
                 time=timestamp,
-                location='yearn vault withdraw',
+                location=f'yearn vault withdraw {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             events.append(YearnVaultEvent(
@@ -438,6 +450,7 @@ class YearnVaults(EthereumModule):
                 realized_pnl=None,
                 tx_hash=tx_hash,
                 log_index=withdraw_index,
+                version=1,
             ))
 
         return events
@@ -446,6 +459,10 @@ class YearnVaults(EthereumModule):
         """Process the events for a single vault and returns total profit/loss after all events"""
         total = Balance()
         profit_so_far = Balance()
+
+        if len(events) < 2:
+            return total
+
         for event in events:
             if event.event_type == 'deposit':
                 total -= event.from_value
@@ -456,7 +473,7 @@ class YearnVaults(EthereumModule):
                     usd_price = get_usd_price_zero_if_error(
                         asset=event.to_asset,
                         time=event.timestamp,
-                        location='yearn vault event processing',
+                        location=f'yearn vault event {event.tx_hash} processing',
                         msg_aggregator=self.msg_aggregator,
                     )
                     profit = Balance(profit_amount, profit_amount * usd_price)

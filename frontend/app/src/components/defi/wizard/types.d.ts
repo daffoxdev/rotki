@@ -1,7 +1,7 @@
-import { SupportedModules } from '@/services/session/types';
+import { Module } from '@/types/modules';
 
-export interface Module {
+export interface SupportedModule {
   name: string;
   icon: string;
-  identifier: SupportedModules;
+  identifier: Module;
 }

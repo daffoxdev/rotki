@@ -13,6 +13,7 @@ from rotkehlchen.accounting.structures import (
     DefiEventType,
 )
 from rotkehlchen.assets.asset import Asset
+from rotkehlchen.chain.ethereum.defi.defisaver_proxy import HasDSProxy
 from rotkehlchen.chain.ethereum.utils import asset_normalized_value, token_normalized_value
 from rotkehlchen.constants import ZERO
 from rotkehlchen.constants.assets import (
@@ -27,6 +28,7 @@ from rotkehlchen.constants.assets import (
     A_LINK,
     A_LRC,
     A_MANA,
+    A_MATIC,
     A_PAX,
     A_RENBTC,
     A_TUSD,
@@ -55,6 +57,7 @@ from rotkehlchen.constants.ethereum import (
     MAKERDAO_LINK_A_JOIN,
     MAKERDAO_LRC_A_JOIN,
     MAKERDAO_MANA_A_JOIN,
+    MAKERDAO_MATIC_A_JOIN,
     MAKERDAO_PAXUSD_A_JOIN,
     MAKERDAO_RENBTC_A_JOIN,
     MAKERDAO_SPOT,
@@ -65,6 +68,8 @@ from rotkehlchen.constants.ethereum import (
     MAKERDAO_USDT_A_JOIN,
     MAKERDAO_VAT,
     MAKERDAO_WBTC_A_JOIN,
+    MAKERDAO_WBTC_B_JOIN,
+    MAKERDAO_WBTC_C_JOIN,
     MAKERDAO_YFI_A_JOIN,
     MAKERDAO_ZRX_A_JOIN,
 )
@@ -73,20 +78,21 @@ from rotkehlchen.errors import DeserializationError, RemoteError
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.price import query_usd_price_or_use_default
 from rotkehlchen.inquirer import Inquirer
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
 from rotkehlchen.serialization.deserialize import deserialize_ethereum_address
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import address_to_bytes32, hexstr_to_int, ts_now
 
-from .common import MakerdaoCommon
 from .constants import MAKERDAO_REQUERY_PERIOD, RAY, RAY_DIGITS, WAD
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
     from rotkehlchen.db.dbhandler import DBHandler
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 GEMJOIN_MAPPING = {
@@ -100,6 +106,8 @@ GEMJOIN_MAPPING = {
     'USDC-B': MAKERDAO_USDC_B_JOIN,
     'USDT-A': MAKERDAO_USDT_A_JOIN,
     'WBTC-A': MAKERDAO_WBTC_A_JOIN,
+    'WBTC-B': MAKERDAO_WBTC_B_JOIN,
+    'WBTC-C': MAKERDAO_WBTC_C_JOIN,
     'ZRX-A': MAKERDAO_ZRX_A_JOIN,
     'MANA-A': MAKERDAO_MANA_A_JOIN,
     'PAXUSD-A': MAKERDAO_PAXUSD_A_JOIN,
@@ -112,6 +120,7 @@ GEMJOIN_MAPPING = {
     'UNI-A': MAKERDAO_UNI_A_JOIN,
     'RENBTC-A': MAKERDAO_RENBTC_A_JOIN,
     'AAVE-A': MAKERDAO_AAVE_A_JOIN,
+    'MATIC-A': MAKERDAO_MATIC_A_JOIN,
 }
 COLLATERAL_TYPE_MAPPING = {
     'BAT-A': A_BAT,
@@ -124,6 +133,8 @@ COLLATERAL_TYPE_MAPPING = {
     'USDC-B': A_USDC,
     'USDT-A': A_USDT,
     'WBTC-A': A_WBTC,
+    'WBTC-B': A_WBTC,
+    'WBTC-C': A_WBTC,
     'ZRX-A': A_ZRX,
     'MANA-A': A_MANA,
     'PAXUSD-A': A_PAX,
@@ -136,6 +147,7 @@ COLLATERAL_TYPE_MAPPING = {
     'UNI-A': A_UNI,
     'RENBTC-A': A_RENBTC,
     'AAVE-A': A_AAVE,
+    'MATIC-A': A_MATIC,
 }
 
 
@@ -147,7 +159,15 @@ def _shift_num_right_by(num: int, digits: int) -> int:
     6150000000000000000000000000000000000000000000000 // 1e27
     6.149999999999999e+21   <--- wrong
     """
-    return int(str(num)[:-digits])
+    try:
+        return int(str(num)[:-digits])
+    except ValueError:
+        # this can happen if num is 0, in which case the shifting code above will raise
+        # https://github.com/rotki/rotki/issues/3310
+        # Also log if it happens for any other reason
+        if num != 0:
+            log.error(f'At makerdao _shift_num_right_by() got unecpected value {num} for num')
+        return 0
 
 
 class VaultEventType(Enum):
@@ -227,9 +247,11 @@ class MakerdaoVault(NamedTuple):
         return self.collateral_type.encode('utf-8').ljust(32, b'\x00')
 
     def get_balance(self) -> BalanceSheet:
+        starting_assets = {self.collateral_asset: self.collateral} if self.collateral.amount != ZERO else {}  # noqa: E501
+        starting_liabilities = {A_DAI: self.debt} if self.debt.amount != ZERO else {}
         return BalanceSheet(
-            assets=defaultdict(Balance, {self.collateral_asset: self.collateral}),
-            liabilities=defaultdict(Balance, {A_DAI: self.debt}),
+            assets=defaultdict(Balance, starting_assets),
+            liabilities=defaultdict(Balance, starting_liabilities),  # type: ignore
         )
 
 
@@ -246,7 +268,7 @@ class MakerdaoVaultDetails(NamedTuple):
     events: List[VaultEvent]
 
 
-class MakerdaoVaults(MakerdaoCommon):
+class MakerdaoVaults(HasDSProxy):
 
     def __init__(
             self,
@@ -349,7 +371,7 @@ class MakerdaoVaults(MakerdaoCommon):
             urn: ChecksumEthAddress,
     ) -> Optional[MakerdaoVaultDetails]:
         # They can raise:
-        # ConversionError due to hex_or_bytes_to_address, hexstr_to_int
+        # DeserializationError due to hex_or_bytes_to_address, hexstr_to_int
         # RemoteError due to external query errors
         events = self.ethereum.get_logs(
             contract_address=MAKERDAO_CDP_MANAGER.address,
@@ -692,7 +714,7 @@ class MakerdaoVaults(MakerdaoCommon):
 
         with self.lock:
             self.vault_mappings = defaultdict(list)
-            proxy_mappings = self._get_accounts_having_maker_proxy()
+            proxy_mappings = self._get_accounts_having_proxy()
             vaults = []
             for user_address, proxy in proxy_mappings.items():
                 vaults.extend(
@@ -723,7 +745,7 @@ class MakerdaoVaults(MakerdaoCommon):
             return self.vault_details
 
         self.vault_details = []
-        proxy_mappings = self._get_accounts_having_maker_proxy()
+        proxy_mappings = self._get_accounts_having_proxy()
         # Make sure that before querying vault details there has been a recent vaults call
         vaults = self.get_vaults()
         for vault in vaults:

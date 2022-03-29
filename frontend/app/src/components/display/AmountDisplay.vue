@@ -2,7 +2,7 @@
   <div
     class="amount-display"
     :class="{
-      'blur-content': privacyMode,
+      'blur-content': !shouldShowAmount,
       'amount-display--profit': pnl && value.gt(0),
       'amount-display--loss': pnl && value.lt(0)
     }"
@@ -49,7 +49,7 @@
       </span>
       <amount-currency
         v-if="!renderValue.isNaN() && currencyLocation === 'after'"
-        class="ml-1"
+        class="ml-1 amount-display__currency"
         :asset-padding="assetPadding"
         :show-currency="shownCurrency"
         :currency="currency"
@@ -60,19 +60,19 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
 import { mapGetters, mapState } from 'vuex';
 import AmountCurrency from '@/components/display/AmountCurrency.vue';
 import { displayAmountFormatter } from '@/data/amount_formatter';
 import AssetMixin from '@/mixins/asset-mixin';
-import { Currency } from '@/model/currency';
 import { ExchangeRateGetter } from '@/store/balances/types';
+import { Currency } from '@/types/currency';
+import { CurrencyLocation } from '@/types/currency-location';
 import {
   AMOUNT_ROUNDING_MODE,
   VALUE_ROUNDING_MODE
-} from '@/store/settings/consts';
-import { GeneralSettings } from '@/typing/types';
+} from '@/types/frontend-settings';
 import { bigNumberify } from '@/utils/bignumbers';
 import RoundingMode = BigNumber.RoundingMode;
 
@@ -90,7 +90,8 @@ type ShownCurrency = 'none' | 'ticker' | 'symbol' | 'name';
       'currencyLocation'
     ]),
     ...mapState('settings', [AMOUNT_ROUNDING_MODE, VALUE_ROUNDING_MODE]),
-    ...mapState('session', ['privacyMode', 'scrambleData']),
+    ...mapState('session', ['scrambleData']),
+    ...mapGetters('session', ['shouldShowAmount']),
     ...mapGetters('balances', ['exchangeRate'])
   }
 })
@@ -130,12 +131,12 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
   tooltip!: boolean;
 
   currency!: Currency;
-  privacyMode!: boolean;
+  shouldShowAmount!: boolean;
   scrambleData!: boolean;
   floatingPrecision!: number;
   thousandSeparator!: string;
   decimalSeparator!: string;
-  currencyLocation!: GeneralSettings['currencyLocation'];
+  currencyLocation!: CurrencyLocation;
   exchangeRate!: ExchangeRateGetter;
   amountRoundingMode!: RoundingMode;
   valueRoundingMode!: RoundingMode;
@@ -154,7 +155,7 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
   }
 
   get isPriceAsset(): boolean {
-    return this.currency.ticker_symbol === this.priceAsset;
+    return this.currency.tickerSymbol === this.priceAsset;
   }
 
   get renderValue(): BigNumber {
@@ -168,7 +169,7 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
         .plus(BigNumber.random(2));
     }
 
-    if (this.amount && this.fiatCurrency === this.currency.ticker_symbol) {
+    if (this.amount && this.fiatCurrency === this.currency.tickerSymbol) {
       valueToRender = this.amount;
     } else {
       valueToRender = this.value;
@@ -182,8 +183,8 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
   }
 
   get convertFiat(): boolean {
-    const { ticker_symbol } = this.currency;
-    return !!this.fiatCurrency && this.fiatCurrency !== ticker_symbol;
+    const { tickerSymbol } = this.currency;
+    return !!this.fiatCurrency && this.fiatCurrency !== tickerSymbol;
   }
 
   get formattedValue(): string {
@@ -201,8 +202,8 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
   }
 
   get rounding(): RoundingMode | undefined {
-    const { ticker_symbol } = this.currency;
-    const isValue = this.fiatCurrency === ticker_symbol;
+    const { tickerSymbol } = this.currency;
+    const isValue = this.fiatCurrency === tickerSymbol;
     let rounding: BigNumber.RoundingMode | undefined = undefined;
     if (isValue) {
       rounding = this.valueRoundingMode;
@@ -213,8 +214,8 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
   }
 
   private convertValue(value: BigNumber): BigNumber {
-    const { ticker_symbol } = this.currency;
-    const rate = this.exchangeRate(ticker_symbol);
+    const { tickerSymbol } = this.currency;
+    const rate = this.exchangeRate(tickerSymbol);
     return rate ? value.multipliedBy(rate) : value;
   }
 
@@ -267,6 +268,10 @@ export default class AmountDisplay extends Mixins(AssetMixin) {
 
   &--loss {
     color: var(--v-rotki-loss-base);
+  }
+
+  &__currency {
+    font-size: 1rem;
   }
 }
 

@@ -3,7 +3,7 @@ export class AccountingSettingsPage {
     cy.get('.user-dropdown').click();
     cy.get('[data-cy=user-dropdown]').should('be.visible');
     cy.get('.user-dropdown__settings').click();
-    cy.get('a.settings__accounting').click();
+    cy.get('a.settings__accounting').click({ force: true });
     cy.get('[data-cy=user-dropdown]').should('not.be.visible');
   }
 
@@ -74,7 +74,7 @@ export class AccountingSettingsPage {
         messageContains
       );
     }
-    cy.get(`${target} .v-messages__message`).should('not.be.visible');
+    cy.get(`${target} .v-messages__message`).should('not.exist');
   }
 
   confirmInlineFailure(target: string, messageContains?: string) {
@@ -89,6 +89,6 @@ export class AccountingSettingsPage {
         messageContains
       );
     }
-    cy.get(`${target} .v-messages__message`).should('not.be.visible');
+    cy.get(`${target} .v-messages__message`).should('not.exist');
   }
 }

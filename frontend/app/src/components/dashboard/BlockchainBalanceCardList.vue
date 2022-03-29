@@ -2,8 +2,9 @@
   <fragment>
     <v-list-item
       :id="`${name}_box`"
+      :data-cy="`blockchain-balance-box__item__${name}`"
       class="blockchain-balance-box__item"
-      to="/accounts-balances/blockchain-balances"
+      :to="`/accounts-balances/blockchain-balances#blockchain-balances-${total.chain}`"
     >
       <v-list-item-avatar tile class="blockchain-balance-box__icon">
         <asset-icon size="24px" :identifier="chain" />
@@ -11,7 +12,7 @@
       <v-list-item-content>
         <div class="d-flex flex-row">
           <span class="grow">
-            {{ name | capitalize }}
+            {{ capitalize(name) }}
           </span>
           <span class="text-end shrink">
             <amount-display
@@ -30,7 +31,7 @@
         :id="`${l2.protocol}_box`"
         :key="l2.protocol"
         class="d-flex flex-row blockchain-balance-box__item sub-item"
-        to="/accounts-balances/blockchain-balances"
+        :to="`/accounts-balances/blockchain-balances#blockchain-balances-${l2.protocol}`"
       >
         <v-list-item-avatar
           tile
@@ -62,21 +63,16 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
+import { Blockchain } from '@rotki/common/lib/blockchain';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
 import AmountDisplay from '@/components/display/AmountDisplay.vue';
 import AssetIcon from '@/components/helper/display/icons/AssetIcon.vue';
 import Fragment from '@/components/helper/Fragment';
+import { capitalize } from '@/filters';
 import AssetMixin from '@/mixins/asset-mixin';
 import { BlockchainTotal } from '@/store/balances/types';
-import {
-  Blockchain,
-  BTC,
-  ETH,
-  KSM,
-  L2_LOOPRING,
-  SupportedL2Protocol
-} from '@/typing/types';
+import { L2_LOOPRING, SupportedL2Protocol } from '@/types/protocols';
 import { Zero } from '@/utils/bignumbers';
 
 @Component({
@@ -86,14 +82,22 @@ export default class BlockchainBalanceCardList extends Mixins(AssetMixin) {
   @Prop({ required: true, type: Object })
   total!: BlockchainTotal;
 
+  readonly capitalize = capitalize;
+
   get name(): string {
     const chain = this.total.chain;
-    if (chain === ETH) {
+    if (chain === Blockchain.ETH) {
       return this.$t('blockchains.eth').toString();
-    } else if (chain === BTC) {
+    } else if (chain === Blockchain.BTC) {
       return this.$t('blockchains.btc').toString();
-    } else if (chain === KSM) {
+    } else if (chain === Blockchain.KSM) {
       return this.$t('blockchains.ksm').toString();
+    } else if (chain === Blockchain.DOT) {
+      return this.$t('blockchains.dot').toString();
+    } else if (chain === Blockchain.AVAX) {
+      return this.$t('blockchains.avax').toString();
+    } else if (chain === Blockchain.ETH2) {
+      return this.$t('blockchains.eth2').toString();
     }
     return '';
   }
@@ -152,6 +156,23 @@ export default class BlockchainBalanceCardList extends Mixins(AssetMixin) {
 
     &:before {
       border-left: 1px solid rgb(100, 100, 100);
+    }
+  }
+}
+
+.theme {
+  &--dark {
+    .sub-item {
+      &:before {
+        color: var(--v-dark-base);
+        border-bottom: 1px solid rgb(200, 200, 200);
+      }
+
+      &:last-child {
+        &:before {
+          border-left: 1px solid rgb(200, 200, 200);
+        }
+      }
     }
   }
 }

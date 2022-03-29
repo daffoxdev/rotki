@@ -1,10 +1,8 @@
+import { ActionResult } from '@rotki/common/lib/data';
 import { AxiosResponse } from 'axios';
 import { axiosSnakeCaseTransformer } from '@/services/axios-tranformers';
-import {
-  ActionResult,
-  ApiImplementation,
-  PendingTask
-} from '@/services/types-api';
+import { ApiImplementation, PendingTask } from '@/services/types-api';
+import { Collection, CollectionResponse } from '@/types/collection';
 
 export function fetchExternalAsync(
   api: ApiImplementation,
@@ -23,12 +21,28 @@ export function fetchExternalAsync(
     .then(handleResponse);
 }
 
-export function handleResponse<T>(response: AxiosResponse<ActionResult<T>>): T {
-  const { result, message } = response.data;
+type Parser<T> = (response: AxiosResponse<ActionResult<T>>) => ActionResult<T>;
+
+export function handleResponse<T>(
+  response: AxiosResponse<ActionResult<T>>,
+  parse: Parser<T> = response => response.data
+): T {
+  const { result, message } = parse(response);
   if (result) {
     return result;
   }
   throw new Error(message);
+}
+
+export function mapCollectionResponse<T>(
+  response: CollectionResponse<T>
+): Collection<T> {
+  return {
+    data: response.entries,
+    found: response.entriesFound,
+    limit: response.entriesLimit,
+    total: response.entriesTotal
+  };
 }
 
 /**

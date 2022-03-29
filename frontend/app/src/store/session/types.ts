@@ -1,10 +1,20 @@
+import { BigNumber, NumericString } from '@rotki/common';
+import { TimeFramePeriod } from '@rotki/common/lib/settings/graphs';
+import { z } from 'zod';
 import {
   QueriedAddresses,
   Watcher,
   WatcherTypes
 } from '@/services/session/types';
-import { TimeFramePeriod } from '@/store/settings/types';
-import { AccountingSettings, GeneralSettings, Tags } from '@/typing/types';
+import { AccountingSettings, GeneralSettings, Tags } from '@/types/user';
+
+export enum PrivacyMode {
+  NORMAL = 0,
+  SEMI_PRIVATE = 1,
+  PRIVATE = 2
+}
+
+export const PrivacyModeEnum = z.nativeEnum(PrivacyMode);
 
 export interface SessionState {
   newAccount: boolean;
@@ -15,7 +25,7 @@ export interface SessionState {
   accountingSettings: AccountingSettings;
   premium: boolean;
   premiumSync: boolean;
-  privacyMode: boolean;
+  privacyMode: PrivacyMode;
   scrambleData: boolean;
   nodeConnection: boolean;
   syncConflict: SyncConflict;
@@ -26,14 +36,15 @@ export interface SessionState {
   lastBalanceSave: number;
   lastDataUpload: number;
   timeframe: TimeFramePeriod;
+  showUpdatePopup: boolean;
 }
 
-export interface SyncConflictPayload {
-  readonly localSize: string;
-  readonly remoteSize: string;
-  readonly localLastModified: string;
-  readonly remoteLastModified: string;
-}
+export const SyncConflictPayload = z.object({
+  localLastModified: z.number(),
+  remoteLastModified: z.number()
+});
+
+export type SyncConflictPayload = z.infer<typeof SyncConflictPayload>;
 
 export interface SyncConflict {
   readonly message: string;
@@ -50,3 +61,42 @@ export interface ChangePasswordPayload {
   readonly currentPassword: string;
   readonly newPassword: string;
 }
+
+const NftCollectionInfo = z.object({
+  bannerImage: z.string().nullable(),
+  description: z.string().nullable(),
+  name: z.string().nullable(),
+  largeImage: z.string().nullable()
+});
+
+const Nft = z.object({
+  tokenIdentifier: z.string().nonempty(),
+  name: z.string().nullable(),
+  collection: NftCollectionInfo,
+  backgroundColor: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+  externalLink: z.string().nullable(),
+  permalink: z.string().nullable(),
+  priceEth: NumericString,
+  priceUsd: NumericString
+});
+
+export type Nft = z.infer<typeof Nft>;
+
+export type GalleryNft = Omit<Nft, 'priceEth'> & {
+  address: string;
+  priceInAsset: BigNumber;
+  priceAsset: string;
+};
+
+const Nfts = z.record(z.array(Nft));
+
+export type Nfts = z.infer<typeof Nfts>;
+
+export const NftResponse = z.object({
+  addresses: Nfts,
+  entriesFound: z.number(),
+  entriesLimit: z.number()
+});
+
+export type NftResponse = z.infer<typeof NftResponse>;

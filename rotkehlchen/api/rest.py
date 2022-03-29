@@ -25,13 +25,15 @@ import gevent
 from flask import Response, make_response, send_file
 from gevent.event import Event
 from gevent.lock import Semaphore
+from pysqlcipher3 import dbapi2 as sqlcipher
 from typing_extensions import Literal
 from web3.exceptions import BadFunctionCallOutput
 
+from rotkehlchen.accounting.constants import FREE_PNL_EVENTS_LIMIT, FREE_REPORTS_LOOKUP_LIMIT
 from rotkehlchen.accounting.ledger_actions import LedgerAction
-from rotkehlchen.accounting.structures import ActionType, BalanceType
+from rotkehlchen.accounting.structures import ActionType, Balance, BalanceType
 from rotkehlchen.api.v1.encoding import TradeSchema
-from rotkehlchen.assets.asset import Asset
+from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.assets.resolver import AssetResolver
 from rotkehlchen.assets.typing import AssetType
 from rotkehlchen.balances.manual import (
@@ -43,12 +45,29 @@ from rotkehlchen.balances.manual import (
 )
 from rotkehlchen.chain.bitcoin.xpub import XpubManager
 from rotkehlchen.chain.ethereum.airdrops import check_airdrops
-from rotkehlchen.chain.ethereum.trades import AMMTrade, AMMTradeLocations
-from rotkehlchen.chain.ethereum.transactions import FREE_ETH_TX_LIMIT
-from rotkehlchen.chain.ethereum.typing import CustomEthereumToken
+from rotkehlchen.chain.ethereum.gitcoin.api import GitcoinAPI
+from rotkehlchen.chain.ethereum.gitcoin.importer import GitcoinDataImporter
+from rotkehlchen.chain.ethereum.gitcoin.processor import GitcoinProcessor
+from rotkehlchen.chain.ethereum.modules.eth2 import FREE_VALIDATORS_LIMIT
+from rotkehlchen.chain.ethereum.transactions import FREE_ETH_TX_LIMIT, EthTransactions
 from rotkehlchen.constants.assets import A_ETH
-from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.constants.resolver import ETHEREUM_DIRECTIVE
+from rotkehlchen.constants.limits import (
+    FREE_ASSET_MOVEMENTS_LIMIT,
+    FREE_LEDGER_ACTIONS_LIMIT,
+    FREE_TRADES_LIMIT,
+)
+from rotkehlchen.constants.misc import ASSET_TYPES_EXCLUDED_FOR_USERS, ZERO
+from rotkehlchen.constants.resolver import ethaddress_to_identifier
+from rotkehlchen.db.cache_handler import DBAccountingReports
+from rotkehlchen.db.ethtx import DBEthTx
+from rotkehlchen.db.filtering import (
+    AssetMovementsFilterQuery,
+    Eth2DailyStatsFilterQuery,
+    ETHTransactionsFilterQuery,
+    LedgerActionsFilterQuery,
+    ReportDataFilterQuery,
+    TradesFilterQuery,
+)
 from rotkehlchen.db.ledger_actions import DBLedgerActions
 from rotkehlchen.db.queried_addresses import QueriedAddresses
 from rotkehlchen.db.settings import ModifiableDBSettings
@@ -63,31 +82,37 @@ from rotkehlchen.errors import (
     NoPriceForGivenTimestamp,
     PremiumApiError,
     PremiumAuthenticationError,
+    PremiumPermissionError,
     RemoteError,
     RotkehlchenPermissionError,
     SystemPermissionError,
     TagConstraintError,
+    UnableToDecryptRemoteData,
+    UnknownAsset,
     UnsupportedAsset,
 )
 from rotkehlchen.exchanges.data_structures import Trade
 from rotkehlchen.exchanges.manager import ALL_SUPPORTED_EXCHANGES
+from rotkehlchen.exchanges.utils import query_binance_exchange_pairs
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb import GlobalDBHandler
-from rotkehlchen.history.events import FREE_LEDGER_ACTIONS_LIMIT
+from rotkehlchen.globaldb.updates import ASSETS_VERSION_KEY
 from rotkehlchen.history.price import PriceHistorian
-from rotkehlchen.history.typing import NOT_EXPOSED_SOURCES, HistoricalPriceOracle
+from rotkehlchen.history.typing import NOT_EXPOSED_SOURCES, HistoricalPrice, HistoricalPriceOracle
 from rotkehlchen.inquirer import CurrentPriceOracle, Inquirer
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import PremiumCredentials
-from rotkehlchen.rotkehlchen import FREE_ASSET_MOVEMENTS_LIMIT, FREE_TRADES_LIMIT, Rotkehlchen
+from rotkehlchen.rotkehlchen import Rotkehlchen
 from rotkehlchen.serialization.serialize import process_result, process_result_list
 from rotkehlchen.typing import (
     AVAILABLE_MODULES_MAP,
+    IMPORTABLE_LOCATIONS,
     ApiKey,
     ApiSecret,
     AssetAmount,
     BlockchainAccountData,
     ChecksumEthAddress,
+    Eth2PubKey,
     EthereumTransaction,
     ExternalService,
     ExternalServiceApiCredentials,
@@ -101,12 +126,17 @@ from rotkehlchen.typing import (
     Timestamp,
     TradeType,
 )
+from rotkehlchen.utils.misc import combine_dicts
 from rotkehlchen.utils.version_check import check_if_version_up_to_date
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.bitcoin.xpub import XpubData
     from rotkehlchen.db.dbhandler import DBHandler
+    from rotkehlchen.exchanges.kraken import KrakenAccountType
 
+
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 OK_RESULT = {'result': True, 'message': ''}
 
@@ -203,10 +233,6 @@ def require_premium_user(active_check: bool) -> Callable:
     return _require_premium_user
 
 
-logger = logging.getLogger(__name__)
-log = RotkehlchenLogsAdapter(logger)
-
-
 class RestAPI():
     """ The Object holding the logic that runs inside all the API calls"""
     def __init__(self, rotkehlchen: Rotkehlchen) -> None:
@@ -264,12 +290,12 @@ class RestAPI():
             self._write_task_result(task_id, result)
 
     def _do_query_async(self, command: str, task_id: int, **kwargs: Any) -> None:
+        log.debug(f'Async task with task id {task_id} started')
         result = getattr(self, command)(**kwargs)
         self._write_task_result(task_id, result)
 
     def _query_async(self, command: str, **kwargs: Any) -> Response:
         task_id = self._new_task_id()
-
         greenlet = gevent.spawn(
             self._do_query_async,
             command,
@@ -411,9 +437,15 @@ class RestAPI():
         response_result = self._get_exchange_rates(given_currencies)
         return api_response(result=response_result, status_code=HTTPStatus.OK)
 
-    def _query_all_balances(self, save_data: bool, ignore_cache: bool) -> Dict[str, Any]:
+    def _query_all_balances(
+            self,
+            save_data: bool,
+            ignore_errors: bool,
+            ignore_cache: bool,
+    ) -> Dict[str, Any]:
         result = self.rotkehlchen.query_balances(
             requested_save_data=save_data,
+            save_despite_errors=ignore_errors,
             ignore_cache=ignore_cache,
         )
         return {'result': result, 'message': ''}
@@ -422,6 +454,7 @@ class RestAPI():
     def query_all_balances(
             self,
             save_data: bool,
+            ignore_errors: bool,
             async_query: bool,
             ignore_cache: bool,
     ) -> Response:
@@ -429,10 +462,15 @@ class RestAPI():
             return self._query_async(
                 command='_query_all_balances',
                 save_data=save_data,
+                ignore_errors=ignore_errors,
                 ignore_cache=ignore_cache,
             )
 
-        response = self._query_all_balances(save_data=save_data, ignore_cache=ignore_cache)
+        response = self._query_all_balances(
+            save_data=save_data,
+            ignore_errors=ignore_errors,
+            ignore_cache=ignore_cache,
+        )
         return api_response(
             _wrap_in_result(process_result(response['result']), response['message']),
             HTTPStatus.OK,
@@ -464,7 +502,7 @@ class RestAPI():
     @require_loggedin_user()
     def get_exchanges(self) -> Response:
         return api_response(
-            _wrap_in_ok_result(self.rotkehlchen.exchange_manager.get_connected_exchange_names()),
+            _wrap_in_ok_result(self.rotkehlchen.exchange_manager.get_connected_exchanges_info()),
             status_code=HTTPStatus.OK,
         )
 
@@ -472,14 +510,27 @@ class RestAPI():
     def setup_exchange(
             self,
             name: str,
+            location: Location,
             api_key: ApiKey,
             api_secret: ApiSecret,
             passphrase: Optional[str],
+            kraken_account_type: Optional['KrakenAccountType'],
+            binance_markets: Optional[List[str]],
+            ftx_subaccount: Optional[str],
     ) -> Response:
         result = None
         status_code = HTTPStatus.OK
         msg = ''
-        result, msg = self.rotkehlchen.setup_exchange(name, api_key, api_secret, passphrase)
+        result, msg = self.rotkehlchen.setup_exchange(
+            name=name,
+            location=location,
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+            kraken_account_type=kraken_account_type,
+            PAIRS=binance_markets,
+            ftx_subaccount=ftx_subaccount,
+        )
         if not result:
             result = None
             status_code = HTTPStatus.CONFLICT
@@ -487,9 +538,47 @@ class RestAPI():
         return api_response(_wrap_in_result(result, msg), status_code=status_code)
 
     @require_loggedin_user()
-    def remove_exchange(self, name: str) -> Response:
+    def edit_exchange(
+            self,
+            name: str,
+            location: Location,
+            new_name: Optional[str],
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+            kraken_account_type: Optional['KrakenAccountType'],
+            binance_markets: Optional[List[str]],
+            ftx_subaccount: Optional[str],
+    ) -> Response:
+        result: Optional[bool] = True
+        status_code = HTTPStatus.OK
+        msg = ''
+        try:
+            edited, msg = self.rotkehlchen.exchange_manager.edit_exchange(
+                name=name,
+                location=location,
+                new_name=new_name,
+                api_key=api_key,
+                api_secret=api_secret,
+                passphrase=passphrase,
+                kraken_account_type=kraken_account_type,
+                PAIRS=binance_markets,
+                ftx_subaccount=ftx_subaccount,
+            )
+        except InputError as e:
+            edited = False
+            msg = str(e)
+
+        if not edited:
+            result = None
+            status_code = HTTPStatus.CONFLICT
+
+        return api_response(_wrap_in_result(result, msg), status_code=status_code)
+
+    @require_loggedin_user()
+    def remove_exchange(self, name: str, location: Location) -> Response:
         result: Optional[bool]
-        result, message = self.rotkehlchen.remove_exchange(name)
+        result, message = self.rotkehlchen.remove_exchange(name=name, location=location)
         status_code = HTTPStatus.OK
         if not result:
             result = None
@@ -499,12 +588,19 @@ class RestAPI():
     def _query_all_exchange_balances(self, ignore_cache: bool) -> Dict[str, Any]:
         final_balances = {}
         error_msg = ''
-        for name, exchange_obj in self.rotkehlchen.exchange_manager.connected_exchanges.items():
+        for exchange_obj in self.rotkehlchen.exchange_manager.iterate_exchanges():
             balances, msg = exchange_obj.query_balances(ignore_cache=ignore_cache)
             if balances is None:
                 error_msg += msg
             else:
-                final_balances[name] = balances
+                location_str = str(exchange_obj.location)
+                if location_str not in final_balances:
+                    final_balances[location_str] = balances
+                else:  # multiple exchange of same type. Combine balances
+                    final_balances[location_str] = combine_dicts(
+                        final_balances[location_str],
+                        balances,
+                    )
 
         if final_balances == {}:
             result = None
@@ -515,42 +611,52 @@ class RestAPI():
 
         return {'result': result, 'message': error_msg, 'status_code': status_code}
 
-    def _query_exchange_balances(self, name: Optional[str], ignore_cache: bool) -> Dict[str, Any]:
-        if name is None:
+    def _query_exchange_balances(self, location: Optional[Location], ignore_cache: bool) -> Dict[str, Any]:  # noqa: E501
+        if location is None:
             # Query all exchanges
             return self._query_all_exchange_balances(ignore_cache=ignore_cache)
 
         # else query only the specific exchange
-        exchange_obj = self.rotkehlchen.exchange_manager.connected_exchanges.get(name, None)
-        if not exchange_obj:
+        exchanges_list = self.rotkehlchen.exchange_manager.connected_exchanges.get(location)
+        if exchanges_list is None:
             return {
                 'result': None,
-                'message': f'Could not query balances for {name} since it is not registered',
+                'message': f'Could not query balances for {str(location)} since it is not registered',  # noqa: E501
                 'status_code': HTTPStatus.CONFLICT,
             }
 
-        result, msg = exchange_obj.query_balances(ignore_cache=ignore_cache)
+        balances: Dict[Asset, Balance] = {}
+        for exchange in exchanges_list:
+            result, msg = exchange.query_balances(ignore_cache=ignore_cache)
+            if result is None:
+                return {
+                    'result': result,
+                    'message': msg,
+                    'status_code': HTTPStatus.CONFLICT,
+                }
+            balances = combine_dicts(balances, result)
+
         return {
-            'result': result,
-            'message': msg,
-            'status_code': HTTPStatus.OK if result else HTTPStatus.CONFLICT,
+            'result': balances,
+            'message': '',
+            'status_code': HTTPStatus.OK,
         }
 
     @require_loggedin_user()
     def query_exchange_balances(
             self,
-            name: Optional[str],
+            location: Optional[Location],
             async_query: bool,
             ignore_cache: bool,
     ) -> Response:
         if async_query:
             return self._query_async(
                 command='_query_exchange_balances',
-                name=name,
+                location=location,
                 ignore_cache=ignore_cache,
             )
 
-        response = self._query_exchange_balances(name=name, ignore_cache=ignore_cache)
+        response = self._query_exchange_balances(location=location, ignore_cache=ignore_cache)
         balances = response['result']
         msg = response['message']
         status_code = _get_status_code_from_async_response(response)
@@ -602,6 +708,13 @@ class RestAPI():
                 if val:
                     totals['assets'] = {'KSM': val}
                 result = {'per_account': per_account, 'totals': totals}
+            elif blockchain == SupportedBlockchain.POLKADOT:
+                val = result['per_account'].get('DOT', None)
+                per_account = {'DOT': val} if val else {}
+                val = result['totals']['assets'].get('DOT', None)
+                if val:
+                    totals['assets'] = {'DOT': val}
+                result = {'per_account': per_account, 'totals': totals}
 
         return {'result': result, 'message': msg, 'status_code': status_code}
 
@@ -629,16 +742,12 @@ class RestAPI():
 
     def _get_trades(
             self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Optional[Location],
             only_cache: bool,
+            filter_query: TradesFilterQuery,
     ) -> Dict[str, Any]:
         try:
-            trades = self.rotkehlchen.query_trades(
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=location,
+            trades, filter_total_found = self.rotkehlchen.events_historian.query_trades(
+                filter_query=filter_query,
                 only_cache=only_cache,
             )
         except RemoteError as e:
@@ -646,21 +755,13 @@ class RestAPI():
 
         trades_result = []
         for trade in trades:
-            if isinstance(trade, AMMTrade):
-                serialized_trade = trade.serialize()
-            else:
-                serialized_trade = self.trade_schema.dump(trade)
-                serialized_trade['trade_id'] = trade.identifier
+            serialized_trade = self.trade_schema.dump(trade)
+            serialized_trade['trade_id'] = trade.identifier
             trades_result.append(serialized_trade)
-
-        entry_table: Literal['amm_swaps', 'trades']
-        if location in AMMTradeLocations:
-            entry_table = 'amm_swaps'
-        else:
-            entry_table = 'trades'
 
         mapping = self.rotkehlchen.data.db.get_ignored_action_ids(ActionType.TRADE)
         ignored_ids = mapping.get(ActionType.TRADE, [])
+        table_name = 'trades' if self.rotkehlchen.premium is None else 'combined_trades_view'
         entries_result = []
         for entry in trades_result:
             entries_result.append(
@@ -669,7 +770,8 @@ class RestAPI():
 
         result = {
             'entries': entries_result,
-            'entries_found': self.rotkehlchen.data.db.get_entries_count(entry_table),
+            'entries_found': filter_total_found,
+            'entries_total': self.rotkehlchen.data.db.get_entries_count(table_name),  # type: ignore  # noqa: E501
             'entries_limit': FREE_TRADES_LIMIT if self.rotkehlchen.premium is None else -1,
         }
 
@@ -678,26 +780,20 @@ class RestAPI():
     @require_loggedin_user()
     def get_trades(
             self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Optional[Location],
             async_query: bool,
             only_cache: bool,
+            filter_query: TradesFilterQuery,
     ) -> Response:
         if async_query:
             return self._query_async(
                 command='_get_trades',
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=location,
                 only_cache=only_cache,
+                filter_query=filter_query,
             )
 
         response = self._get_trades(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            location=location,
             only_cache=only_cache,
+            filter_query=filter_query,
         )
         status_code = _get_status_code_from_async_response(response)
         result_dict = {'result': response['result'], 'message': response['message']}
@@ -787,19 +883,15 @@ class RestAPI():
 
     def _get_asset_movements(
             self,
-            from_timestamp: Timestamp,
-            to_timestamp: Timestamp,
-            location: Optional[Location],
+            filter_query: AssetMovementsFilterQuery,
             only_cache: bool,
     ) -> Dict[str, Any]:
         msg = ''
         status_code = HTTPStatus.OK
         result = None
         try:
-            movements = self.rotkehlchen.query_asset_movements(
-                from_ts=from_timestamp,
-                to_ts=to_timestamp,
-                location=location,
+            movements, filter_total_found = self.rotkehlchen.events_historian.query_asset_movements(  # noqa: E501
+                filter_query=filter_query,
                 only_cache=only_cache,
             )
         except RemoteError as e:
@@ -819,7 +911,8 @@ class RestAPI():
 
         result = {
             'entries': entries_result,
-            'entries_found': self.rotkehlchen.data.db.get_entries_count('asset_movements'),
+            'entries_total': self.rotkehlchen.data.db.get_entries_count('asset_movements'),
+            'entries_found': filter_total_found,
             'entries_limit': limit,
         }
 
@@ -828,25 +921,19 @@ class RestAPI():
     @require_loggedin_user()
     def get_asset_movements(
             self,
-            from_timestamp: Timestamp,
-            to_timestamp: Timestamp,
-            location: Optional[Location],
+            filter_query: AssetMovementsFilterQuery,
             async_query: bool,
             only_cache: bool,
     ) -> Response:
         if async_query:
             return self._query_async(
                 command='_get_asset_movements',
-                from_timestamp=from_timestamp,
-                to_timestamp=to_timestamp,
-                location=location,
+                filter_query=filter_query,
                 only_cache=only_cache,
             )
 
         response = self._get_asset_movements(
-            from_timestamp=from_timestamp,
-            to_timestamp=to_timestamp,
-            location=location,
+            filter_query=filter_query,
             only_cache=only_cache,
         )
         result_dict = {'result': response['result'], 'message': response['message']}
@@ -855,15 +942,12 @@ class RestAPI():
 
     def _get_ledger_actions(
             self,
-            from_ts: Optional[Timestamp],
-            to_ts: Optional[Timestamp],
-            location: Optional[Location],
+            filter_query: LedgerActionsFilterQuery,
+            only_cache: bool,
     ) -> Dict[str, Any]:
-        actions, original_length = self.rotkehlchen.events_historian.query_ledger_actions(
-            has_premium=self.rotkehlchen.premium is not None,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            location=location,
+        actions, filter_total_found = self.rotkehlchen.events_historian.query_ledger_actions(
+            filter_query=filter_query,
+            only_cache=only_cache,
         )
 
         mapping = self.rotkehlchen.data.db.get_ignored_action_ids(ActionType.LEDGER_ACTION)
@@ -877,7 +961,8 @@ class RestAPI():
 
         result = {
             'entries': entries_result,
-            'entries_found': original_length,
+            'entries_found': filter_total_found,
+            'entries_total': self.rotkehlchen.data.db.get_entries_count('ledger_actions'),
             'entries_limit': FREE_LEDGER_ACTIONS_LIMIT if self.rotkehlchen.premium is None else -1,
         }
 
@@ -886,23 +971,20 @@ class RestAPI():
     @require_loggedin_user()
     def get_ledger_actions(
             self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Optional[Location],
+            filter_query: LedgerActionsFilterQuery,
             async_query: bool,
+            only_cache: bool,
     ) -> Response:
         if async_query:
             return self._query_async(
                 command='_get_ledger_actions',
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=location,
+                filter_query=filter_query,
+                only_cache=only_cache,
             )
 
         response = self._get_ledger_actions(
-            from_ts=from_ts,
-            to_ts=to_ts,
-            location=location,
+            filter_query=filter_query,
+            only_cache=only_cache,
         )
         status_code = _get_status_code_from_async_response(response)
         result_dict = {'result': response['result'], 'message': response['message']}
@@ -911,7 +993,13 @@ class RestAPI():
     @require_loggedin_user()
     def add_ledger_action(self, action: LedgerAction) -> Response:
         db = DBLedgerActions(self.rotkehlchen.data.db, self.rotkehlchen.msg_aggregator)
-        identifier = db.add_ledger_action(action)
+        try:
+            identifier = db.add_ledger_action(action)
+        except sqlcipher.IntegrityError:  # pylint: disable=no-member
+            db.db.conn.rollback()
+            error_msg = 'Failed to add Ledger action due to entry already existing in the DB'
+            return api_response(wrap_in_fail_result(error_msg), status_code=HTTPStatus.CONFLICT)
+
         result_dict = _wrap_in_ok_result({'identifier': identifier})
         return api_response(result_dict, status_code=HTTPStatus.OK)
 
@@ -924,9 +1012,8 @@ class RestAPI():
 
         # Success - return all ledger actions after the edit
         response = self._get_ledger_actions(
-            from_ts=None,
-            to_ts=None,
-            location=None,
+            filter_query=LedgerActionsFilterQuery.make(),
+            only_cache=True,
         )
         result_dict = {'result': response['result'], 'message': response['message']}
         return api_response(process_result(result_dict), status_code=HTTPStatus.OK)
@@ -940,9 +1027,8 @@ class RestAPI():
 
         # Success - return all ledger actions after the removal
         response = self._get_ledger_actions(
-            from_ts=None,
-            to_ts=None,
-            location=None,
+            filter_query=LedgerActionsFilterQuery.make(),
+            only_cache=True,
         )
         result_dict = {'result': response['result'], 'message': response['message']}
         return api_response(process_result(result_dict), status_code=HTTPStatus.OK)
@@ -1018,6 +1104,7 @@ class RestAPI():
             password: str,
             premium_api_key: str,
             premium_api_secret: str,
+            sync_database: bool,
             initial_settings: Optional[ModifiableDBSettings],
     ) -> Response:
         result_dict: Dict[str, Any] = {'result': None, 'message': ''}
@@ -1058,6 +1145,7 @@ class RestAPI():
                 sync_approval='yes',
                 premium_credentials=premium_credentials,
                 initial_settings=initial_settings,
+                sync_database=sync_database,
             )
         # not catching RotkehlchenPermissionError here as for new account with premium
         # syncing there is no way that permission needs to be asked by the user
@@ -1068,7 +1156,7 @@ class RestAPI():
 
         # Success!
         result_dict['result'] = {
-            'exchanges': self.rotkehlchen.exchange_manager.get_connected_exchange_names(),
+            'exchanges': self.rotkehlchen.exchange_manager.get_connected_exchanges_info(),
             'settings': process_result(self.rotkehlchen.get_settings()),
         }
         return api_response(result_dict, status_code=HTTPStatus.OK)
@@ -1113,7 +1201,7 @@ class RestAPI():
             return api_response(result_dict, status_code=HTTPStatus.CONFLICT)
         # Success!
         result_dict['result'] = {
-            'exchanges': self.rotkehlchen.exchange_manager.get_connected_exchange_names(),
+            'exchanges': self.rotkehlchen.exchange_manager.get_connected_exchanges_info(),
             'settings': process_result(self.rotkehlchen.get_settings()),
         }
         return api_response(result_dict, status_code=HTTPStatus.OK)
@@ -1218,7 +1306,7 @@ class RestAPI():
     def query_all_assets() -> Response:
         """Returns all supported assets"""
         # type ignore is due to: https://github.com/python/mypy/issues/7781
-        assets = GlobalDBHandler().get_all_asset_data(mapping=True)  # type: ignore
+        assets = GlobalDBHandler().get_all_asset_data(mapping=True, serialized=True)  # type: ignore  # noqa: E501
         return api_response(
             _wrap_in_ok_result(assets),
             status_code=HTTPStatus.OK,
@@ -1245,11 +1333,11 @@ class RestAPI():
 
     @staticmethod
     def get_asset_types() -> Response:
-        types = [str(x) for x in AssetType]
+        types = [str(x) for x in AssetType if x not in ASSET_TYPES_EXCLUDED_FOR_USERS]
         return api_response(_wrap_in_ok_result(types), status_code=HTTPStatus.OK)
 
-    @staticmethod
-    def add_custom_asset(asset_type: AssetType, **kwargs: Any) -> Response:
+    @require_loggedin_user()
+    def add_custom_asset(self, asset_type: AssetType, **kwargs: Any) -> Response:
         globaldb = GlobalDBHandler()
         # There is no good way to figure out if an asset already exists in the DB
         # Best approximation we can do is this.
@@ -1278,6 +1366,7 @@ class RestAPI():
         except InputError as e:
             return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
 
+        self.rotkehlchen.data.db.add_asset_identifiers([asset_id])
         return api_response(
             _wrap_in_ok_result({'identifier': asset_id}),
             status_code=HTTPStatus.OK,
@@ -1299,12 +1388,24 @@ class RestAPI():
         # Before deleting, also make sure we have up to date global DB owned data
         self.rotkehlchen.data.db.update_owned_assets_in_globaldb()
         try:
+            self.rotkehlchen.data.db.delete_asset_identifier(identifier)
             GlobalDBHandler().delete_custom_asset(identifier)
         except InputError as e:
             return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
 
         # Also clear the in-memory cache of the asset resolver
         AssetResolver().assets_cache.pop(identifier, None)
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def replace_asset(self, source_identifier: str, target_asset: Asset) -> Response:
+        try:
+            self.rotkehlchen.data.db.replace_asset_identifier(source_identifier, target_asset)
+        except (UnknownAsset, InputError) as e:
+            return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
+
+        # Also clear the in-memory cache of the asset resolver
+        AssetResolver().assets_cache.pop(source_identifier, None)
         return api_response(OK_RESULT, status_code=HTTPStatus.OK)
 
     @staticmethod
@@ -1315,7 +1416,7 @@ class RestAPI():
                 result = wrap_in_fail_result(f'Custom token with address {address} not found')
                 status_code = HTTPStatus.NOT_FOUND
             else:
-                result = _wrap_in_ok_result(token.serialize())
+                result = _wrap_in_ok_result(token.serialize_all_info())
                 status_code = HTTPStatus.OK
 
             return api_response(result, status_code)
@@ -1323,15 +1424,14 @@ class RestAPI():
         # else return all custom tokens
         tokens = GlobalDBHandler().get_ethereum_tokens()
         return api_response(
-            _wrap_in_ok_result([x.serialize() for x in tokens]),
+            _wrap_in_ok_result([x.serialize_all_info() for x in tokens]),
             status_code=HTTPStatus.OK,
             log_result=False,
         )
 
-    @staticmethod
-    def add_custom_ethereum_token(token: CustomEthereumToken) -> Response:
-        # TODO: hacky. Clean this up when we allow addition of all assets
-        identifier = ETHEREUM_DIRECTIVE + token.address
+    @require_loggedin_user()
+    def add_custom_ethereum_token(self, token: EthereumToken) -> Response:
+        identifier = ethaddress_to_identifier(token.ethereum_address)
         try:
             GlobalDBHandler().add_asset(
                 asset_id=identifier,
@@ -1341,13 +1441,17 @@ class RestAPI():
         except InputError as e:
             return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
 
+        cursor = self.rotkehlchen.data.db.conn.cursor()
+        # clean token detection cache. Next function will commit to the DB
+        cursor.execute('DELETE from ethereum_accounts_details;')
+        self.rotkehlchen.data.db.add_asset_identifiers([identifier])
         return api_response(
             _wrap_in_ok_result({'identifier': identifier}),
             status_code=HTTPStatus.OK,
         )
 
     @staticmethod
-    def edit_custom_ethereum_token(token: CustomEthereumToken) -> Response:
+    def edit_custom_ethereum_token(token: EthereumToken) -> Response:
         try:
             identifier = GlobalDBHandler().edit_ethereum_token(token)
         except InputError as e:
@@ -1365,7 +1469,9 @@ class RestAPI():
     def delete_custom_ethereum_token(self, address: ChecksumEthAddress) -> Response:
         # Before deleting, also make sure we have up to date global DB owned data
         self.rotkehlchen.data.db.update_owned_assets_in_globaldb()
+
         try:
+            self.rotkehlchen.data.db.delete_asset_identifier(ethaddress_to_identifier(address))
             identifier = GlobalDBHandler().delete_ethereum_token(address=address)
         except InputError as e:
             return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
@@ -1378,7 +1484,26 @@ class RestAPI():
             status_code=HTTPStatus.OK,
         )
 
-    def query_netvalue_data(self) -> Response:
+    @require_loggedin_user()
+    def rebuild_assets_information(
+        self,
+        reset: Literal['soft', 'hard'],
+        ignore_warnings: bool,
+    ) -> Response:
+        msg = 'Invalid value for reset'
+        if reset == 'soft':
+            success, msg = GlobalDBHandler().soft_reset_assets_list()
+        elif reset == 'hard':
+            success, msg = GlobalDBHandler().hard_reset_assets_list(
+                user_db=self.rotkehlchen.data.db,
+                force=ignore_warnings,
+            )
+
+        if success:
+            return api_response(_wrap_in_ok_result(OK_RESULT), status_code=HTTPStatus.OK)
+        return api_response(wrap_in_fail_result(msg), status_code=HTTPStatus.CONFLICT)
+
+    def query_netvalue_data(self, include_nfts: bool) -> Response:
         from_ts = Timestamp(0)
         premium = self.rotkehlchen.premium
 
@@ -1387,7 +1512,7 @@ class RestAPI():
         #     start_of_day_today = datetime.datetime(today.year, today.month, today.day)
         #     from_ts = Timestamp(int((start_of_day_today - datetime.timedelta(days=14)).timestamp()))  # noqa: E501
 
-        data = self.rotkehlchen.data.db.get_netvalue_data(from_ts)
+        data = self.rotkehlchen.data.db.get_netvalue_data(from_ts, include_nfts)
         result = process_result({'times': data[0], 'data': data[1]})
         return api_response(_wrap_in_ok_result(result), status_code=HTTPStatus.OK)
 
@@ -1422,18 +1547,22 @@ class RestAPI():
         return api_response(_wrap_in_ok_result(result), status_code=HTTPStatus.OK)
 
     @require_premium_user(active_check=True)
-    def query_statistics_renderer(self) -> Response:
+    def query_premium_components(self) -> Response:
         result_dict = {'result': None, 'message': ''}
         try:
             # Here we ignore mypy error since we use @require_premium_user() decorator
-            result = self.rotkehlchen.premium.query_statistics_renderer()  # type: ignore
+            result = self.rotkehlchen.premium.query_premium_components()  # type: ignore
             result_dict['result'] = result
             status_code = HTTPStatus.OK
         except RemoteError as e:
             result_dict['message'] = str(e)
             status_code = HTTPStatus.CONFLICT
 
-        return api_response(process_result(result_dict), status_code=status_code)
+        return api_response(
+            result=process_result(result_dict),
+            status_code=status_code,
+            log_result=False,
+        )
 
     def get_messages(self) -> Response:
         warnings = self.rotkehlchen.msg_aggregator.consume_warnings()
@@ -1446,11 +1575,11 @@ class RestAPI():
             from_timestamp: Timestamp,
             to_timestamp: Timestamp,
     ) -> Dict[str, Any]:
-        result, error_or_empty = self.rotkehlchen.process_history(
+        report_id, error_or_empty = self.rotkehlchen.process_history(
             start_ts=from_timestamp,
             end_ts=to_timestamp,
         )
-        return {'result': result, 'message': error_or_empty}
+        return {'result': report_id, 'message': error_or_empty}
 
     @require_loggedin_user()
     def process_history(
@@ -1473,7 +1602,7 @@ class RestAPI():
         result = response['result']
         msg = response['message']
         status_code = _get_status_code_from_async_response(response)
-        result_dict = _wrap_in_result(result=process_result(result), message=msg)
+        result_dict = _wrap_in_result(result=result, message=msg)
         return api_response(result_dict, status_code=status_code)
 
     @require_loggedin_user()
@@ -1498,11 +1627,17 @@ class RestAPI():
             return api_response(result_dict, status_code=HTTPStatus.CONFLICT)
 
         try:
+            zipfile = self.rotkehlchen.accountant.csvexporter.create_zip()
+            if zipfile is None:
+                return api_response(
+                    wrap_in_fail_result('Could not create a zip archive'),
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
             return send_file(
-                self.rotkehlchen.accountant.csvexporter.create_zip(),
+                path_or_file=zipfile,
                 mimetype='application/zip',
                 as_attachment=True,
-                attachment_filename="report.zip",
+                download_name='report.zip',
             )
         except FileNotFoundError:
             return api_response(
@@ -1720,8 +1855,11 @@ class RestAPI():
         return api_response(process_result(result_dict), status_code=status_code)
 
     def _get_manually_tracked_balances(self) -> Dict[str, Any]:
+        db_entries = get_manually_tracked_balances(db=self.rotkehlchen.data.db, balance_type=None)
         balances = process_result(
-            {'balances': get_manually_tracked_balances(db=self.rotkehlchen.data.db)},
+            {
+                'balances': db_entries,
+            },
 
         )
         return _wrap_in_ok_result(balances)
@@ -1915,10 +2053,10 @@ class RestAPI():
 
         return self.get_queried_addresses_per_module()
 
-    @staticmethod
-    def version_check() -> Response:
-        result = _wrap_in_ok_result(check_if_version_up_to_date())
-        return api_response(process_result(result), status_code=HTTPStatus.OK)
+    def get_info(self) -> Response:
+        version = check_if_version_up_to_date()
+        result = {'version': process_result(version), 'data_directory': str(self.rotkehlchen.data_dir)}  # noqa: E501
+        return api_response(_wrap_in_ok_result(result), status_code=HTTPStatus.OK)
 
     @staticmethod
     def ping() -> Response:
@@ -1927,19 +2065,84 @@ class RestAPI():
     @require_loggedin_user()
     def import_data(
             self,
-            source: Literal['cointracking.info', 'crypto.com'],
+            source: IMPORTABLE_LOCATIONS,
             filepath: Path,
+            timestamp_format: Optional[str],
     ) -> Response:
         if source == 'cointracking.info':
-            success, msg = self.rotkehlchen.data_importer.import_cointracking_csv(filepath)
+            success, msg = self.rotkehlchen.data_importer.import_cointracking_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
             if not success:
                 result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
                 return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
-        elif source == 'crypto.com':
-            success, msg = self.rotkehlchen.data_importer.import_cryptocom_csv(filepath)
+        elif source == 'cryptocom':
+            success, msg = self.rotkehlchen.data_importer.import_cryptocom_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
             if not success:
                 result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
                 return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'blockfi-transactions':
+            success, msg = self.rotkehlchen.data_importer.import_blockfi_transactions_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'blockfi-trades':
+            success, msg = self.rotkehlchen.data_importer.import_blockfi_trades_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'nexo':
+            success, msg = self.rotkehlchen.data_importer.import_nexo_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'gitcoin':
+            if self.rotkehlchen.premium is None:
+                return api_response(wrap_in_fail_result(
+                    'Gitcoin grants importing is premium only',
+                    status_code=HTTPStatus.CONFLICT,
+                ))
+
+            gitcoin_importer = GitcoinDataImporter(db=self.rotkehlchen.data.db)
+            gitcoin_importer.import_gitcoin_csv(filepath)
+        elif source == 'shapeshift-trades':
+            success, msg = self.rotkehlchen.data_importer.import_shapeshift_trades_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'uphold':
+            success, msg = self.rotkehlchen.data_importer.import_uphold_transactions_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+        elif source == 'bisq':
+            success, msg = self.rotkehlchen.data_importer.import_bisq_trades_csv(
+                filepath=filepath,
+                timestamp_format=timestamp_format,
+            )
+            if not success:
+                result = wrap_in_fail_result(f'Invalid CSV format, missing required field: {msg}')
+                return api_response(result, status_code=HTTPStatus.BAD_REQUEST)
+
         return api_response(OK_RESULT, status_code=HTTPStatus.OK)
 
     def _get_eth2_stake_deposits(self) -> Dict[str, Any]:
@@ -1950,7 +2153,7 @@ class RestAPI():
         except ModuleInactive as e:
             return {'result': None, 'message': str(e), 'status_code': HTTPStatus.CONFLICT}
 
-        return {'result': process_result_list([x._asdict() for x in result]), 'message': ''}
+        return {'result': process_result_list([x.serialize() for x in result]), 'message': ''}
 
     @require_premium_user(active_check=False)
     def get_eth2_stake_deposits(self, async_query: bool) -> Response:
@@ -1998,6 +2201,160 @@ class RestAPI():
         result_dict = _wrap_in_result(result, msg)
         return api_response(result_dict, status_code=status_code)
 
+    def _get_eth2_daily_stats(
+            self,
+            filter_query: Eth2DailyStatsFilterQuery,
+            only_cache: bool,
+    ) -> Dict[str, Any]:
+        try:
+            stats, filter_total_found, sum_pnl, sum_usd_value = self.rotkehlchen.chain_manager.get_eth2_daily_stats(  # noqa: E501
+                filter_query=filter_query,
+                only_cache=only_cache,
+            )
+        except RemoteError as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.BAD_GATEWAY}
+        except ModuleInactive as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.CONFLICT}
+
+        result = {
+            'entries': [x.serialize() for x in stats],
+            'sum_pnl': str(sum_pnl),
+            'sum_usd_value': str(sum_usd_value),
+            'entries_found': filter_total_found,
+            'entries_total': self.rotkehlchen.data.db.get_entries_count('eth2_daily_staking_details'),  # noqa: E501
+        }
+        return {'result': result, 'message': '', 'status_code': HTTPStatus.OK}
+
+    @require_premium_user(active_check=False)
+    def get_eth2_daily_stats(
+            self,
+            filter_query: Eth2DailyStatsFilterQuery,
+            async_query: bool,
+            only_cache: bool,
+    ) -> Response:
+        if async_query:
+            return self._query_async(
+                command='_get_eth2_daily_stats',
+                filter_query=filter_query,
+                only_cache=only_cache,
+            )
+
+        response = self._get_eth2_daily_stats(filter_query=filter_query, only_cache=only_cache)
+        result = response['result']
+        msg = response['message']
+        status_code = _get_status_code_from_async_response(response)
+        if result is None:
+            return api_response(wrap_in_fail_result(msg), status_code=status_code)
+
+        # success
+        result_dict = _wrap_in_result(result, msg)
+        return api_response(result_dict, status_code=status_code)
+
+    @require_loggedin_user()
+    def get_eth2_validators(self) -> Response:
+        try:
+            validators = self.rotkehlchen.chain_manager.get_eth2_validators()
+        except ModuleInactive as e:
+            return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
+
+        limit = -1
+        entries_found = len(validators)
+        if self.rotkehlchen.premium is None:
+            limit = FREE_VALIDATORS_LIMIT
+            validators = validators[:4]
+
+        result = _wrap_in_ok_result({
+            'entries': [x.serialize() for x in validators],
+            'entries_found': entries_found,
+            'entries_limit': limit,
+        })
+        return api_response(
+            result=result,
+            status_code=HTTPStatus.OK,
+        )
+
+    def _add_eth2_validator(
+            self,
+            validator_index: Optional[int],
+            public_key: Optional[Eth2PubKey],
+            ownership_proportion: FVal,
+    ) -> Dict[str, Any]:
+        try:
+            self.rotkehlchen.chain_manager.add_eth2_validator(
+                validator_index=validator_index,
+                public_key=public_key,
+                ownership_proportion=ownership_proportion,
+            )
+        except RemoteError as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.BAD_GATEWAY}
+        except PremiumPermissionError as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.UNAUTHORIZED}  # noqa: E501
+        except (InputError, ModuleInactive) as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.CONFLICT}
+
+        return {'result': True, 'message': ''}
+
+    @require_loggedin_user()
+    def add_eth2_validator(
+            self,
+            validator_index: Optional[int],
+            public_key: Optional[Eth2PubKey],
+            ownership_proportion: FVal,
+            async_query: bool,
+    ) -> Response:
+        if async_query:
+            return self._query_async(
+                command='_add_eth2_validator',
+                validator_index=validator_index,
+                public_key=public_key,
+                ownership_proportion=ownership_proportion,
+            )
+
+        response = self._add_eth2_validator(
+            validator_index=validator_index,
+            public_key=public_key,
+            ownership_proportion=ownership_proportion,
+        )
+        result = response['result']
+        msg = response['message']
+        status_code = _get_status_code_from_async_response(response)
+        if result is None:
+            return api_response(wrap_in_fail_result(msg), status_code=status_code)
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def edit_eth2_validator(self, validator_index: int, ownership_proportion: FVal) -> Response:
+        try:
+            self.rotkehlchen.chain_manager.edit_eth2_validator(
+                validator_index=validator_index,
+                ownership_proportion=ownership_proportion,
+            )
+            return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+        except (InputError, ModuleInactive) as e:
+            return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.CONFLICT)
+
+    @require_loggedin_user()
+    def delete_eth2_validator(
+            self,
+            validators: List[Dict],
+    ) -> Response:
+        try:
+            for validator in validators:
+                self.rotkehlchen.chain_manager.delete_eth2_validator(
+                    validator_index=validator.get('validator_index'),
+                    public_key=validator.get('public_key'),
+                )
+            result = OK_RESULT
+            status_code = HTTPStatus.OK
+        except InputError as e:
+            result = {'result': None, 'message': str(e)}
+            status_code = HTTPStatus.CONFLICT
+        except ModuleInactive as e:
+            result = {'result': None, 'message': str(e)}
+            status_code = HTTPStatus.CONFLICT
+
+        return api_response(result, status_code=status_code)
+
     def _get_defi_balances(self) -> Dict[str, Any]:
         """
         This returns the typical async response dict but with the
@@ -2034,8 +2391,10 @@ class RestAPI():
                 addresses=self.rotkehlchen.chain_manager.accounts.eth,
                 data_dir=self.rotkehlchen.data_dir,
             )
-        except RemoteError as e:
+        except (RemoteError, UnableToDecryptRemoteData) as e:
             return wrap_in_fail_result(str(e), status_code=HTTPStatus.BAD_GATEWAY)
+        except OSError as e:
+            return wrap_in_fail_result(str(e), status_code=HTTPStatus.INSUFFICIENT_STORAGE)
 
         return _wrap_in_ok_result(process_result(data))
 
@@ -2100,6 +2459,9 @@ class RestAPI():
         except RemoteError as e:
             msg = str(e)
             status_code = HTTPStatus.BAD_GATEWAY
+        except InputError as e:
+            msg = str(e)
+            status_code = HTTPStatus.CONFLICT
 
         return {'result': result, 'message': msg, 'status_code': status_code}
 
@@ -2259,6 +2621,21 @@ class RestAPI():
             given_defi_balances=lambda: self.rotkehlchen.chain_manager.defi_balances,
         )
 
+    @require_loggedin_user()
+    def get_yearn_vaults_v2_balances(self, async_query: bool) -> Response:
+        # Once that has ran we can be sure that defi_balances mapping is populated
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='yearn_vaults_v2',
+            method='get_balances',
+            # We need to query defi balances before since eth balances must be populated
+            query_specific_balances_before=['defi'],
+            # Giving the eth balances as a lambda function here so that they
+            # are retrieved only after we are sure the eth balances have been
+            # queried.
+            given_eth_balances=lambda: self.rotkehlchen.chain_manager.balances.eth,
+        )
+
     @require_premium_user(active_check=False)
     def get_yearn_vaults_history(
             self,
@@ -2278,6 +2655,31 @@ class RestAPI():
             # queried.
             given_defi_balances=lambda: self.rotkehlchen.chain_manager.defi_balances,
             addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('yearn_vaults'),
+            reset_db_data=reset_db_data,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
+    @require_premium_user(active_check=False)
+    def get_yearn_vaults_v2_history(
+            self,
+            async_query: bool,
+            reset_db_data: bool,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='yearn_vaults_v2',
+            method='get_history',
+            query_specific_balances_before=['defi'],
+            # Giving the eth balances as a lambda function here so that they
+            # are retrieved only after we are sure the eth balances have been
+            # queried.
+            given_eth_balances=lambda: self.rotkehlchen.chain_manager.balances.eth,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module(
+                'yearn_vaults_v2',
+            ),
             reset_db_data=reset_db_data,
             from_timestamp=from_timestamp,
             to_timestamp=to_timestamp,
@@ -2326,6 +2728,54 @@ class RestAPI():
             method='get_trades_history',
             query_specific_balances_before=None,
             addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('uniswap'),
+            reset_db_data=reset_db_data,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
+    @require_premium_user(active_check=False)
+    def get_sushiswap_balances(self, async_query: bool) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='sushiswap',
+            method='get_balances',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('sushiswap'),
+        )
+
+    @require_premium_user(active_check=False)
+    def get_sushiswap_events_history(
+            self,
+            async_query: bool,
+            reset_db_data: bool,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='sushiswap',
+            method='get_events_history',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('sushiswap'),
+            reset_db_data=reset_db_data,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
+    @require_premium_user(active_check=False)
+    def get_sushiswap_trades_history(
+            self,
+            async_query: bool,
+            reset_db_data: bool,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='sushiswap',
+            method='get_trades_history',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('sushiswap'),
             reset_db_data=reset_db_data,
             from_timestamp=from_timestamp,
             to_timestamp=to_timestamp,
@@ -2418,6 +2868,71 @@ class RestAPI():
             to_timestamp=to_timestamp,
         )
 
+    def get_dill_balance(self, async_query: bool) -> Response:
+        addresses = self.rotkehlchen.chain_manager.queried_addresses_for_module('pickle_finance')
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='pickle_finance',
+            method='get_dill_balances',
+            query_specific_balances_before=['defi'],
+            addresses=addresses,
+        )
+
+    def get_liquity_troves(self, async_query: bool) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='liquity',
+            method='get_positions',
+            query_specific_balances_before=None,
+            addresses_list=self.rotkehlchen.chain_manager.queried_addresses_for_module('liquity'),
+        )
+
+    @require_premium_user(active_check=False)
+    def get_liquity_staked(self, async_query: bool) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='liquity',
+            method='liquity_staking_balances',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('liquity'),
+        )
+
+    @require_premium_user(active_check=False)
+    def get_liquity_trove_events(
+        self,
+        async_query: bool,
+        reset_db_data: bool,  # pylint: disable=unused-argument
+        from_timestamp: Timestamp,
+        to_timestamp: Timestamp,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='liquity',
+            method='get_trove_history',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('liquity'),
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
+    @require_premium_user(active_check=False)
+    def get_liquity_stake_events(
+        self,
+        async_query: bool,
+        reset_db_data: bool,  # pylint: disable=unused-argument
+        from_timestamp: Timestamp,
+        to_timestamp: Timestamp,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='liquity',
+            method='get_staking_history',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('liquity'),
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
     def _watcher_query(
             self,
             method: Literal['GET', 'PUT', 'PATCH', 'DELETE'],
@@ -2453,36 +2968,35 @@ class RestAPI():
         return self._watcher_query(method='DELETE', data={'watchers': watchers})
 
     @require_loggedin_user()
-    def purge_exchange_data(self, name: Optional[str]) -> Response:
-        if name:
-            self.rotkehlchen.data.db.purge_exchange_data(name)
+    def purge_exchange_data(self, location: Optional[Location]) -> Response:
+        if location:
+            self.rotkehlchen.data.db.purge_exchange_data(location)
         else:
-            for exchange_name in ALL_SUPPORTED_EXCHANGES:
-                self.rotkehlchen.data.db.purge_exchange_data(exchange_name)
+            for exchange_location in ALL_SUPPORTED_EXCHANGES:
+                self.rotkehlchen.data.db.purge_exchange_data(exchange_location)
 
         return api_response(OK_RESULT, status_code=HTTPStatus.OK)
 
     @require_loggedin_user()
     def purge_ethereum_transaction_data(self) -> Response:
-        self.rotkehlchen.data.db.purge_ethereum_transaction_data()
+        DBEthTx(self.rotkehlchen.data.db).purge_ethereum_transaction_data()
         return api_response(OK_RESULT, status_code=HTTPStatus.OK)
 
     def _get_ethereum_transactions(
             self,
-            address: Optional[ChecksumEthAddress],
-            from_timestamp: Timestamp,
-            to_timestamp: Timestamp,
             only_cache: bool,
+            filter_query: ETHTransactionsFilterQuery,
     ) -> Dict[str, Any]:
+        tx_module = EthTransactions(
+            ethereum=self.rotkehlchen.chain_manager.ethereum,
+            database=self.rotkehlchen.data.db,
+        )
         transactions: Optional[List[EthereumTransaction]]
         try:
-            transactions = self.rotkehlchen.chain_manager.ethereum.transactions.query(
-                addresses=[address] if address is not None else None,
-                from_ts=from_timestamp,
-                to_ts=to_timestamp,
-                with_limit=self.rotkehlchen.premium is None,
-                recent_first=True,
+            transactions, total_filter_count = tx_module.query(
                 only_cache=only_cache,
+                filter_query=filter_query,
+                with_limit=self.rotkehlchen.premium is None,
             )
             status_code = HTTPStatus.OK
             message = ''
@@ -2490,10 +3004,14 @@ class RestAPI():
             transactions = None
             status_code = HTTPStatus.BAD_GATEWAY
             message = str(e)
+        except sqlcipher.OperationalError as e:  # pylint: disable=no-member
+            transactions = None
+            status_code = HTTPStatus.BAD_REQUEST
+            message = str(e)
 
         if transactions is not None:
-            mapping = self.rotkehlchen.data.db.get_ignored_action_ids(ActionType.ETHEREUM_TX)
-            ignored_ids = mapping.get(ActionType.ETHEREUM_TX, [])
+            mapping = self.rotkehlchen.data.db.get_ignored_action_ids(ActionType.ETHEREUM_TRANSACTION)  # noqa: E501
+            ignored_ids = mapping.get(ActionType.ETHEREUM_TRANSACTION, [])
             entries_result = []
             for entry in transactions:
                 entries_result.append({
@@ -2503,11 +3021,16 @@ class RestAPI():
         else:
             entries_result = []
 
-        result = {
-            'entries': entries_result,
-            'entries_found': self.rotkehlchen.data.db.get_entries_count('ethereum_transactions'),
-            'entries_limit': FREE_ETH_TX_LIMIT if self.rotkehlchen.premium is None else -1,
-        }
+        result: Optional[Dict[str, Any]] = None
+        if status_code == HTTPStatus.OK:
+            result = {
+                'entries': entries_result,
+                'entries_found': total_filter_count,
+                'entries_total': self.rotkehlchen.data.db.get_entries_count(
+                    entries_table='ethereum_transactions',
+                ),
+                'entries_limit': FREE_ETH_TX_LIMIT if self.rotkehlchen.premium is None else -1,
+            }
 
         return {'result': result, 'message': message, 'status_code': status_code}
 
@@ -2515,25 +3038,19 @@ class RestAPI():
     def get_ethereum_transactions(
             self,
             async_query: bool,
-            address: Optional[ChecksumEthAddress],
-            from_timestamp: Timestamp,
-            to_timestamp: Timestamp,
             only_cache: bool,
+            filter_query: ETHTransactionsFilterQuery,
     ) -> Response:
         if async_query:
             return self._query_async(
                 command='_get_ethereum_transactions',
-                address=address,
-                from_timestamp=from_timestamp,
-                to_timestamp=to_timestamp,
                 only_cache=only_cache,
+                filter_query=filter_query,
             )
 
         response = self._get_ethereum_transactions(
-            address=address,
-            from_timestamp=from_timestamp,
-            to_timestamp=to_timestamp,
             only_cache=only_cache,
+            filter_query=filter_query,
         )
         result = response['result']
         msg = response['message']
@@ -2549,10 +3066,9 @@ class RestAPI():
     def get_asset_icon(
             self,
             asset: Asset,
-            size: Literal['thumb', 'small', 'large'],
             match_header: Optional[str],
     ) -> Response:
-        file_md5 = self.rotkehlchen.icon_manager.iconfile_md5(asset, size)
+        file_md5 = self.rotkehlchen.icon_manager.iconfile_md5(asset)
         if file_md5 and match_header and match_header == file_md5:
             # Response content unmodified
             return make_response(
@@ -2563,7 +3079,7 @@ class RestAPI():
                 ),
             )
 
-        image_data = self.rotkehlchen.icon_manager.get_icon(asset, size)
+        image_data = self.rotkehlchen.icon_manager.get_icon(asset)
         if image_data is None:
             response = make_response(
                 (
@@ -2662,7 +3178,7 @@ class RestAPI():
                     timestamp=timestamp,
                 )
             except (RemoteError, NoPriceForGivenTimestamp) as e:
-                logger.error(
+                log.error(
                     f'Could not query the historical {target_asset.identifier} price for '
                     f'{asset.identifier} at time {timestamp} due to: {str(e)}. Using zero price',
                 )
@@ -2880,6 +3396,10 @@ class RestAPI():
             return {'result': None, 'message': str(e), 'status_code': HTTPStatus.BAD_GATEWAY}
 
         if result is None:
+            cursor = self.rotkehlchen.data.db.conn.cursor()
+            # clean token detection cache. Next function will commit to the DB
+            cursor.execute('DELETE from ethereum_accounts_details;')
+            self.rotkehlchen.data.db.add_globaldb_assetids()
             return OK_RESULT
 
         return {
@@ -2888,6 +3408,7 @@ class RestAPI():
             'status_code': HTTPStatus.CONFLICT,
         }
 
+    @require_loggedin_user()
     def perform_assets_updates(
             self,
             async_query: bool,
@@ -2905,4 +3426,483 @@ class RestAPI():
         return api_response(
             result={'result': response['result'], 'message': response['message']},
             status_code=response.get('status_code', HTTPStatus.OK),
+        )
+
+    def get_all_binance_pairs(self, location: Location) -> Response:
+        # pylint: disable=no-self-use
+        try:
+            pairs = list(query_binance_exchange_pairs(location=location).keys())
+        except InputError as e:
+            return api_response(
+                wrap_in_fail_result(
+                    f'Failed to handle binance markets internally. {str(e)}',
+                    status_code=HTTPStatus.BAD_GATEWAY,
+                ),
+            )
+        if len(pairs) == 0:
+            return api_response(
+                wrap_in_fail_result(
+                    'Failed to query binance pairs both from database and the binance API.',
+                    status_code=HTTPStatus.BAD_GATEWAY,
+                ),
+            )
+        return api_response(_wrap_in_ok_result(list(pairs)), status_code=HTTPStatus.OK)
+
+    def get_user_binance_pairs(self, name: str, location: Location) -> Response:
+        return api_response(
+            _wrap_in_ok_result(
+                self.rotkehlchen.exchange_manager.get_user_binance_pairs(name, location),
+            ),
+            status_code=HTTPStatus.OK,
+        )
+
+    def _process_gitcoin(
+            self,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+            grant_id: Optional[int],
+    ) -> Dict[str, Any]:
+        processor = GitcoinProcessor(self.rotkehlchen.data.db)
+        profit_currency, reports = processor.process_gitcoin(
+            from_ts=from_timestamp,
+            to_ts=to_timestamp,
+            grant_id=grant_id,
+        )
+        result = {
+            'reports': {grantid: report.serialize() for grantid, report in reports.items()},
+            'profit_currency': profit_currency.identifier,
+        }
+        return {'result': result, 'message': ''}
+
+    @require_premium_user(active_check=False)
+    def process_gitcoin(
+            self,
+            async_query: bool,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+            grant_id: Optional[int],
+    ) -> Response:
+        if async_query:
+            return self._query_async(
+                command='_process_gitcoin',
+                from_timestamp=from_timestamp,
+                to_timestamp=to_timestamp,
+                grant_id=grant_id,
+            )
+
+        response = self._process_gitcoin(
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            grant_id=grant_id,
+        )
+        result_dict = {'result': response['result'], 'message': response['message']}
+        return api_response(process_result(result_dict), status_code=HTTPStatus.OK)
+
+    def _get_gitcoin_events(
+            self,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+            grant_id: Optional[int],
+            only_cache: bool,
+    ) -> Dict[str, Any]:
+        api = GitcoinAPI(self.rotkehlchen.data.db)
+        try:
+            grantid_to_data = api.query_grant_history(
+                from_ts=from_timestamp,
+                to_ts=to_timestamp,
+                grant_id=grant_id,
+                only_cache=only_cache,
+            )
+        except RemoteError as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.BAD_GATEWAY}
+        except InputError as e:
+            return {'result': None, 'message': str(e), 'status_code': HTTPStatus.BAD_REQUEST}
+
+        return {'result': grantid_to_data, 'message': '', 'status_code': HTTPStatus.OK}
+
+    @require_premium_user(active_check=False)
+    def get_gitcoin_events(
+            self,
+            async_query: bool,
+            from_timestamp: Timestamp,
+            to_timestamp: Timestamp,
+            grant_id: Optional[int],
+            only_cache: bool,
+    ) -> Response:
+        if async_query:
+            return self._query_async(
+                command='_get_gitcoin_events',
+                from_timestamp=from_timestamp,
+                to_timestamp=to_timestamp,
+                grant_id=grant_id,
+                only_cache=only_cache,
+            )
+
+        response = self._get_gitcoin_events(
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            grant_id=grant_id,
+            only_cache=only_cache,
+        )
+        result_dict = {'result': response['result'], 'message': response['message']}
+        return api_response(
+            result=result_dict,
+            status_code=response.get('status_code', HTTPStatus.OK),
+        )
+
+    @require_loggedin_user()
+    def purge_gitcoin_grant_data(self, grant_id: Optional[int]) -> Response:
+        DBLedgerActions(
+            self.rotkehlchen.data.db, self.rotkehlchen.msg_aggregator,
+        ).delete_gitcoin_ledger_actions(grant_id)
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    def add_manual_price(  # pylint: disable=no-self-use
+        self,
+        from_asset: Asset,
+        to_asset: Asset,
+        price: Price,
+        timestamp: Timestamp,
+    ) -> Response:
+        historical_price = HistoricalPrice(
+            from_asset=from_asset,
+            to_asset=to_asset,
+            source=HistoricalPriceOracle.MANUAL,
+            timestamp=timestamp,
+            price=price,
+        )
+        added = GlobalDBHandler().add_single_historical_price(historical_price)
+        if added:
+            return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+        return api_response(
+            result={'result': False, 'message': 'Failed to store manual price'},
+            status_code=HTTPStatus.CONFLICT,
+        )
+
+    def edit_manual_price(  # pylint: disable=no-self-use
+        self,
+        from_asset: Asset,
+        to_asset: Asset,
+        price: Price,
+        timestamp: Timestamp,
+    ) -> Response:
+        historical_price = HistoricalPrice(
+            from_asset=from_asset,
+            to_asset=to_asset,
+            source=HistoricalPriceOracle.MANUAL,
+            timestamp=timestamp,
+            price=price,
+        )
+        edited = GlobalDBHandler().edit_manual_price(historical_price)
+        if edited:
+            return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+        return api_response(
+            result={'result': False, 'message': 'Failed to edit manual price'},
+            status_code=HTTPStatus.CONFLICT,
+        )
+
+    def get_manual_prices(  # pylint: disable=no-self-use
+        self,
+        from_asset: Optional[Asset],
+        to_asset: Optional[Asset],
+    ) -> Response:
+        return api_response(
+            _wrap_in_ok_result(GlobalDBHandler().get_manual_prices(from_asset, to_asset)),
+            status_code=HTTPStatus.OK,
+        )
+
+    def delete_manual_price(  # pylint: disable=no-self-use
+        self,
+        from_asset: Asset,
+        to_asset: Asset,
+        timestamp: Timestamp,
+    ) -> Response:
+        deleted = GlobalDBHandler().delete_manual_price(from_asset, to_asset, timestamp)
+        if deleted:
+            return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+        return api_response(
+            result={'result': False, 'message': 'Failed to delete manual price'},
+            status_code=HTTPStatus.CONFLICT,
+        )
+
+    def _get_avalanche_transactions(
+        self,
+        address: ChecksumEthAddress,
+        from_timestamp: Timestamp,
+        to_timestamp: Timestamp,
+    ) -> Dict[str, Any]:
+        avalanche = self.rotkehlchen.chain_manager.avalanche
+        response = avalanche.covalent.get_transactions(address, from_timestamp, to_timestamp)
+        if response is None:
+            return {
+                'result': [],
+                'message': 'Not found.',
+                'status_code': HTTPStatus.NOT_FOUND,
+            }
+
+        entries_result = []
+        for transaction in response:
+            entries_result.append(transaction.serialize())
+
+        result = {
+            'entries': entries_result,
+            'entries_found': len(entries_result),
+        }
+        msg = ''
+        return {'result': result, 'message': msg, 'status_code': HTTPStatus.OK}
+
+    @require_loggedin_user()
+    def get_avalanche_transactions(
+        self,
+        async_query: bool,
+        address: ChecksumEthAddress,
+        from_timestamp: Timestamp,
+        to_timestamp: Timestamp,
+    ) -> Response:
+        if async_query:
+            return self._query_async(
+                command='_get_avalanche_transactions',
+                address=address,
+                from_timestamp=from_timestamp,
+                to_timestamp=to_timestamp,
+            )
+
+        response = self._get_avalanche_transactions(
+            address=address,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+        )
+
+        result = response['result']
+        if len(result) == 0:
+            return api_response(
+                wrap_in_fail_result('Not found.'),
+                status_code=HTTPStatus.NOT_FOUND,
+            )
+
+        msg = response['message']
+        status_code = _get_status_code_from_async_response(response)
+
+        # success
+        result_dict = _wrap_in_result(result, msg)
+        return api_response(process_result(result_dict), status_code=status_code)
+
+    def _get_avax_token_info(self, address: ChecksumEthAddress) -> Dict[str, Any]:
+        avax_manager = self.rotkehlchen.chain_manager.avalanche
+        try:
+            info = avax_manager.get_basic_contract_info(address=address)
+        except BadFunctionCallOutput:
+            return wrap_in_fail_result(
+                f'Address {address} seems to not be a deployed contract',
+                status_code=HTTPStatus.CONFLICT,
+            )
+        return _wrap_in_ok_result(info)
+
+    @require_loggedin_user()
+    def get_avax_token_information(
+        self,
+        token_address: ChecksumEthAddress,
+        async_query: bool,
+    ) -> Response:
+
+        if async_query:
+            return self._query_async(command='_get_avax_token_info', address=token_address)
+
+        response = self._get_avax_token_info(token_address)
+
+        result = response['result']
+        msg = response['message']
+        status_code = _get_status_code_from_async_response(response)
+        if result is None:
+            return api_response(wrap_in_fail_result(msg), status_code=status_code)
+
+        # Success
+        result_dict = _wrap_in_result(result, msg)
+        return api_response(result_dict, status_code=status_code)
+
+    @require_loggedin_user()
+    def get_nfts(self, async_query: bool, ignore_cache: bool) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='nfts',
+            method='get_all_info',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('nfts'),
+            ignore_cache=ignore_cache,
+        )
+
+    @require_loggedin_user()
+    def get_nfts_balances(self, async_query: bool, ignore_cache: bool) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=async_query,
+            module_name='nfts',
+            method='get_balances',
+            query_specific_balances_before=None,
+            addresses=self.rotkehlchen.chain_manager.queried_addresses_for_module('nfts'),
+            return_zero_values=True,
+            ignore_cache=ignore_cache,
+        )
+
+    @require_loggedin_user()
+    def get_nfts_with_price(self) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=False,
+            module_name='nfts',
+            method='get_nfts_with_price',
+            query_specific_balances_before=None,
+        )
+
+    @require_loggedin_user()
+    def add_manual_current_price(
+            self,
+            from_asset: Asset,
+            to_asset: Asset,
+            price: Price,
+    ) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=False,
+            module_name='nfts',
+            method='add_nft_with_price',
+            query_specific_balances_before=None,
+            from_asset=from_asset,
+            to_asset=to_asset,
+            price=price,
+        )
+
+    @require_loggedin_user()
+    def delete_manual_current_price(self, asset: Asset) -> Response:
+        return self._api_query_for_eth_module(
+            async_query=False,
+            module_name='nfts',
+            method='delete_price_for_nft',
+            query_specific_balances_before=None,
+            asset=asset,
+        )
+
+    @require_loggedin_user()
+    def reset_limits_counter(self, location: str) -> Response:  # pylint: disable=unused-argument
+        tx_module = EthTransactions(
+            ethereum=self.rotkehlchen.chain_manager.ethereum,
+            database=self.rotkehlchen.data.db,
+        )
+        # at the moment only location is ethereum_transactions and is checked by marshmallow
+        tx_module.reset_count()
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    def get_database_info(self) -> Response:
+        globaldb_schema_version = GlobalDBHandler().get_schema_version()
+        globaldb_assets_version = GlobalDBHandler().get_setting_value(ASSETS_VERSION_KEY, 0)
+        result_dict = {
+            'globaldb': {
+                'globaldb_schema_version': globaldb_schema_version,
+                'globaldb_assets_version': globaldb_assets_version,
+            },
+            'userdb': {},
+        }
+        if self.rotkehlchen.user_is_logged_in:
+            result_dict['userdb']['info'] = self.rotkehlchen.data.db.get_db_info()  # type: ignore
+            result_dict['userdb']['backups'] = []  # type: ignore
+            backups = self.rotkehlchen.data.db.get_backups()
+            for entry in backups:
+                result_dict['userdb']['backups'].append(entry)  # type: ignore
+
+        return api_response(_wrap_in_ok_result(result_dict), status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def create_database_backup(self) -> Response:
+        try:
+            db_backup_path = self.rotkehlchen.data.db.create_db_backup()
+        except OSError as e:
+            error_msg = f'Failed to create a DB backup due to {str(e)}'
+            return api_response(wrap_in_fail_result(error_msg), status_code=HTTPStatus.CONFLICT)
+
+        return api_response(_wrap_in_ok_result(str(db_backup_path)), status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def download_database_backup(self, filepath: Path) -> Response:
+        if filepath.parent != self.rotkehlchen.data.db.user_data_dir:
+            error_msg = f'DB backup file {filepath} is not in the user directory'
+            return api_response(wrap_in_fail_result(error_msg), status_code=HTTPStatus.CONFLICT)
+
+        return send_file(
+            path_or_file=filepath,
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            download_name=filepath.name,
+        )
+
+    @require_loggedin_user()
+    def delete_database_backup(self, filepath: Path) -> Response:
+        if filepath.parent != self.rotkehlchen.data.db.user_data_dir:
+            error_msg = f'DB backup file {filepath} is not in the user directory'
+            return api_response(wrap_in_fail_result(error_msg), status_code=HTTPStatus.CONFLICT)
+
+        filepath.unlink()  # should not raise file not found as marshmallow should check
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def purge_pnl_report_data(self, report_id: int) -> Response:
+        dbreports = DBAccountingReports(self.rotkehlchen.data.db)
+        try:
+            dbreports.purge_report_data(report_id=report_id)
+        except InputError as e:
+            return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.BAD_REQUEST)
+
+        return api_response(OK_RESULT, status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def get_pnl_reports(
+            self,
+            report_id: Optional[int],
+    ) -> Response:
+        with_limit = False
+        entries_limit = -1
+        if self.rotkehlchen.premium is None:
+            with_limit = True
+            entries_limit = FREE_REPORTS_LOOKUP_LIMIT
+
+        dbreports = DBAccountingReports(self.rotkehlchen.data.db)
+        reports, entries_found = dbreports.get_reports(
+            report_id=report_id,
+            with_limit=with_limit,
+        )
+
+        # success
+        result_dict = _wrap_in_ok_result({
+            'entries': reports,
+            'entries_found': entries_found,
+            'entries_limit': entries_limit,
+        })
+        return api_response(process_result(result_dict), status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def get_report_data(self, filter_query: ReportDataFilterQuery) -> Response:
+        with_limit = False
+        entries_limit = -1
+        if self.rotkehlchen.premium is None:
+            with_limit = True
+            entries_limit = FREE_PNL_EVENTS_LIMIT
+        dbreports = DBAccountingReports(self.rotkehlchen.data.db)
+        try:
+            report_data, entries_found = dbreports.get_report_data(
+                filter_=filter_query,
+                with_limit=with_limit,
+            )
+        except InputError as e:
+            return api_response(wrap_in_fail_result(str(e)), status_code=HTTPStatus.BAD_REQUEST)
+
+        result = {
+            'entries': report_data,
+            'entries_found': entries_found,
+            'entries_limit': entries_limit,
+        }
+        result_dict = _wrap_in_result(result, '')
+        return api_response(process_result(result_dict), status_code=HTTPStatus.OK)
+
+    @require_loggedin_user()
+    def get_associated_locations(self) -> Response:
+        locations = self.rotkehlchen.data.db.get_associated_locations()
+        return api_response(
+            result=_wrap_in_ok_result([str(location) for location in locations]),
+            status_code=HTTPStatus.OK,
         )

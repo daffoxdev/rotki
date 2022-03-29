@@ -8,8 +8,8 @@ It outputs the result to the stdout
 """
 
 import argparse
-from typing import Dict, List
 import re
+from typing import Dict, List
 
 NEW_ASSETS_MSG = 'Added support for the following tokens'
 NEW_VERSION_FORMAT = '* :release:`{}'
@@ -48,7 +48,7 @@ def generate_changelog(version: str, path: str) -> str:
                     else:
                         changes['bugs'].append(text)
 
-            if start and 'release' in line:
+            if start and '* :release:' in line:
                 break
 
     result = [

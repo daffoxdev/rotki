@@ -1,15 +1,20 @@
 <template>
-  <location-icon class="location-display" :item="location" :icon="icon" />
+  <location-icon
+    class="location-display"
+    :item="location"
+    :icon="icon"
+    :size="size"
+  />
 </template>
 
 <script lang="ts">
+import { Blockchain } from '@rotki/common/lib/blockchain';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
 import { tradeLocations } from '@/components/history/consts';
 import LocationIcon from '@/components/history/LocationIcon.vue';
 import { TradeLocationData } from '@/components/history/type';
 import AssetMixin from '@/mixins/asset-mixin';
 import { TradeLocation } from '@/services/history/types';
-import { SupportedBlockchains } from '@/typing/types';
 import { assert } from '@/utils/assertions';
 
 @Component({
@@ -21,6 +26,8 @@ export default class LocationDisplay extends Mixins(AssetMixin) {
   identifier!: TradeLocation;
   @Prop({ required: false, type: Boolean, default: false })
   icon!: boolean;
+  @Prop({ required: false, type: String, default: '24px' })
+  size!: string;
 
   get location(): TradeLocationData {
     if (this.isSupportedBlockchain(this.identifier)) {
@@ -29,7 +36,7 @@ export default class LocationDisplay extends Mixins(AssetMixin) {
         identifier: this.identifier,
         exchange: false,
         imageIcon: true,
-        icon: `${process.env.VUE_APP_BACKEND_URL}/api/1/assets/${this.identifier}/icon/small`
+        icon: `${this.$api.serverUrl}/api/1/assets/${this.identifier}/icon`
       };
     }
 
@@ -41,7 +48,7 @@ export default class LocationDisplay extends Mixins(AssetMixin) {
   }
 
   private isSupportedBlockchain(identifier: string): boolean {
-    return SupportedBlockchains.includes(identifier as any);
+    return Object.values(Blockchain).includes(identifier as any);
   }
 }
 </script>

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rotkehlchen.assets.asset import Asset
+from rotkehlchen.assets.asset import WORLD_TO_POLONIEX, Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_POLONIEX_ASSETS, asset_from_poloniex
 from rotkehlchen.constants.assets import A_BCH, A_BTC, A_ETH
 from rotkehlchen.errors import DeserializationError, UnknownAsset, UnsupportedAsset
@@ -63,8 +63,9 @@ TEST_POLO_LOAN_2 = {
 
 
 def test_name():
-    exchange = Poloniex('a', b'a', object(), object())
-    assert exchange.name == 'poloniex'
+    exchange = Poloniex('poloniex1', 'a', b'a', object(), object())
+    assert exchange.location == Location.POLONIEX
+    assert exchange.name == 'poloniex1'
 
 
 def test_trade_from_poloniex():
@@ -226,7 +227,7 @@ def test_query_trade_history(function_scope_poloniex):
     """Happy path test for poloniex trade history querying"""
     poloniex = function_scope_poloniex
 
-    def mock_api_return(url, req):  # pylint: disable=unused-argument
+    def mock_api_return(url, req, **kwargs):  # pylint: disable=unused-argument
         return MockResponse(200, POLONIEX_TRADES_RESPONSE)
 
     with patch.object(poloniex.session, 'post', side_effect=mock_api_return):
@@ -267,11 +268,11 @@ def test_query_trade_history_unexpected_data(function_scope_poloniex):
 
     def mock_poloniex_and_query(given_trades, expected_warnings_num, expected_errors_num):
 
-        def mock_api_return(url, req):  # pylint: disable=unused-argument
+        def mock_api_return(url, req, **kwargs):  # pylint: disable=unused-argument
             return MockResponse(200, given_trades)
 
         with patch.object(poloniex.session, 'post', side_effect=mock_api_return):
-            trades = poloniex.query_online_trade_history(
+            trades, _ = poloniex.query_online_trade_history(
                 start_ts=0,
                 end_ts=1565732120,
             )
@@ -343,6 +344,9 @@ def test_query_trade_history_unexpected_data(function_scope_poloniex):
 
 
 def test_poloniex_assets_are_known(poloniex):
+    unsupported_assets = set(UNSUPPORTED_POLONIEX_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_POLONIEX.values()))
+    assert not common_items, f'Poloniex assets {common_items} should not be unsupported'
     currencies = poloniex.return_currencies()
     for poloniex_asset in currencies.keys():
         try:
@@ -361,7 +365,7 @@ def test_poloniex_query_balances_unknown_asset(function_scope_poloniex):
     is raised and a warning is generated. Same for unsupported assets"""
     poloniex = function_scope_poloniex
 
-    def mock_unknown_asset_return(url, req):  # pylint: disable=unused-argument
+    def mock_unknown_asset_return(url, req, **kwargs):  # pylint: disable=unused-argument
         return MockResponse(200, POLONIEX_BALANCES_RESPONSE)
 
     with patch.object(poloniex.session, 'post', side_effect=mock_unknown_asset_return):
@@ -387,7 +391,7 @@ def test_poloniex_deposits_withdrawal_unknown_asset(function_scope_poloniex):
     is raised and a warning is generated. Same for unsupported assets"""
     poloniex = function_scope_poloniex
 
-    def mock_api_return(url, req):  # pylint: disable=unused-argument
+    def mock_api_return(url, req, **kwargs):  # pylint: disable=unused-argument
         response = MockResponse(
             200,
             POLONIEX_MOCK_DEPOSIT_WITHDRAWALS_RESPONSE,
@@ -418,7 +422,7 @@ def test_poloniex_deposits_withdrawal_null_fee(function_scope_poloniex):
     """
     poloniex = function_scope_poloniex
 
-    def mock_api_return(url, req):  # pylint: disable=unused-argument
+    def mock_api_return(url, req, **kwargs):  # pylint: disable=unused-argument
         response = MockResponse(
             200,
             '{"withdrawals": [{"currency": "FAC", "timestamp": 1478994442, '
@@ -453,7 +457,7 @@ def test_poloniex_deposits_withdrawal_unexpected_data(function_scope_poloniex):
 
     def mock_poloniex_and_query(given_movements, expected_warnings_num, expected_errors_num):
 
-        def mock_api_return(url, req):  # pylint: disable=unused-argument
+        def mock_api_return(url, req, **kwargs):  # pylint: disable=unused-argument
             return MockResponse(200, given_movements)
 
         with patch.object(poloniex.session, 'post', side_effect=mock_api_return):

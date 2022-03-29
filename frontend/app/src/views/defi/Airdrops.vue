@@ -1,5 +1,5 @@
 <template>
-  <v-container>
+  <div>
     <v-row class="mt-8">
       <v-col>
         <refresh-header
@@ -12,7 +12,7 @@
     <progress-screen v-if="loading">
       <template #message>{{ $t('airdrops.loading') }}</template>
     </progress-screen>
-    <v-container v-else>
+    <div v-else>
       <blockchain-account-selector
         v-model="selectedAccounts"
         multiple
@@ -89,11 +89,13 @@
           </v-sheet>
         </v-card-text>
       </v-card>
-    </v-container>
-  </v-container>
+    </div>
+  </div>
 </template>
 
 <script lang="ts">
+import { GeneralAccount } from '@rotki/common/lib/account';
+import { Blockchain } from '@rotki/common/lib/blockchain';
 import { Component, Mixins } from 'vue-property-decorator';
 import { DataTableHeader } from 'vuetify';
 import { mapActions, mapGetters } from 'vuex';
@@ -104,17 +106,21 @@ import StatusMixin from '@/mixins/status-mixin';
 import { Section } from '@/store/const';
 import {
   AIRDROP_1INCH,
-  AIRDROP_TORNADO,
-  AIRDROP_UNISWAP,
+  AIRDROP_CONVEX,
   AIRDROP_CORNICHON,
+  AIRDROP_CURVE,
+  AIRDROP_ENS,
+  AIRDROP_FOX,
+  AIRDROP_FURUCOMBO,
   AIRDROP_GRAIN,
   AIRDROP_LIDO,
-  AIRDROP_FURUCOMBO,
-  AIRDROP_CURVE,
-  AIRDROP_POAP
+  AIRDROP_PARASWAP,
+  AIRDROP_POAP,
+  AIRDROP_SADDLE,
+  AIRDROP_TORNADO,
+  AIRDROP_UNISWAP
 } from '@/store/defi/const';
 import { Airdrop, AirdropType } from '@/store/defi/types';
-import { ETH, GeneralAccount } from '@/typing/types';
 import PoapDeliveryAirdrops from '@/views/defi/PoapDeliveryAirdrops.vue';
 
 type AirdropSource = {
@@ -137,7 +143,7 @@ type AirdropSources = {
 })
 export default class Airdrops extends Mixins(StatusMixin) {
   readonly section = Section.DEFI_AIRDROPS;
-  readonly ETH = ETH;
+  readonly ETH = Blockchain.ETH;
   readonly headers: DataTableHeader[] = [
     {
       text: this.$t('airdrops.headers.source').toString(),
@@ -222,6 +228,26 @@ export default class Airdrops extends Mixins(StatusMixin) {
     [AIRDROP_POAP]: {
       icon: require(`@/assets/images/airdrops/poap.svg`),
       name: 'POAP Delivery'
+    },
+    [AIRDROP_CONVEX]: {
+      icon: require('@/assets/images/airdrops/convex.jpeg'),
+      name: 'Convex'
+    },
+    [AIRDROP_FOX]: {
+      icon: require('@/assets/images/airdrops/FOX_Icon_dark.svg'),
+      name: 'ShapeShift'
+    },
+    [AIRDROP_ENS]: {
+      icon: require('@/assets/images/airdrops/ens.svg'),
+      name: 'ENS'
+    },
+    [AIRDROP_PARASWAP]: {
+      icon: require('@/assets/images/airdrops/ParaSwap-logo.svg'),
+      name: 'ParaSwap'
+    },
+    [AIRDROP_SADDLE]: {
+      icon: require('@/assets/images/airdrops/Saddle-Finance-logo.svg'),
+      name: 'SaddleFinance'
     }
   };
 

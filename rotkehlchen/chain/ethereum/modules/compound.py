@@ -23,11 +23,12 @@ from rotkehlchen.errors import BlockchainQueryError, RemoteError, UnknownAsset
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.price import query_usd_price_zero_if_error
 from rotkehlchen.inquirer import Inquirer
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.interfaces import EthereumModule
-from rotkehlchen.utils.misc import hexstr_to_int
+from rotkehlchen.utils.misc import hexstr_to_int, ts_now
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
@@ -66,7 +67,8 @@ BORROW_EVENTS_QUERY_PREFIX = """{graph_event_name}
 }}}}"""
 
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 class CompoundBalance(NamedTuple):
@@ -120,6 +122,21 @@ def _get_txhash_and_logidx(identifier: str) -> Optional[Tuple[str, int]]:
     return result[0], log_index
 
 
+def _compound_symbol_to_token(symbol: str, timestamp: Timestamp) -> EthereumToken:
+    """
+    Turns a compound symbol to an ethereum token.
+
+    May raise UnknownAsset
+    """
+    if symbol == 'cWBTC':
+        if timestamp >= Timestamp(1615751087):
+            return EthereumToken('0xccF4429DB6322D5C611ee964527D42E5d685DD6a')
+        # else
+        return EthereumToken('0xC11b1268C1A384e55C48c2391d8d480264A3A7F4')
+    # else
+    return symbol_to_ethereum_token(symbol)
+
+
 class Compound(EthereumModule):
     """Compound integration module
 
@@ -146,7 +163,7 @@ class Compound(EthereumModule):
             self.msg_aggregator.add_error(
                 f'Could not initialize the Compound subgraph due to {str(e)}. '
                 f' All compound historical queries are not functioning until this is fixed. '
-                f'Probably will get fixed with time. If not report it to Rotkis support channel ',
+                f'Probably will get fixed with time. If not report it to rotkis support channel ',
             )
 
     def _get_apy(self, address: ChecksumEthAddress, supply: bool) -> Optional[FVal]:
@@ -170,6 +187,7 @@ class Compound(EthereumModule):
             given_defi_balances: GIVEN_DEFI_BALANCES,
     ) -> Dict[ChecksumEthAddress, Dict[str, Dict[Asset, CompoundBalance]]]:
         compound_balances = {}
+        now = ts_now()
         if isinstance(given_defi_balances, dict):
             defi_balances = given_defi_balances
         else:
@@ -227,7 +245,10 @@ class Compound(EthereumModule):
                     )
                 else:  # 'Debt'
                     try:
-                        ctoken = symbol_to_ethereum_token('c' + entry.token_symbol)
+                        ctoken = _compound_symbol_to_token(
+                            symbol='c' + entry.token_symbol,
+                            timestamp=now,
+                        )
                     except UnknownAsset:
                         log.error(
                             f'Encountered unknown asset {entry.token_symbol} in '
@@ -280,6 +301,13 @@ class Compound(EthereumModule):
         events = []
         for entry in result[graph_event_name]:
             underlying_symbol = entry['underlyingSymbol']
+            parse_result = _get_txhash_and_logidx(entry['id'])
+            if parse_result is None:
+                log.error(
+                    f'Found unprocessable borrow/repay id from the graph {entry["id"]}. Skipping',
+                )
+                continue
+
             try:
                 underlying_asset = symbol_to_asset_or_token(underlying_symbol)
             except UnknownAsset:
@@ -289,19 +317,14 @@ class Compound(EthereumModule):
                 )
                 continue
             timestamp = entry['blockTime']
+            tx_hash = parse_result[0]
             usd_price = query_usd_price_zero_if_error(
                 asset=underlying_asset,
                 time=timestamp,
-                location=f'compound {event_type}',
+                location=f'compound {event_type} {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             amount = FVal(entry['amount'])
-            parse_result = _get_txhash_and_logidx(entry['id'])
-            if parse_result is None:
-                log.error(
-                    f'Found unprocessable borrow/repay id from the graph {entry["id"]}. Skipping',
-                )
-                continue
 
             events.append(CompoundEvent(
                 event_type=event_type,
@@ -313,7 +336,7 @@ class Compound(EthereumModule):
                 to_asset=None,
                 to_value=None,
                 realized_pnl=None,
-                tx_hash=parse_result[0],
+                tx_hash=tx_hash,
                 log_index=parse_result[1],
             ))
 
@@ -344,9 +367,10 @@ class Compound(EthereumModule):
 
         events = []
         for entry in result['liquidationEvents']:
+            timestamp = entry['blockTime']
             ctoken_symbol = entry['cTokenSymbol']
             try:
-                ctoken_asset = symbol_to_asset_or_token(ctoken_symbol)
+                ctoken_asset = _compound_symbol_to_token(symbol=ctoken_symbol, timestamp=timestamp)
             except UnknownAsset:
                 log.error(
                     f'Found unexpected cTokenSymbol {ctoken_symbol} during graph query. Skipping.')
@@ -360,14 +384,21 @@ class Compound(EthereumModule):
                     f'graph query. Skipping.',
                 )
                 continue
-            timestamp = entry['blockTime']
+
+            parse_result = _get_txhash_and_logidx(entry['id'])
+            if parse_result is None:
+                log.error(
+                    f'Found unprocessable liquidation id from the graph {entry["id"]}. Skipping',
+                )
+                continue
+            tx_hash = parse_result[0]
             # Amount/value of underlying asset paid by liquidator
             # Essentially liquidator covers part of the debt of the user
             debt_amount = FVal(entry['underlyingRepayAmount'])
             underlying_usd_price = query_usd_price_zero_if_error(
                 asset=underlying_asset,
                 time=timestamp,
-                location='compound liquidation underlying asset',
+                location=f'compound liquidation underlying asset {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             debt_usd_value = debt_amount * underlying_usd_price
@@ -377,16 +408,10 @@ class Compound(EthereumModule):
             liquidated_usd_price = query_usd_price_zero_if_error(
                 asset=ctoken_asset,
                 time=timestamp,
-                location='compound liquidation ctoken asset',
+                location=f'compound liquidation ctoken asset {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             liquidated_usd_value = liquidated_amount * liquidated_usd_price
-            parse_result = _get_txhash_and_logidx(entry['id'])
-            if parse_result is None:
-                log.error(
-                    f'Found unprocessable liquidation id from the graph {entry["id"]}. Skipping',
-                )
-                continue
 
             gained_value = Balance(amount=debt_amount, usd_value=debt_usd_value)
             lost_value = Balance(amount=liquidated_amount, usd_value=liquidated_usd_value)
@@ -400,7 +425,7 @@ class Compound(EthereumModule):
                 to_asset=ctoken_asset,
                 to_value=lost_value,
                 realized_pnl=None,
-                tx_hash=parse_result[0],
+                tx_hash=tx_hash,
                 log_index=parse_result[1],
             ))
 
@@ -433,8 +458,9 @@ class Compound(EthereumModule):
         events = []
         for entry in result[graph_event_name]:
             ctoken_symbol = entry['cTokenSymbol']
+            timestamp = entry['blockTime']
             try:
-                ctoken_asset = symbol_to_asset_or_token(ctoken_symbol)
+                ctoken_asset = _compound_symbol_to_token(symbol=ctoken_symbol, timestamp=timestamp)
             except UnknownAsset:
                 log.error(
                     f'Found unexpected cTokenSymbol {ctoken_symbol} during graph query. Skipping.')
@@ -449,19 +475,20 @@ class Compound(EthereumModule):
                     f'graph query. Skipping.',
                 )
                 continue
-            timestamp = entry['blockTime']
-            usd_price = query_usd_price_zero_if_error(
-                asset=underlying_asset,
-                time=timestamp,
-                location=f'compound {event_type}',
-                msg_aggregator=self.msg_aggregator,
-            )
-            underlying_amount = FVal(entry['underlyingAmount'])
-            usd_value = underlying_amount * usd_price
             parse_result = _get_txhash_and_logidx(entry['id'])
             if parse_result is None:
                 log.error(f'Found unprocessable mint id from the graph {entry["id"]}. Skipping')
                 continue
+
+            tx_hash = parse_result[0]
+            usd_price = query_usd_price_zero_if_error(
+                asset=underlying_asset,
+                time=timestamp,
+                location=f'compound {event_type} {tx_hash}',
+                msg_aggregator=self.msg_aggregator,
+            )
+            underlying_amount = FVal(entry['underlyingAmount'])
+            usd_value = underlying_amount * usd_price
             amount = FVal(entry['amount'])
 
             if event_type == 'mint':
@@ -473,7 +500,7 @@ class Compound(EthereumModule):
                 from_value = Balance(amount=amount, usd_value=usd_value)
                 to_value = Balance(amount=underlying_amount, usd_value=usd_value)
                 from_asset = ctoken_asset
-                to_asset = underlying_asset
+                to_asset = underlying_asset  # type: ignore
 
             events.append(CompoundEvent(
                 event_type=event_type,
@@ -485,7 +512,7 @@ class Compound(EthereumModule):
                 to_asset=to_asset,
                 to_value=to_value,
                 realized_pnl=None,
-                tx_hash=parse_result[0],
+                tx_hash=tx_hash,
                 log_index=parse_result[1],
             ))
 
@@ -518,11 +545,12 @@ class Compound(EthereumModule):
         events = []
         for event in comp_events:
             timestamp = self.ethereum.get_event_timestamp(event)
+            tx_hash = event['transactionHash']
             amount = token_normalized_value(hexstr_to_int(event['data']), A_COMP)
             usd_price = query_usd_price_zero_if_error(
                 asset=A_COMP,
                 time=timestamp,
-                location='comp_claim',
+                location=f'comp_claim {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             value = Balance(amount, amount * usd_price)
@@ -536,7 +564,7 @@ class Compound(EthereumModule):
                 to_asset=None,
                 to_value=None,
                 realized_pnl=value,
-                tx_hash=event['transactionHash'],
+                tx_hash=tx_hash,
                 log_index=event['logIndex'],
             ))
 
@@ -574,7 +602,7 @@ class Compound(EthereumModule):
                     usd_price = query_usd_price_zero_if_error(
                         asset=event.to_asset,
                         time=event.timestamp,
-                        location='comp redeem event processing',
+                        location=f'comp redeem event {event.tx_hash} processing',
                         msg_aggregator=self.msg_aggregator,
                     )
                     profit = Balance(profit_amount, profit_amount * usd_price)
@@ -598,7 +626,7 @@ class Compound(EthereumModule):
                     usd_price = query_usd_price_zero_if_error(
                         asset=event.asset,
                         time=event.timestamp,
-                        location='comp repay event processing',
+                        location=f'comp repay event {event.tx_hash} processing',
                         msg_aggregator=self.msg_aggregator,
                     )
                     loss = Balance(loss_amount, loss_amount * usd_price)

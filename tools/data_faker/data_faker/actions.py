@@ -2,14 +2,14 @@ import logging
 import random
 from typing import Tuple
 
+from rotkehlchen.accounting.structures import BalanceType
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
-from rotkehlchen.constants.assets import A_BTC, A_USD
+from rotkehlchen.constants.assets import A_BTC, A_EUR, A_USD
 from rotkehlchen.exchanges.data_structures import Trade, TradeType
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.price import PriceHistorian
-from rotkehlchen.serialization.deserialize import deserialize_location, pair_get_assets
-from rotkehlchen.tests.utils.constants import A_EUR
+from rotkehlchen.serialization.deserialize import pair_get_assets
 from rotkehlchen.typing import Location, Timestamp, TradePair
 
 STARTING_TIMESTAMP = 1464739200  # 01/06/2016
@@ -59,6 +59,7 @@ class ActionWriter():
                     amount=value,
                     location=Location.BANKS,
                     tags=None,
+                    balance_type=BalanceType.ASSET,
                 )])
         self.rotki.query_balances(requested_save_data=True, timestamp=timestamp)
 
@@ -84,6 +85,7 @@ class ActionWriter():
                         amount=value,
                         location=Location.BANKS,
                         tags=None,
+                        balance_type=BalanceType.ASSET,
                     )])
 
         self.rotki.query_balances(requested_save_data=True, timestamp=timestamp)
@@ -208,7 +210,7 @@ class ActionWriter():
         base, quote = pair.split('_')
         trade = Trade(
             timestamp=ts,
-            location=deserialize_location(exchange_name),
+            location=Location.deserialize(exchange_name),
             base_asset=base,
             quote_asset=quote,
             trade_type=action_type,

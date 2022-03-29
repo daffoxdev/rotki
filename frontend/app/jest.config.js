@@ -8,5 +8,13 @@ module.exports = {
     '!**/vendor/**'
   ],
   coverageReporters: ['html', 'lcov', 'text-summary'],
-  reporters: ['default', ['jest-junit', { outputDirectory: 'coverage' }]]
+  reporters: ['default', ['jest-junit', { outputDirectory: 'coverage' }]],
+  globals: {
+    'vue-jest': {
+      experimentalCSSCompile: false
+    },
+    'ts-jest': {
+      tsConfig: './tests/unit/tsconfig.json'
+    }
+  }
 };

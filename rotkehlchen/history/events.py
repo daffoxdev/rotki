@@ -2,22 +2,30 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
+from rotkehlchen.chain.ethereum.graph import SUBGRAPH_REMOTE_ERROR_MSG
 from rotkehlchen.chain.ethereum.trades import AMMTRADE_LOCATION_NAMES, AMMTrade, AMMTradeLocations
+from rotkehlchen.chain.ethereum.transactions import EthTransactions
 from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.db.filtering import (
+    AssetMovementsFilterQuery,
+    ETHTransactionsFilterQuery,
+    LedgerActionsFilterQuery,
+    TradesFilterQuery,
+)
 from rotkehlchen.db.ledger_actions import DBLedgerActions
 from rotkehlchen.errors import RemoteError
 from rotkehlchen.exchanges.data_structures import AssetMovement, Loan, MarginPosition, Trade
-from rotkehlchen.exchanges.manager import ExchangeManager
+from rotkehlchen.exchanges.manager import SUPPORTED_EXCHANGES, ExchangeManager
 from rotkehlchen.exchanges.poloniex import process_polo_loans
 from rotkehlchen.fval import FVal
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import EthereumTransaction, Location, Timestamp
+from rotkehlchen.typing import EXTERNAL_LOCATION, EthereumTransaction, Location, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.accounting import action_get_timestamp
 from rotkehlchen.utils.misc import timestamp_to_date
 
 if TYPE_CHECKING:
-    from rotkehlchen.accounting.ledger_actions import LedgerAction
     from rotkehlchen.accounting.structures import DefiEvent
     from rotkehlchen.chain.manager import ChainManager
     from rotkehlchen.db.dbhandler import DBHandler
@@ -25,11 +33,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
 
-
 # Number of steps excluding the connected exchanges. Current query steps:
 # eth transactions
 # ledger actions
-# external trades: balancer, uniswap
+# external location trades -> len(EXTERNAL_LOCATION)
+# amm trades len(AMMTradeLocations)
 # makerdao dsr
 # makerdao vaults
 # yearn vaults
@@ -37,9 +45,10 @@ log = RotkehlchenLogsAdapter(logger)
 # adex staking
 # aave lending
 # eth2
+# liquity
 # Please, update this number each time a history query step is either added or removed
-NUM_HISTORY_QUERY_STEPS_EXCL_EXCHANGES = 11
-FREE_LEDGER_ACTIONS_LIMIT = 50
+NUM_HISTORY_QUERY_STEPS_EXCL_EXCHANGES = 10 + len(EXTERNAL_LOCATION) + len(AMMTradeLocations)
+
 
 HistoryResult = Tuple[
     str,
@@ -50,6 +59,8 @@ HistoryResult = Tuple[
     List['DefiEvent'],
     List['LedgerAction'],
 ]
+# TRADES_LIST = List[Union[Trade, AMMTrade]]
+TRADES_LIST = List[Trade]
 
 
 def limit_trade_list_to_period(
@@ -103,6 +114,7 @@ class EventsHistorian():
         )
 
     def _reset_variables(self) -> None:
+        # Keeps how many trades we have found per location. Used for free user limiting
         self.processing_state_name = 'Starting query of historical events'
         self.progress = ZERO
         db_settings = self.db.get_settings()
@@ -116,25 +128,179 @@ class EventsHistorian():
 
     def query_ledger_actions(
             self,
-            has_premium: bool,
-            from_ts: Optional[Timestamp],
-            to_ts: Optional[Timestamp],
-            location: Optional[Location] = None,
+            filter_query: LedgerActionsFilterQuery,
+            only_cache: bool,
     ) -> Tuple[List['LedgerAction'], int]:
-        """Queries the ledger actions from the DB and applies the free version limit
+        """Queries the ledger actions with the given filter query
 
-        TODO: Since we always query all in one call, the limiting will work, but if we start
-        batch querying by time then we need to amend the logic of limiting here.
-        Would need to use the same logic we do with trades. Using db entries count
-        and count what all calls return and what is sums up to
+        :param only_cache: Optional. If this is true then the equivalent exchange/location
+         is not queried, but only what is already in the DB is returned.
         """
-        db = DBLedgerActions(self.db, self.msg_aggregator)
-        actions = db.get_ledger_actions(from_ts=from_ts, to_ts=to_ts, location=location)
-        original_length = len(actions)
-        if has_premium is False:
-            actions = actions[:FREE_LEDGER_ACTIONS_LIMIT]
+        location = filter_query.location
+        from_ts = filter_query.from_ts
+        to_ts = filter_query.to_ts
+        if only_cache is False:  # query services
+            for exchange in self.exchange_manager.iterate_exchanges():
+                if location is None or exchange.location == location:
+                    exchange.query_income_loss_expense(
+                        start_ts=from_ts,
+                        end_ts=to_ts,
+                        only_cache=False,
+                    )
 
-        return actions, original_length
+        db = DBLedgerActions(self.db, self.msg_aggregator)
+        has_premium = self.chain_manager.premium is not None
+        actions, filter_total_found = db.get_ledger_actions_and_limit_info(
+            filter_query=filter_query,
+            has_premium=has_premium,
+        )
+        return actions, filter_total_found
+
+    def _query_services_for_trades(self, filter_query: TradesFilterQuery) -> None:
+        """Queries all services requested for trades and writes them to the DB"""
+        location = filter_query.location
+        from_ts = filter_query.from_ts
+        to_ts = filter_query.to_ts
+
+        if location is not None:
+            self.query_location_latest_trades(location=location, from_ts=from_ts, to_ts=to_ts)
+            return
+
+        # else query all CEXes and all AMMs
+        for exchange in self.exchange_manager.iterate_exchanges():
+            exchange.query_trade_history(
+                start_ts=from_ts,
+                end_ts=to_ts,
+                only_cache=False,
+            )
+
+        # for all trades we also need the trades from the amm protocols
+        if self.chain_manager.premium is not None:
+            for amm_location in AMMTradeLocations:
+                self.query_location_latest_trades(
+                    location=amm_location,
+                    from_ts=from_ts,
+                    to_ts=to_ts,
+                )
+
+    def query_trades(
+            self,
+            filter_query: TradesFilterQuery,
+            only_cache: bool,
+    ) -> Tuple[TRADES_LIST, int]:
+        """Queries trades for the given location and time range.
+        If no location is given then all external, all exchange and DEX trades are queried.
+
+        If only_cache is given then only trades cached in the DB are returned.
+        No service is queried.
+
+        DEX Trades are queried only if the user has premium
+        If the user does not have premium then a trade limit is applied.
+
+        Returns all trades and the full amount of trades that got found for the filter.
+        May be less than returned trades if user is non premium.
+
+        May raise:
+        - RemoteError: If there are problems connecting to any of the remote exchanges
+        """
+        if only_cache is not True:
+            self._query_services_for_trades(filter_query=filter_query)
+
+        has_premium = self.chain_manager.premium is not None
+        trades, filter_total_found = self.db.get_trades_and_limit_info(
+            filter_query=filter_query,
+            has_premium=has_premium,
+        )
+        return trades, filter_total_found
+
+    def query_location_latest_trades(
+            self,
+            location: Location,
+            from_ts: Timestamp,
+            to_ts: Timestamp,
+    ) -> None:
+        """Queries the service of a specific location for latest trades and saves them in the DB.
+        May raise:
+
+        - RemoteError if there is a problem with reaching the service
+        """
+        if location in AMMTradeLocations:
+            if self.chain_manager.premium is not None:
+                amm_module_name = cast(AMMTRADE_LOCATION_NAMES, str(location))
+                amm_module = self.chain_manager.get_module(amm_module_name)
+                if amm_module is not None:
+                    amm_module.get_trades(
+                        addresses=self.chain_manager.queried_addresses_for_module(amm_module_name),
+                        from_timestamp=from_ts,
+                        to_timestamp=to_ts,
+                        only_cache=False,
+                    )
+        elif location in SUPPORTED_EXCHANGES:
+            exchanges_list = self.exchange_manager.connected_exchanges.get(location)
+            if exchanges_list is None:
+                return
+
+            for exchange in exchanges_list:
+                exchange.query_trade_history(
+                    start_ts=from_ts,
+                    end_ts=to_ts,
+                    only_cache=False,
+                )
+
+    def _query_services_for_asset_movements(self, filter_query: AssetMovementsFilterQuery) -> None:
+        """Queries all services requested for asset movements and writes them to the DB"""
+        location = filter_query.location
+        from_ts = filter_query.from_ts
+        to_ts = filter_query.to_ts
+
+        if location is None:
+            # query all CEXes
+            for exchange in self.exchange_manager.iterate_exchanges():
+                exchange.query_deposits_withdrawals(
+                    start_ts=from_ts,
+                    end_ts=to_ts,
+                    only_cache=False,
+                )
+            return
+
+        if location not in SUPPORTED_EXCHANGES:
+            return  # nothing to do
+
+        # otherwise it's a single connected exchange and we need to query it
+        exchanges_list = self.exchange_manager.connected_exchanges.get(location)
+        if exchanges_list is None:
+            return
+
+        for exchange in exchanges_list:
+            exchange.query_deposits_withdrawals(
+                start_ts=from_ts,
+                end_ts=to_ts,
+                only_cache=False,
+            )
+
+    def query_asset_movements(
+            self,
+            filter_query: AssetMovementsFilterQuery,
+            only_cache: bool,
+    ) -> Tuple[List[AssetMovement], int]:
+        """Queries AssetMovements for the given filter
+
+        If only_cache is True then only what is already in the DB is returned.
+        Otherwise we query all services requested by the filter, populate the DB
+        and then return.
+
+        May raise:
+        - RemoteError: If there are problems connecting to any of the remote exchanges
+        """
+        if only_cache is not True:
+            self._query_services_for_asset_movements(filter_query=filter_query)
+
+        has_premium = self.chain_manager.premium is not None
+        asset_movements, filter_total_found = self.db.get_asset_movements_and_limit_info(
+            filter_query=filter_query,
+            has_premium=has_premium,
+        )
+        return asset_movements, filter_total_found
 
     def get_history(
             self,
@@ -154,6 +320,7 @@ class EventsHistorian():
         # start creating the all trades history list
         history: List[Union[Trade, MarginPosition, AMMTrade]] = []
         asset_movements = []
+        ledger_actions = []
         loans = []
         empty_or_error = ''
 
@@ -161,12 +328,14 @@ class EventsHistorian():
                 trades_history: List[Trade],
                 margin_history: List[MarginPosition],
                 result_asset_movements: List[AssetMovement],
+                result_ledger_actions: List[LedgerAction],
                 exchange_specific_data: Any,
         ) -> None:
             """This callback will run for succesfull exchange history query"""
             history.extend(trades_history)
             history.extend(margin_history)
             asset_movements.extend(result_asset_movements)
+            ledger_actions.extend(result_ledger_actions)
 
             if exchange_specific_data:
                 # This can only be poloniex at the moment
@@ -184,8 +353,8 @@ class EventsHistorian():
             nonlocal empty_or_error
             empty_or_error += '\n' + error_msg
 
-        for name, exchange in self.exchange_manager.connected_exchanges.items():
-            self.processing_state_name = f'Querying {name} exchange history'
+        for exchange in self.exchange_manager.iterate_exchanges():
+            self.processing_state_name = f'Querying {exchange.name} exchange history'
             exchange.query_history_with_callbacks(
                 # We need to have history of exchanges since before the range
                 start_ts=Timestamp(0),
@@ -197,13 +366,20 @@ class EventsHistorian():
 
         try:
             self.processing_state_name = 'Querying ethereum transactions history'
-            eth_transactions = self.chain_manager.ethereum.transactions.query(
-                addresses=None,  # all addresses
+            filter_query = ETHTransactionsFilterQuery.make(
+                order_ascending=True,  # for history processing we need oldest first
+                limit=None,
+                offset=None,
+                addresses=None,
                 # We need to have history of transactions since before the range
                 from_ts=Timestamp(0),
                 to_ts=end_ts,
-                with_limit=False,  # at the moment ignore the limit for historical processing,
-                recent_first=False,  # for history processing we need oldest first
+            )
+            ethtx_module = EthTransactions(ethereum=self.chain_manager.ethereum, database=self.db)
+            eth_transactions, _ = ethtx_module.query(
+                filter_query=filter_query,
+                with_limit=False,  # at the moment ignore the limit for historical processing
+                only_cache=False,
             )
         except RemoteError as e:
             eth_transactions = []
@@ -215,20 +391,24 @@ class EventsHistorian():
             empty_or_error += '\n' + msg
         step = self._increase_progress(step, total_steps)
 
-        # Include the external trades in the history
-        self.processing_state_name = 'Querying external trades history'
-        external_trades = self.db.get_trades(
-            # We need to have history of trades since before the range
-            from_ts=Timestamp(0),
-            to_ts=end_ts,
-            location=Location.EXTERNAL,
-        )
-        history.extend(external_trades)
-        step = self._increase_progress(step, total_steps)
+        # Include all external trades and trades from external exchanges
+        for location in EXTERNAL_LOCATION:
+            self.processing_state_name = f'Querying {location} trades history'
+            external_trades = self.db.get_trades(
+                filter_query=TradesFilterQuery.make(location=location),
+                has_premium=True,  # we need all trades for accounting -- limit happens later
+            )
+            history.extend(external_trades)
+            step = self._increase_progress(step, total_steps)
 
-        # include the ledger actions
+        # include the ledger actions from offline sources
         self.processing_state_name = 'Querying ledger actions history'
-        ledger_actions, _ = self.query_ledger_actions(has_premium, from_ts=None, to_ts=end_ts)
+        offline_ledger_actions, _ = self.query_ledger_actions(
+            filter_query=LedgerActionsFilterQuery.make(),
+            only_cache=True,
+        )
+        unique_ledger_actions = list(set(offline_ledger_actions) - set(ledger_actions))
+        ledger_actions.extend(unique_ledger_actions)
         step = self._increase_progress(step, total_steps)
 
         # include AMM trades: balancer, uniswap
@@ -282,11 +462,18 @@ class EventsHistorian():
         compound = self.chain_manager.get_module('compound')
         if compound and has_premium:
             self.processing_state_name = 'Querying compound history'
-            defi_events.extend(compound.get_history_events(
-                from_timestamp=Timestamp(0),  # we need to process all events from history start
-                to_timestamp=end_ts,
-                addresses=self.chain_manager.queried_addresses_for_module('compound'),
-            ))
+            try:
+                # we need to process all events from history start
+                defi_events.extend(compound.get_history_events(
+                    from_timestamp=Timestamp(0),
+                    to_timestamp=end_ts,
+                    addresses=self.chain_manager.queried_addresses_for_module('compound'),
+                ))
+            except RemoteError as e:
+                self.msg_aggregator.add_error(
+                    SUBGRAPH_REMOTE_ERROR_MSG.format(protocol="Compound", error_msg=str(e)),
+                )
+
         step = self._increase_progress(step, total_steps)
 
         # include adex events
@@ -309,15 +496,33 @@ class EventsHistorian():
                 to_timestamp=end_ts,
                 addresses=self.chain_manager.queried_addresses_for_module('aave'),
             ))
-        self._increase_progress(step, total_steps)
+        step = self._increase_progress(step, total_steps)
 
         # include eth2 staking events
         eth2 = self.chain_manager.get_module('eth2')
         if eth2 is not None and has_premium:
             self.processing_state_name = 'Querying ETH2 staking history'
-            defi_events.extend(self.chain_manager.get_eth2_history_events(
+            try:
+                eth2_events = self.chain_manager.get_eth2_history_events(
+                    from_timestamp=start_ts,
+                    to_timestamp=end_ts,
+                )
+                defi_events.extend(eth2_events)
+            except RemoteError as e:
+                self.msg_aggregator.add_error(
+                    f'Eth2 events are not included in the PnL report due to {str(e)}',
+                )
+
+        step = self._increase_progress(step, total_steps)
+
+        # include liquity events
+        liquity = self.chain_manager.get_module('liquity')
+        if liquity is not None and has_premium:
+            self.processing_state_name = 'Querying Liquity staking history'
+            defi_events.extend(liquity.get_history_events(
                 from_timestamp=start_ts,
                 to_timestamp=end_ts,
+                addresses=self.chain_manager.queried_addresses_for_module('liquity'),
             ))
         self._increase_progress(step, total_steps)
 

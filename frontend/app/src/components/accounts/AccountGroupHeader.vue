@@ -14,7 +14,12 @@
         <span class="text-subtitle-2">{{ label }}</span>
       </div>
       <div>
-        <v-btn v-if="items.length > 0" small icon @click="expandClicked(xpub)">
+        <v-btn
+          v-if="items.length > 0"
+          small
+          icon
+          @click="expandClicked({ ...xpub, balance })"
+        >
           <v-icon v-if="expanded" small>mdi-chevron-up</v-icon>
           <v-icon v-else small>mdi-chevron-down</v-icon>
         </v-btn>
@@ -22,7 +27,7 @@
         <span class="font-weight-medium">
           {{ $t('account_group_header.xpub') }}
         </span>
-        <span :style="privacyStyle">
+        <span :style="amountPrivacyStyle">
           <v-tooltip top open-delay="400">
             <template #activator="{ on }">
               <span v-on="on">{{ displayXpub }}</span>
@@ -34,21 +39,14 @@
           :value="xpub.xpub"
           :tooltip="$t('account_group_header.copy_tooltip')"
         />
-        <span v-if="xpub.derivationPath" :style="privacyStyle">
+        <span v-if="xpub.derivationPath" :style="amountPrivacyStyle">
           <span class="font-weight-medium">
             {{ $t('account_group_header.derivation_path') }}
           </span>
           {{ xpub.derivationPath }}
         </span>
       </div>
-      <div v-if="xpubTags.length > 0" class="mt-1 ms-8">
-        <tag-icon
-          v-for="tag in xpubTags"
-          :key="tag"
-          :tag="tags[tag]"
-          class="mr-1"
-        />
-      </div>
+      <tag-display wrapper-class="mt-1 ms-8" :tags="xpubTags" />
     </td>
     <td class="text-end" :class="mobileClass">
       <amount-display
@@ -94,23 +92,18 @@
   </fragment>
 </template>
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { Balance, BigNumber } from '@rotki/common';
 import { Component, Emit, Mixins, Prop } from 'vue-property-decorator';
-import { mapState } from 'vuex';
 import CopyButton from '@/components/helper/CopyButton.vue';
 import Fragment from '@/components/helper/Fragment';
-import TagIcon from '@/components/tags/TagIcon.vue';
+import TagDisplay from '@/components/tags/TagDisplay.vue';
 import { balanceSum, truncateAddress, truncationPoints } from '@/filters';
 import PrivacyMixin from '@/mixins/privacy-mixin';
-import { XpubAccountWithBalance, XpubPayload } from '@/store/balances/types';
+import { XpubAccountWithBalance } from '@/store/balances/types';
 import { balanceUsdValueSum } from '@/store/defi/utils';
-import { Tags } from '@/typing/types';
 
 @Component({
-  components: { TagIcon, CopyButton, Fragment },
-  computed: {
-    ...mapState('session', ['tags'])
-  }
+  components: { TagDisplay, CopyButton, Fragment }
 })
 export default class AccountGroupHeader extends Mixins(PrivacyMixin) {
   @Prop({ required: true, type: String })
@@ -121,8 +114,6 @@ export default class AccountGroupHeader extends Mixins(PrivacyMixin) {
   expanded!: boolean;
   @Prop({ required: false, type: Boolean, default: false })
   loading!: boolean;
-
-  tags!: Tags;
 
   get mobileClass(): string | null {
     return this.$vuetify.breakpoint.xsOnly ? 'v-data-table__mobile-row' : null;
@@ -155,11 +146,15 @@ export default class AccountGroupHeader extends Mixins(PrivacyMixin) {
     return balanceUsdValueSum(this.items);
   }
 
-  @Emit()
-  deleteClicked(_payload: XpubPayload) {}
+  get balance(): Balance {
+    return { amount: this.sum, usdValue: this.usdSum };
+  }
 
   @Emit()
-  expandClicked(_xpub: XpubPayload) {}
+  deleteClicked(_payload: XpubAccountWithBalance) {}
+
+  @Emit()
+  expandClicked(_xpub: XpubAccountWithBalance) {}
 
   @Emit()
   editClicked(_xpub: XpubAccountWithBalance) {}

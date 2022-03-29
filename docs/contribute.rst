@@ -1,7 +1,7 @@
-Rotki Contribution Guide
+rotki Contribution Guide
 ##############################
 
-Rotki is an opensource project so help is really appreciated.
+rotki is an opensource project so help is really appreciated.
 
 .. _bug_reporting:
 
@@ -11,22 +11,22 @@ Bug Reporting
 Before reporting an issue, make sure to check the issue tracker for similar ones. If this is a new issue then use the `proper template <https://github.com/rotki/rotki/issues/new?template=bug_report.md>`_ providing a detailed description about:
 
 - **Problem**: what happened and what you were expecting to happen instead.
-- **Logs**: run Rotki in debug mode, replicate the issue and attach the logs (see the section `Run Rotki in debug mode <#run-rotki-in-debug-mode>`_).
-- **Environment**: the operating system and the Rotki version.
+- **Logs**: run rotki in debug mode, replicate the issue and attach the logs (see the section `Run rotki in debug mode <#run-rotki-in-debug-mode>`_).
+- **Environment**: the operating system and the rotki version.
 
-Run Rotki in debug mode
+Run rotki in debug mode
 =========================
 
-For running Rotki in debug mode, you can do it either via a config file or the app UI:
+For running rotki in debug mode, you can do it either via a config file or the app UI:
 
 - **Config file**: see the section :ref:`set-the-backend-s-arguments`.
-- **App UI**: before log in, click the cog wheel at the bottom right corner and select "Debug" (image below). Then log in as usual.
+- **App UI**: before log in, click the cog wheel at the bottom right corner and select "Debug" (image below). Press the save button and proceed to log in as usual.
 
 .. image:: images/rotki_debug_mode_set.png
-   :alt: Run Rotki in debug mode via app UI
+   :alt: Run rotki in debug mode via app UI
    :align: center
 
-You can find the app logs location by going to "Help" menu at the top and then choosing "Logs Directory".
+You can open the app logs location by going to "Help" menu at the top and then choosing "Logs Directory".
 
 Feature Requests
 ******************
@@ -57,6 +57,15 @@ For an exhaustive guide read `this <http://chris.beams.io/posts/git-commit/>`_ g
 
 When pushing on a PR the tags ``[skip ci]`` or ``[ci skip]`` can be used a part of the commit message to skip the run of all the CI jobs (lint, test etc).
 
+Linting / Formatting
+=======================
+
+Make sure to run ``make lint`` before pushing your commit. This runs isort, flake8, mypy and pylint on the code to make sure that formatting rules and common mistakes are not committed in the code.
+
+Set your editor up to use isort as seen in the Makefile (format command) before saving each file.
+
+You can also bulk apply formatting changes to all files by running ``make format``
+
 Where to make changes
 ============================
 
@@ -69,40 +78,27 @@ Our releases work like this:
 - We release patches merging the `bugfixes` branch to master and adding a new tag.
 - Normal releases are created by merging the `develop` branch to master and adding a new tag.
 
-Adding new assets to Rotki
+Adding new assets to rotki
 ============================
 
-To add new assets to rotki you need to edit `all assets file <https://github.com/rotki/rotki/blob/239552b843cd8ad99d02855ff95393d6032dbc57/rotkehlchen/data/all_assets.json>`__.
+To add new assets for rotki you will have to edit `the SQL file <https://github.com/rotki/assets/tree/develop/updates>`__
+in the last update at the assets repository. SQL sentences for insertion differ depending on if we are adding an ethereum token
+or other types of assets. More information about each type of asset and columns is available at the 
+`readme file <https://github.com/rotki/assets#adding-ethereum-tokens>`__.
+
+Once you have finished adding assets it would be necessary to update the file containing metadata about the update. To do so run the script:
 
 ::
 
-    "CRC": {
-        "coingecko": "crycash",
-        "cryptocompare": "CRYC",
-        "ethereum_address": "0xF41e5Fbc2F6Aac200Dd8619E121CE1f05D150077",
-        "ethereum_token_decimals": 18,
-        "name": "CryCash",
-        "started": 1524526765,
-        "symbol": "CRC",
-        "type": "ethereum token"
-    },
+    python tools/populate_infojson.py
 
-As an example look above. The key should be unique as it's the unique identifier for each asset. Then the possible keys are:
+This will update the file `info.json`. Finally execute the tests to detect possible errors in the SQL sentences using:
 
-- ``coingecko``: The CoinGecko identifier for the asset. It's used to pull CoinGecko logo and prices. If not supported by CoinGecko it should be an empty string. To see how to get the CoinGecko identifier go to :ref:`get CoinGecko asset identifier <get_coingecko_asset_identifier>`.
-- ``cryptocompare``: The CryptoCompare identifier for the asset. It's used to pull historical prices. This is an optional entry. If missing, the identifier is considered the same as as the asset key. If not supported by CryptoCompare it should be an empty string. To see how to get the CryptoCompare identifier go to :ref:`get CryptoCompare asset identifier <get_cryptocompare_asset_identifier>`.
-- ``ethereum_address``: If this is an ethereum token give the checksummed ethereum address here. See :ref:`here <helpful_asset_commands>` for help on deriving the checksummed address.
-- ``ethereum_token_decimal``: If this is an ethereum token give the ERC20 decimals here.
-- ``name``: Give the name of the asset here.
-- ``started``: The UNIX timestamp (in seconds) where data for the assets should first be available. Use the appropriate blockchain explorer for getting the date of the token deployment or the launch of the chain. In case of a leveraged token (e.g. "BCHDOWN") either use the date when CryptoCompare/CoinGecko started to track it or when the exchange opened its trade. Please, in case of `converting a date to a UNIX timestamp <https://www.epochconverter.com/>`__ make sure the date is in UTC/GMT.
-- ``symbol``: The token symbol. Does not need to be unique (identifier should be).
-- ``type``: The type of the asset. Standalone chain, ethereum token etc. For possible values for this field check `here <https://github.com/rotki/rotki/blob/239552b843cd8ad99d02855ff95393d6032dbc57/rotkehlchen/assets/resolver.py#L12>`__.
-- ``forked``: This is an optional field. Given to specify if an asset is a fork of another asset. For example ``ETC`` should have ``ETH`` here.
-- ``swapped_for``: This is an optional field. Given to specify if an asset is swapped for another asset. For example ``LEND`` should have ``AAVE`` here.
+::
 
-Once an asset is added and both CoinGecko and CryptoCompare identifiers have been validated (if existing), the md5sum of the file should be regenerated and added to the `meta file <https://github.com/rotki/rotki/blob/239552b843cd8ad99d02855ff95393d6032dbc57/rotkehlchen/data/all_assets.meta>`__. And the version in the meta file should also be bumped. The same changes should be done in the unit test that checks exactly for the md5 sum of the assets file.
+    pytest tests
 
-You can find some helpful commands :ref:`here <helpful_asset_commands>` if your need.
+In order to do so you will need to install the dependencies in the `requirements.txt` file.
 
 .. _get_coingecko_asset_identifier:
 
@@ -110,6 +106,11 @@ Get CoinGecko asset identifier
 --------------------------------
 
 In most cases the CoinGecko asset identifier matches the URL one, for example "weth" for `WETH <https://www.coingecko.com/en/coins/weth>`__. However, sometimes it doesn't, for example "sharering" for `SHR <https://www.coingecko.com/en/coins/sharetoken>`__ ("sharetoken" in the URL).
+Lately coingecko added the API id of the asset to the information provided for the asset.
+
+.. image:: images/gitcoin_id_position.png
+   :alt: Obtain id for assets at coingecko
+   :align: center
 
 This identifiers mismatch can be detected by running the `this test <https://github.com/rotki/rotki/blob/develop/rotkehlchen/tests/unit/test_assets.py#L91>`__:
 
@@ -148,11 +149,6 @@ Helpful commands
     >>> from eth_utils.address import to_checksum_address
     >>> to_checksum_address("0x9c78ee466d6cb57a4d01fd887d2b5dfb2d46288f")
     '0x9C78EE466D6Cb57A4d01Fd887D2b5dFb2D46288f'
-
-- To get the md5sm of the assets file, you can do (from the root directory):
-
-    - on Linux: ``md5sum rotkehlchen/data/all_assets.json``
-    - on MacOS: ``md5 rotkehlchen/data/all_assets.json``
 
 Code Testing
 **************
@@ -314,3 +310,31 @@ To review your changes you can compile the documentation using the command
     make html
 
 inside the docs folder.
+
+Code profiling
+*********************
+
+Python
+===========
+
+Flamegraph profiling
+------------------------
+
+In order to use the flamegraph profiler you need to:
+
+1. pip install -r requirements_profiling.txt to make sure you have the latest dependencies required for profiling
+2. Install the `flamegraph <https://github.com/brendangregg/FlameGraph>`_ package in your system. Some OSes such as Archlinux have `ready-made packages <https://aur.archlinux.org/packages/flamegraph/>`_.
+
+Then in order to profile a test run all you need to do is add ``--profiler=flamegraph-trace`` to the pytest arguments.
+
+Once the test concludes this will add a data file under ``/tmp`` with the data generated by the run. Example: ``/tmp/20211127_1641_stack.data``
+
+Then you can run the flamegraph tool on that data to generate an svg. Example:
+
+``flamegraph.pl --title "rotki-test graph" /tmp/20211127_1641_stack.data > profile.svg``
+
+Finally open the svg with any compatible viewer and explore the flamegraph. It will look like this:
+
+.. image:: images/flamegraph_example.svg
+   :alt: A flamegraph profiling example
+   :align: center

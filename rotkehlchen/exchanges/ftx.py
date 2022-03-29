@@ -5,16 +5,18 @@ from collections import defaultdict
 from http import HTTPStatus
 from json.decoder import JSONDecodeError
 from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Tuple, Union, overload
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import gevent
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_ftx
 from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
 from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade
 from rotkehlchen.exchanges.exchange import ExchangeInterface, ExchangeQueryBalances
@@ -26,11 +28,19 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount_force_positive,
     deserialize_fee,
     deserialize_timestamp_from_date,
-    deserialize_trade_type,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, AssetMovementCategory, Fee, Location, Timestamp
+from rotkehlchen.typing import (
+    ApiKey,
+    ApiSecret,
+    AssetMovementCategory,
+    Fee,
+    Location,
+    Timestamp,
+    TradeType,
+)
 from rotkehlchen.user_messages import MessagesAggregator
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_dict
 
 if TYPE_CHECKING:
@@ -41,6 +51,8 @@ log = RotkehlchenLogsAdapter(logger)
 INITIAL_BACKOFF_TIME = 2
 BACKOFF_LIMIT = 60
 PAGINATION_LIMIT = 100
+
+FTX_SUBACCOUNT_DB_SETTING = 'ftx_subaccount'
 
 
 def trade_from_ftx(raw_trade: Dict[str, Any]) -> Optional[Trade]:
@@ -58,7 +70,7 @@ def trade_from_ftx(raw_trade: Dict[str, Any]) -> Optional[Trade]:
         return None
 
     timestamp = deserialize_timestamp_from_date(raw_trade['time'], 'iso8601', 'FTX')
-    trade_type = deserialize_trade_type(raw_trade['side'])
+    trade_type = TradeType.deserialize(raw_trade['side'])
     base_asset = asset_from_ftx(raw_trade['baseCurrency'])
     quote_asset = asset_from_ftx(raw_trade['quoteCurrency'])
     amount = deserialize_asset_amount(raw_trade['size'])
@@ -84,27 +96,64 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
+            ftx_subaccount: Optional[str] = None,
     ):
-        super().__init__('ftx', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.FTX,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.apiversion = 'v2'
         self.base_uri = 'https://ftx.com'
         self.msg_aggregator = msg_aggregator
+        self.session.headers.update({'FTX-KEY': self.api_key})
+        self.subaccount = ftx_subaccount
+        if self.subaccount is not None:
+            self.session.headers.update({'FTX-SUBACCOUNT': quote(self.subaccount)})
 
     def first_connection(self) -> None:
         self.first_connection_made = True
 
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'FTX-KEY': self.api_key})
+            subaccount = self.db.get_ftx_subaccount(self.name)
+            if subaccount is not None:
+                self.session.headers.update({'FTX-SUBACCOUNT': quote(subaccount)})
+                self.subaccount = subaccount
+            else:
+                self.session.headers.pop('FTX-SUBACCOUNT', None)
+
+        return changed
+
     def validate_api_key(self) -> Tuple[bool, str]:
-        """Validates that the FTX API key is good for usage in Rotki"""
+        """Validates that the FTX API key is good for usage in rotki"""
+        endpoint: Literal['account', 'wallet/all_balances']
+
+        if self.subaccount is None:
+            endpoint = 'wallet/all_balances'
+        else:
+            endpoint = 'account'
+
         try:
-            self._api_query('wallet/all_balances', paginate=False)
+            self._api_query(endpoint=endpoint, paginate=False)
         except RemoteError as e:
             error = str(e)
             if 'Not logged in' in error:
-                return False, 'Bad combination of API Keys'
+                return False, 'Error validating API Keys'
             raise
         return True, ''
 
@@ -140,14 +189,13 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             signature = hmac.new(self.secret, signature_payload, 'sha256').hexdigest()
             log.debug('FTX API query', request_url=request_url)
             self.session.headers.update({
-                'FTX-KEY': self.api_key,
                 'FTX-SIGN': signature,
                 'FTX-TS': str(timestamp),
             })
 
             full_url = self.base_uri + request_url
             try:
-                response = self.session.get(full_url)
+                response = self.session.get(full_url, timeout=DEFAULT_TIMEOUT_TUPLE)
             except requests.exceptions.RequestException as e:
                 raise RemoteError(f'FTX API request {full_url} failed due to {str(e)}') from e
 
@@ -191,6 +239,28 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         ...
 
     @overload
+    def _api_query(  # pylint: disable=no-self-use
+            self,
+            endpoint: Literal['wallet/balances'],
+            start_time: Optional[Timestamp] = None,
+            end_time: Optional[Timestamp] = None,
+            limit: int = PAGINATION_LIMIT,
+            paginate: bool = True,
+    ) -> List[Dict[str, Any]]:
+        ...
+
+    @overload
+    def _api_query(  # pylint: disable=no-self-use
+            self,
+            endpoint: Literal['account'],
+            start_time: Optional[Timestamp] = None,
+            end_time: Optional[Timestamp] = None,
+            limit: int = PAGINATION_LIMIT,
+            paginate: bool = True,
+    ) -> Dict[str, Any]:
+        ...
+
+    @overload
     def _api_query(
             self,
             endpoint: Literal[
@@ -214,7 +284,7 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             end_time: Optional[Timestamp] = None,
             limit: int = PAGINATION_LIMIT,
             paginate: bool = True,
-    ) -> Union[List[Dict[str, Any]], Dict[str, List[Any]]]:
+    ) -> Union[List[Dict[str, Any]], Dict[str, List[Any]], Dict[str, Any]]:
         """Query FTX endpoint and retrieve all available information if pagination
         is requested. In case of paginate being set to False only one request is made.
         Can raise:
@@ -288,15 +358,23 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     @protect_with_lock()
     @cache_response_timewise()
     def query_balances(self) -> ExchangeQueryBalances:
+        resp_dict, resp_lst = None, None
         try:
-            resp = self._api_query('wallet/all_balances', paginate=False)
+            if self.subaccount is not None:
+                resp_lst = self._api_query('wallet/balances', paginate=False)
+            else:
+                resp_dict = self._api_query('wallet/all_balances', paginate=False)
         except RemoteError as e:
             msg = f'FTX API request failed. Could not reach FTX due to {str(e)}'
             log.error(msg)
             return None, msg
 
-        # flatten the list that maps accounts to balances
-        balances = [x for _, bal in resp.items() for x in bal]
+        if resp_dict is not None:
+            # flatten the list that maps accounts to balances
+            balances: List[Dict[str, Any]] = [x for _, bal in resp_dict.items() for x in bal]
+        elif resp_lst is not None:
+            # When querying for a subaccount we get a list instead of a dict
+            balances = resp_lst
 
         # extract the balances and aggregate them
         returned_balances: DefaultDict[Asset, Balance] = defaultdict(Balance)
@@ -346,14 +424,13 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     error=msg,
                 )
                 continue
-
         return dict(returned_balances), ''
 
     def query_online_trade_history(
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
 
         raw_data = self._api_query('fills', start_time=start_ts, end_time=end_ts)
         log.debug('FTX trades history result', results_num=len(raw_data))
@@ -390,7 +467,7 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 continue
             if trade:
                 trades.append(trade)
-        return trades
+        return trades, (start_ts, end_ts)
 
     def _deserialize_asset_movement(
         self,
@@ -498,4 +575,11 @@ class Ftx(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for FTX
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for FTX

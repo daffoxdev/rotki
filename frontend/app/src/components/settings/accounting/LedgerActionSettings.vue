@@ -34,14 +34,14 @@ import { Component, Mixins } from 'vue-property-decorator';
 import ActionStatusIndicator from '@/components/error/ActionStatusIndicator.vue';
 import SettingCategory from '@/components/settings/SettingCategory.vue';
 import SettingsMixin from '@/mixins/settings-mixin';
-import { LEDGER_ACTION_TYPES, ledgerActionsData } from '@/store/history/consts';
-import { LedgerActionType } from '@/store/history/types';
+import { ledgerActionsData } from '@/store/history/consts';
 import { ActionStatus } from '@/store/types';
+import { LedgerActionType } from '@/types/ledger-actions';
 
 const defaultTaxable: () => TaxableState = () => {
   const status: any = {};
-  for (const actionType of LEDGER_ACTION_TYPES) {
-    status[actionType] = false;
+  for (const action of Object.values(LedgerActionType)) {
+    status[action] = false;
   }
 
   return status as TaxableState;
@@ -65,7 +65,7 @@ export default class LedgerActionSettings extends Mixins(SettingsMixin) {
     }
 
     const status = await this.settingsUpdate({
-      taxable_ledger_actions: taxableActions
+      taxableLedgerActions: taxableActions
     });
 
     if (!status.success) {

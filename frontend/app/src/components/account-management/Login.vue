@@ -6,12 +6,14 @@
     <v-card-text>
       <v-form ref="form" v-model="valid">
         <v-text-field
+          ref="username"
           v-model="username"
-          autofocus
           class="login__fields__username"
           color="secondary"
+          outlined
+          single-line
           :label="$t('login.label_username')"
-          prepend-icon="mdi-account"
+          prepend-inner-icon="mdi-account"
           :rules="usernameRules"
           :disabled="loading || !!syncConflict.message || customBackendDisplay"
           required
@@ -19,7 +21,9 @@
         />
 
         <revealable-input
+          ref="password"
           v-model="password"
+          outlined
           :rules="passwordRules"
           :disabled="loading || !!syncConflict.message || customBackendDisplay"
           type="password"
@@ -37,6 +41,8 @@
               v-model="rememberUser"
               :disabled="customBackendDisplay"
               color="primary"
+              hide-details
+              class="mt-0"
               :label="$t('login.remember_me')"
             />
           </v-col>
@@ -71,6 +77,7 @@
                   :label="$t('login.custom_backend.label')"
                   :placeholder="$t('login.custom_backend.placeholder')"
                   :hint="$t('login.custom_backend.hint')"
+                  @keypress.enter="saveCustomBackend"
                 />
               </v-col>
               <v-col cols="auto">
@@ -119,28 +126,14 @@
                   <li>
                     <i18n path="login.sync_error.local_modified">
                       <div class="font-weight-medium">
-                        {{ localLastModified }}
+                        <date-display :timestamp="localLastModified" />
                       </div>
                     </i18n>
                   </li>
                   <li class="mt-2">
                     <i18n path="login.sync_error.remote_modified">
                       <div class="font-weight-medium">
-                        {{ remoteLastModified }}
-                      </div>
-                    </i18n>
-                  </li>
-                  <li class="mt-2">
-                    <i18n path="login.sync_error.local_size">
-                      <div class="font-weight-medium">
-                        {{ localSize }}
-                      </div>
-                    </i18n>
-                  </li>
-                  <li class="mt-2">
-                    <i18n path="login.sync_error.remote_size">
-                      <div class="font-weight-medium">
-                        {{ remoteSize }}
+                        <date-display :timestamp="remoteLastModified" />
                       </div>
                     </i18n>
                   </li>
@@ -171,7 +164,21 @@
             type="error"
             icon="mdi-alert-circle-outline"
           >
-            <span v-for="(error, i) in errors" :key="i" v-text="error" />
+            <v-row>
+              <v-col class="grow">
+                <span v-for="(error, i) in errors" :key="i" v-text="error" />
+              </v-col>
+              <v-col class="shrink">
+                <v-btn
+                  v-if="isLoggedInError"
+                  depressed
+                  color="primary"
+                  @click="logout"
+                >
+                  {{ $t('login.logout') }}
+                </v-btn>
+              </v-col>
+            </v-row>
           </v-alert>
         </transition>
       </v-form>
@@ -191,7 +198,7 @@
           {{ $t('login.button_signin') }}
         </v-btn>
       </span>
-      <v-divider class="my-3" />
+      <v-divider class="my-4" />
       <span class="login__actions__footer">
         <a
           class="login__button__new-account font-weight-bold secondary--text"
@@ -205,6 +212,7 @@
 </template>
 <script lang="ts">
 import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
+import { mapActions } from 'vuex';
 import {
   deleteBackendUrl,
   getBackendUrl,
@@ -212,13 +220,17 @@ import {
 } from '@/components/account-management/utils';
 import RevealableInput from '@/components/inputs/RevealableInput.vue';
 import { SyncConflict } from '@/store/session/types';
-import { Credentials, SyncApproval } from '@/typing/types';
+import { ActionStatus } from '@/store/types';
+import { LoginCredentials, SyncApproval } from '@/types/login';
 
 const KEY_REMEMBER = 'rotki.remember';
 const KEY_USERNAME = 'rotki.username';
 
 @Component({
-  components: { RevealableInput }
+  components: { RevealableInput },
+  methods: {
+    ...mapActions('session', ['logoutRemoteSession'])
+  }
 })
 export default class Login extends Vue {
   @Prop({ required: true })
@@ -233,6 +245,8 @@ export default class Login extends Vue {
   @Prop({ required: false, type: Array, default: () => [] })
   errors!: string[];
 
+  logoutRemoteSession!: () => Promise<ActionStatus>;
+
   @Watch('username')
   onUsernameChange() {
     this.touched();
@@ -243,20 +257,25 @@ export default class Login extends Vue {
     this.touched();
   }
 
-  get localLastModified(): string {
-    return this.syncConflict.payload?.localLastModified ?? '';
+  get isLoggedInError(): boolean {
+    return !!this.errors.find(error => error.includes('is already logged in'));
   }
 
-  get remoteLastModified(): string {
-    return this.syncConflict.payload?.remoteLastModified ?? '';
+  async logout() {
+    const { success } = await this.logoutRemoteSession();
+    if (success) {
+      this.touched();
+    }
   }
 
-  get localSize(): string {
-    return this.syncConflict.payload?.localSize ?? '';
+  get localLastModified(): number {
+    const payload = this.syncConflict.payload;
+    return payload?.localLastModified ?? 0;
   }
 
-  get remoteSize(): string {
-    return this.syncConflict.payload?.remoteSize ?? '';
+  get remoteLastModified(): number {
+    const payload = this.syncConflict.payload;
+    return payload?.remoteLastModified ?? 0;
   }
 
   get serverColor(): string | null {
@@ -279,6 +298,34 @@ export default class Login extends Vue {
       form.reset();
     }
     this.loadSettings();
+    this.updateFocus();
+  }
+
+  getRef(prop: 'password' | 'username'): Promise<any> {
+    return new Promise<any>(resolve => {
+      let count = 0;
+      const interval = setInterval(() => {
+        count++;
+        if (count > 10) {
+          clearInterval(interval);
+          return;
+        }
+
+        const $ref = this.$refs[prop];
+        if (!$ref) {
+          return;
+        }
+        clearInterval(interval);
+        resolve($ref);
+      }, 500);
+    });
+  }
+
+  private updateFocus() {
+    const ref = this.getRef(this.username ? 'password' : 'username');
+    ref.then(value => {
+      this.focusElement(value);
+    });
   }
 
   username: string = '';
@@ -316,6 +363,16 @@ export default class Login extends Vue {
 
   mounted() {
     this.loadSettings();
+    this.updateFocus();
+  }
+
+  private focusElement(element: any) {
+    requestAnimationFrame(() => {
+      const input = element.$el.querySelector(
+        'input:not([type=hidden])'
+      ) as HTMLInputElement;
+      input.focus();
+    });
   }
 
   private saveCustomBackend() {
@@ -340,7 +397,6 @@ export default class Login extends Vue {
   private loadSettings() {
     this.rememberUser = !!localStorage.getItem(KEY_REMEMBER);
     this.username = localStorage.getItem(KEY_USERNAME) ?? '';
-
     const { sessionOnly, url } = getBackendUrl();
     this.customBackendUrl = url;
     this.customBackendSessionOnly = sessionOnly;
@@ -362,7 +418,7 @@ export default class Login extends Vue {
   }
 
   login(syncApproval: SyncApproval = 'unknown') {
-    const credentials: Credentials = {
+    const credentials: LoginCredentials = {
       username: this.username,
       password: this.password,
       syncApproval
@@ -387,6 +443,8 @@ export default class Login extends Vue {
 <style scoped lang="scss">
 .login {
   &__actions {
+    padding: 16px !important;
+
     &__footer {
       font-size: 0.9em;
     }

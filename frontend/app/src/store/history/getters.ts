@@ -1,40 +1,54 @@
 import { GetterTree } from 'vuex';
 import { RotkehlchenState } from '@/store/types';
-import { toUnit, Unit } from '@/utils/calculation';
-import { HistoryState, TradeEntry } from './types';
+import { HistoryState } from './types';
 
 export const getters: GetterTree<HistoryState, RotkehlchenState> = {
+  associatedLocations: ({ associatedLocations }) => {
+    return associatedLocations;
+  },
   assetMovements: ({ assetMovements }) => {
     return assetMovements.data;
   },
-  assetMovementsTotal: ({ assetMovements }) => {
+  assetMovementsFound: ({ assetMovements }) => {
     return assetMovements.found;
   },
   assetMovementsLimit: ({ assetMovements }) => {
     return assetMovements.limit;
   },
-  trades: ({ trades }, _, _rs, { 'defi/basicDexTrades': dexTrades }) => {
-    let dxTrades: TradeEntry[] = [];
-    if (trades.limit === -1) {
-      dxTrades = dexTrades([]);
-    }
-
-    return trades.data.concat(...dxTrades);
+  assetMovementsTotal: ({ assetMovements }) => {
+    return assetMovements.total;
   },
-  tradesTotal: ({ trades }) => {
+  ledgerActions: ({ ledgerActions }) => {
+    return ledgerActions.data;
+  },
+  ledgerActionsFound: ({ ledgerActions }) => {
+    return ledgerActions.found;
+  },
+  ledgerActionsLimit: ({ ledgerActions }) => {
+    return ledgerActions.limit;
+  },
+  ledgerActionsTotal: ({ ledgerActions }) => {
+    return ledgerActions.total;
+  },
+  trades: ({ trades }) => {
+    return trades.data;
+  },
+  tradesFound: ({ trades }) => {
     return trades.found;
   },
   tradesLimit: ({ trades }) => {
     return trades.limit;
   },
+  tradesTotal: ({ trades }) => {
+    return trades.total;
+  },
   transactions: ({ transactions }) => {
-    return transactions.data.map(value => ({
-      ...value,
-      gasFee: toUnit(value.gasPrice.multipliedBy(value.gasUsed), Unit.ETH),
-      key: `${value.txHash}${value.nonce}${value.fromAddress}`
-    }));
+    return transactions.data;
   },
   transactionsTotal: ({ transactions }) => {
+    return transactions.total;
+  },
+  transactionsFound: ({ transactions }) => {
     return transactions.found;
   },
   transactionsLimit: ({ transactions }) => {

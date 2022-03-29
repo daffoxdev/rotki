@@ -1,4 +1,4 @@
-import { SupportedAsset } from '@/services/types-model';
+import { SupportedAsset } from '@rotki/common/lib/data';
 
 export interface AssetState {}
 
@@ -25,3 +25,8 @@ export interface ApplyUpdateResult {
   readonly done: boolean;
   readonly conflicts?: AssetUpdateConflictResult[];
 }
+
+export type AssetMergePayload = {
+  readonly sourceIdentifier: string;
+  readonly targetIdentifier: string;
+};

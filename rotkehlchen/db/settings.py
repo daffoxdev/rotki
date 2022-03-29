@@ -7,28 +7,26 @@ from rotkehlchen.constants.assets import A_USD
 from rotkehlchen.constants.timing import YEAR_IN_SECONDS
 from rotkehlchen.db.utils import str_to_bool
 from rotkehlchen.errors import DeserializationError
-from rotkehlchen.exchanges.kraken import KrakenAccountType
 from rotkehlchen.history.typing import (
     DEFAULT_HISTORICAL_PRICE_ORACLES_ORDER,
     HistoricalPriceOracle,
 )
 from rotkehlchen.inquirer import DEFAULT_CURRENT_PRICE_ORACLES_ORDER, CurrentPriceOracle
-from rotkehlchen.typing import AVAILABLE_MODULES_MAP, ModuleName, Timestamp
+from rotkehlchen.typing import AVAILABLE_MODULES_MAP, DEFAULT_OFF_MODULES, ModuleName, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 
-ROTKEHLCHEN_DB_VERSION = 25
+ROTKEHLCHEN_DB_VERSION = 31
+LAST_DATA_MIGRATION = 1
 DEFAULT_TAXFREE_AFTER_PERIOD = YEAR_IN_SECONDS
 DEFAULT_INCLUDE_CRYPTO2CRYPTO = True
 DEFAULT_INCLUDE_GAS_COSTS = True
-DEFAULT_ANONYMIZED_LOGS = False
 DEFAULT_PREMIUM_SHOULD_SYNC = False
 DEFAULT_UI_FLOATING_PRECISION = 2
 DEFAULT_BALANCE_SAVE_FREQUENCY = 24
 DEFAULT_MAIN_CURRENCY = A_USD
 DEFAULT_DATE_DISPLAY_FORMAT = '%d/%m/%Y %H:%M:%S %Z'
 DEFAULT_SUBMIT_USAGE_ANALYTICS = True
-DEFAULT_KRAKEN_ACCOUNT_TYPE = KrakenAccountType.STARTER
-DEFAULT_ACTIVE_MODULES = list(AVAILABLE_MODULES_MAP.keys())
+DEFAULT_ACTIVE_MODULES = list(set(AVAILABLE_MODULES_MAP.keys()) - DEFAULT_OFF_MODULES)
 DEFAULT_ACCOUNT_FOR_ASSETS_MOVEMENTS = True
 DEFAULT_BTC_DERIVATION_GAP_LIMIT = 20
 DEFAULT_CALCULATE_PAST_COST_BASIS = True
@@ -43,28 +41,36 @@ DEFAULT_TAXABLE_LEDGER_ACTIONS = [
     LedgerActionType.DONATION_RECEIVED,
     LedgerActionType.GRANT,
 ]
+DEFAULT_PNL_CSV_WITH_FORMULAS = True
+DEFAULT_PNL_CSV_HAVE_SUMMARY = False
+DEFAULT_SSF_0GRAPH_MULTIPLIER = 0
+DEFAULT_LAST_DATA_MIGRATION = 0
 
 JSON_KEYS = ('current_price_oracles', 'historical_price_oracles', 'taxable_ledger_actions')
 BOOLEAN_KEYS = (
     'have_premium',
     'include_crypto2crypto',
-    'anonymized_logs',
     'include_gas_costs',
     'premium_should_sync',
     'submit_usage_analytics',
     'account_for_assets_movements',
     'calculate_past_cost_basis',
     'display_date_in_localtime',
+    'pnl_csv_with_formulas',
+    'pnl_csv_have_summary',
 )
 INTEGER_KEYS = (
     'version',
     'ui_floating_precision',
     'balance_save_frequency',
     'btc_derivation_gap_limit',
+    'ssf_0graph_multiplier',
+    'last_data_migration',
 )
 STRING_KEYS = (
     'eth_rpc_endpoint',
     'ksm_rpc_endpoint',
+    'dot_rpc_endpoint',
     'date_display_format',
     'frontend_settings',
 )
@@ -77,7 +83,6 @@ class DBSettings(NamedTuple):
     last_write_ts: Timestamp = Timestamp(0)
     premium_should_sync: bool = DEFAULT_PREMIUM_SHOULD_SYNC
     include_crypto2crypto: bool = DEFAULT_INCLUDE_CRYPTO2CRYPTO
-    anonymized_logs: bool = DEFAULT_ANONYMIZED_LOGS
     last_data_upload_ts: Timestamp = Timestamp(0)
     ui_floating_precision: int = DEFAULT_UI_FLOATING_PRECISION
     taxfree_after_period: Optional[int] = DEFAULT_TAXFREE_AFTER_PERIOD
@@ -85,11 +90,11 @@ class DBSettings(NamedTuple):
     include_gas_costs: bool = DEFAULT_INCLUDE_GAS_COSTS
     eth_rpc_endpoint: str = 'http://localhost:8545'
     ksm_rpc_endpoint: str = 'http://localhost:9933'
+    dot_rpc_endpoint: str = ''  # same as kusama -- must be set by user
     main_currency: Asset = DEFAULT_MAIN_CURRENCY
     date_display_format: str = DEFAULT_DATE_DISPLAY_FORMAT
     last_balance_save: Timestamp = Timestamp(0)
     submit_usage_analytics: bool = DEFAULT_SUBMIT_USAGE_ANALYTICS
-    kraken_account_type: KrakenAccountType = DEFAULT_KRAKEN_ACCOUNT_TYPE
     active_modules: List[ModuleName] = DEFAULT_ACTIVE_MODULES  # type: ignore
     frontend_settings: str = ''
     account_for_assets_movements: bool = DEFAULT_ACCOUNT_FOR_ASSETS_MOVEMENTS
@@ -99,22 +104,25 @@ class DBSettings(NamedTuple):
     current_price_oracles: List[CurrentPriceOracle] = DEFAULT_CURRENT_PRICE_ORACLES
     historical_price_oracles: List[HistoricalPriceOracle] = DEFAULT_HISTORICAL_PRICE_ORACLES
     taxable_ledger_actions: List[LedgerActionType] = DEFAULT_TAXABLE_LEDGER_ACTIONS
+    pnl_csv_with_formulas: bool = DEFAULT_PNL_CSV_WITH_FORMULAS
+    pnl_csv_have_summary: bool = DEFAULT_PNL_CSV_HAVE_SUMMARY
+    ssf_0graph_multiplier: int = DEFAULT_SSF_0GRAPH_MULTIPLIER
+    last_data_migration: int = DEFAULT_LAST_DATA_MIGRATION
 
 
 class ModifiableDBSettings(NamedTuple):
     premium_should_sync: Optional[bool] = None
     include_crypto2crypto: Optional[bool] = None
-    anonymized_logs: Optional[bool] = None
     ui_floating_precision: Optional[int] = None
     taxfree_after_period: Optional[int] = None
     balance_save_frequency: Optional[int] = None
     include_gas_costs: Optional[bool] = None
     eth_rpc_endpoint: Optional[str] = None
     ksm_rpc_endpoint: Optional[str] = None
+    dot_rpc_endpoint: Optional[str] = None
     main_currency: Optional[Asset] = None
     date_display_format: Optional[str] = None
     submit_usage_analytics: Optional[bool] = None
-    kraken_account_type: Optional[KrakenAccountType] = None
     active_modules: Optional[List[ModuleName]] = None
     frontend_settings: Optional[str] = None
     account_for_assets_movements: Optional[bool] = None
@@ -124,6 +132,9 @@ class ModifiableDBSettings(NamedTuple):
     current_price_oracles: Optional[List[CurrentPriceOracle]] = None
     historical_price_oracles: Optional[List[HistoricalPriceOracle]] = None
     taxable_ledger_actions: Optional[List[LedgerActionType]] = None
+    pnl_csv_with_formulas: Optional[bool] = None
+    pnl_csv_have_summary: Optional[bool] = None
+    ssf_0graph_multiplier: Optional[int] = None
 
     def serialize(self) -> Dict[str, Any]:
         settings_dict = {}
@@ -139,8 +150,6 @@ class ModifiableDBSettings(NamedTuple):
                 # taxfree_after_period of -1 by the user means disable the setting
                 elif setting == 'taxfree_after_period' and value == -1:
                     value = None
-                elif setting == 'kraken_account_type':
-                    value = value.serialize()
                 elif setting == 'active_modules':
                     value = json.dumps(value)
                 elif setting in JSON_KEYS:
@@ -196,8 +205,6 @@ def db_settings_from_dict(
             specified_args[key] = Asset(str(value))
         elif key in TIMESTAMP_KEYS:
             specified_args[key] = Timestamp(int(value))
-        elif key == 'kraken_account_type':
-            specified_args[key] = KrakenAccountType.deserialize(value)
         elif key == 'active_modules':
             specified_args[key] = json.loads(value)
         elif key == 'current_price_oracles':

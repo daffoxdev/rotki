@@ -1,6 +1,11 @@
+import os
 import random
+from pathlib import Path
+from shutil import copyfile
 from typing import Any, Dict, List, Optional
 from unittest.mock import _patch, patch
+
+from pysqlcipher3 import dbapi2 as sqlcipher
 
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
@@ -58,6 +63,7 @@ def add_settings_to_test_db(
         db: DBHandler,
         db_settings: Optional[Dict[str, Any]],
         ignored_assets: Optional[List[Asset]],
+        data_migration_version: Optional[int],
 ) -> None:
     settings = {
         # DO not submit usage analytics during tests
@@ -73,6 +79,13 @@ def add_settings_to_test_db(
     if ignored_assets:
         for asset in ignored_assets:
             db.add_to_ignored_assets(asset)
+
+    if data_migration_version is not None:
+        db.conn.cursor().execute(
+            'INSERT OR REPLACE INTO settings(name, value) VALUES(?, ?)',
+            ('last_data_migration', data_migration_version),
+        )
+        db.conn.commit()
 
 
 def add_tags_to_test_db(db: DBHandler, tags: List[Dict[str, Any]]) -> None:
@@ -98,3 +111,36 @@ def mock_dbhandler_update_owned_assets() -> _patch:
         'rotkehlchen.db.dbhandler.DBHandler.update_owned_assets_in_globaldb',
         lambda x: None,
     )
+
+
+def mock_dbhandler_add_globaldb_assetids() -> _patch:
+    """Just make sure add globalds assetids does nothing for older DB tests"""
+    return patch(
+        'rotkehlchen.db.dbhandler.DBHandler.add_globaldb_assetids',
+        lambda x: None,
+    )
+
+
+def mock_dbhandler_ensura_data_integrity() -> _patch:
+    """Just make sure ensure_data_integrity oes nothing for older DB tests"""
+    return patch(
+        'rotkehlchen.db.dbhandler.DBHandler.ensure_data_integrity',
+        lambda x: None,
+    )
+
+
+def _use_prepared_db(user_data_dir: Path, filename: str) -> None:
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    copyfile(
+        os.path.join(os.path.dirname(dir_path), 'data', filename),
+        user_data_dir / 'rotkehlchen.db',
+    )
+
+
+def _init_prepared_db(user_data_dir: Path, filename: str):
+    _use_prepared_db(user_data_dir, filename)
+    password = '123'
+    conn = sqlcipher.connect(str(user_data_dir / 'rotkehlchen.db'))  # pylint: disable=no-member
+    conn.executescript(f'PRAGMA key={password};')
+    conn.execute('PRAGMA foreign_keys=ON;')
+    return conn

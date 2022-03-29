@@ -8,13 +8,15 @@ from rotkehlchen.chain.bitcoin.hdkey import HDKey
 from rotkehlchen.db.utils import insert_tag_mappings
 from rotkehlchen.errors import RemoteError
 from rotkehlchen.fval import FVal
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import BlockchainAccountData, BTCAddress, SupportedBlockchain
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.manager import BlockchainBalancesUpdate, ChainManager
 
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 class XpubData(NamedTuple):
@@ -25,7 +27,7 @@ class XpubData(NamedTuple):
 
     def serialize_derivation_path_for_db(self) -> str:
         """
-        In Rotki we store non-existing path as None but in sql it must be ''
+        In rotki we store non-existing path as None but in sql it must be ''
         https://stackoverflow.com/questions/43827629/why-does-sqlite-insert-duplicate-composite-primary-keys
         """
         return '' if self.derivation_path is None else self.derivation_path
@@ -49,7 +51,7 @@ class XpubData(NamedTuple):
 
 def deserialize_derivation_path_for_db(path: str) -> Optional[str]:
     """
-    In Rotki we store non-existing path as None but in sql it must be ''
+    In rotki we store non-existing path as None but in sql it must be ''
     https://stackoverflow.com/questions/43827629/why-does-sqlite-insert-duplicate-composite-primary-keys
     """
     return None if path == '' else path

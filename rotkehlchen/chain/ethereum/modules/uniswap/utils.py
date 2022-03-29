@@ -1,101 +1,38 @@
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, List, NamedTuple, Set, Tuple
+from typing import TYPE_CHECKING, List, Set
 
 import requests
 
-from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import EthereumToken
-from rotkehlchen.assets.unknown_asset import UnknownEthereumToken
-from rotkehlchen.assets.utils import get_ethereum_token
 from rotkehlchen.chain.ethereum.contracts import EthereumContract
 from rotkehlchen.chain.ethereum.defi.zerionsdk import ZERION_ADAPTER_ADDRESS
+from rotkehlchen.chain.ethereum.interfaces.ammswap.typing import LiquidityPool
+from rotkehlchen.chain.ethereum.interfaces.ammswap.utils import _decode_result
 from rotkehlchen.chain.ethereum.typing import NodeName
-from rotkehlchen.chain.ethereum.utils import token_normalized_value_decimals
 from rotkehlchen.constants.ethereum import ZERION_ABI
-from rotkehlchen.fval import FVal
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.typing import ChecksumEthAddress
 from rotkehlchen.utils.misc import get_chunks
 
-from .typing import LiquidityPool, LiquidityPoolAsset
-
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
+    from rotkehlchen.db.dbhandler import DBHandler
 
 
-log = logging.getLogger(__name__)
-
-
-SUBGRAPH_REMOTE_ERROR_MSG = (
-    "Failed to request the Uniswap subgraph due to {error_msg}. "
-    "All Uniswap balances and historical queries are not functioning until this is fixed. "  # noqa: E501
-    "Probably will get fixed with time. If not report it to rotki's support channel"  # noqa: E501
-)
-
-
-class TokenDetails(NamedTuple):
-    address: ChecksumEthAddress
-    name: str
-    symbol: str
-    decimals: int
-    amount: FVal
-
-
-def _decode_token(entry: Tuple) -> TokenDetails:
-    decimals = entry[0][3]
-    return TokenDetails(
-        address=entry[0][0],
-        name=entry[0][1],
-        symbol=entry[0][2],
-        decimals=decimals,
-        amount=token_normalized_value_decimals(entry[1], decimals),
-    )
-
-
-def _decode_result(
-        data: Tuple,
-        known_assets: Set[EthereumToken],
-        unknown_assets: Set[UnknownEthereumToken],
-) -> LiquidityPool:
-    pool_token = _decode_token(data[0])
-    token0 = _decode_token(data[1][0])
-    token1 = _decode_token(data[1][1])
-
-    assets = []
-    for token in (token0, token1):
-        asset = get_ethereum_token(
-            symbol=token.symbol,
-            ethereum_address=token.address,
-            name=token.name,
-            decimals=token.decimals,
-        )
-        # Classify the asset either as known or unknown
-        if isinstance(asset, EthereumToken):
-            known_assets.add(asset)
-        elif isinstance(asset, UnknownEthereumToken):
-            unknown_assets.add(asset)
-        assets.append(LiquidityPoolAsset(
-            asset=asset,
-            total_amount=None,
-            user_balance=Balance(amount=token.amount),
-        ))
-
-    pool = LiquidityPool(
-        address=pool_token.address,
-        assets=assets,
-        total_supply=None,
-        user_balance=Balance(amount=pool_token.amount),
-    )
-    return pool
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 def uniswap_lp_token_balances(
+        userdb: 'DBHandler',
         address: ChecksumEthAddress,
         ethereum: 'EthereumManager',
         lp_addresses: List[ChecksumEthAddress],
         known_assets: Set[EthereumToken],
-        unknown_assets: Set[UnknownEthereumToken],
+        unknown_assets: Set[EthereumToken],
 ) -> List[LiquidityPool]:
     """Query uniswap token balances from ethereum chain
 
@@ -128,7 +65,7 @@ def uniswap_lp_token_balances(
         )
 
         for entry in result[1]:
-            balances.append(_decode_result(entry, known_assets, unknown_assets))
+            balances.append(_decode_result(userdb, entry, known_assets, unknown_assets))
 
     return balances
 
@@ -149,7 +86,10 @@ def get_latest_lp_addresses(data_directory: Path) -> List[ChecksumEthAddress]:
     our_downloaded_meta = data_directory / 'assets' / 'uniswapv2_lp_tokens.meta'
     our_builtin_meta = root_dir / 'data' / 'uniswapv2_lp_tokens.meta'
     try:
-        response = requests.get('https://raw.githubusercontent.com/rotki/rotki/develop/rotkehlchen/data/uniswapv2_lp_tokens.meta')  # noqa: E501
+        response = requests.get(
+            url='https://raw.githubusercontent.com/rotki/rotki/develop/rotkehlchen/data/uniswapv2_lp_tokens.meta',  # noqa: E501,
+            timeout=DEFAULT_TIMEOUT_TUPLE,
+        )
         remote_meta = response.json()
         if our_downloaded_meta.is_file():
             local_meta_file = our_downloaded_meta
@@ -161,7 +101,10 @@ def get_latest_lp_addresses(data_directory: Path) -> List[ChecksumEthAddress]:
 
         if local_meta['version'] < remote_meta['version']:
             # we need to download and save the new assets from github
-            response = requests.get('https://raw.githubusercontent.com/rotki/rotki/develop/rotkehlchen/data/uniswapv2_lp_tokens.json')  # noqa: E501
+            response = requests.get(
+                url='https://raw.githubusercontent.com/rotki/rotki/develop/rotkehlchen/data/uniswapv2_lp_tokens.json',  # noqa: E501
+                timeout=DEFAULT_TIMEOUT_TUPLE,
+            )
             remote_data = response.text
 
             # Make sure directory exists

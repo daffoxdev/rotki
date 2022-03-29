@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 import warnings as test_warnings
 from contextlib import ExitStack
 from datetime import datetime
@@ -7,10 +8,13 @@ from unittest.mock import call, patch
 from urllib.parse import urlencode
 
 import pytest
+import requests
 
-from rotkehlchen.assets.asset import Asset
+from rotkehlchen.assets.asset import WORLD_TO_BINANCE, Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_BINANCE_ASSETS, asset_from_binance
-from rotkehlchen.constants.assets import A_BNB, A_BTC, A_ETH, A_USDT, A_WBTC
+from rotkehlchen.constants.assets import A_ADA, A_BNB, A_BTC, A_DOT, A_ETH, A_EUR, A_USDT, A_WBTC
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
+from rotkehlchen.db.dbhandler import DBHandler
 from rotkehlchen.errors import RemoteError, UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.binance import (
     API_TIME_INTERVAL_CONSTRAINT_TS,
@@ -21,24 +25,28 @@ from rotkehlchen.exchanges.binance import (
 )
 from rotkehlchen.exchanges.data_structures import Location, Trade, TradeType
 from rotkehlchen.fval import FVal
-from rotkehlchen.tests.utils.constants import A_ADA, A_BUSD, A_DOT, A_RDN
+from rotkehlchen.tests.utils.constants import A_BUSD, A_LUNA, A_RDN
 from rotkehlchen.tests.utils.exchanges import (
     BINANCE_DEPOSITS_HISTORY_RESPONSE,
+    BINANCE_FIATBUY_RESPONSE,
+    BINANCE_FIATDEPOSITS_RESPONSE,
+    BINANCE_FIATSELL_RESPONSE,
+    BINANCE_FIATWITHDRAWS_RESPONSE,
     BINANCE_MYTRADES_RESPONSE,
     BINANCE_WITHDRAWALS_HISTORY_RESPONSE,
     assert_binance_asset_movements_result,
     mock_binance_balance_response,
 )
-from rotkehlchen.tests.utils.factories import make_api_key, make_api_secret
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import Timestamp
+from rotkehlchen.typing import ApiKey, ApiSecret, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
 
 
 def test_name():
-    exchange = Binance('a', b'a', object(), object())
-    assert exchange.name == 'binance'
+    exchange = Binance('binance1', 'a', b'a', object(), object())
+    assert exchange.location == Location.BINANCE
+    assert exchange.name == 'binance1'
 
 
 def test_trade_from_binance(function_scope_binance):
@@ -146,7 +154,7 @@ def test_trade_from_binance(function_scope_binance):
     ]
 
     for idx, binance_trade in enumerate(binance_trades_list):
-        our_trade = trade_from_binance(binance_trade, binance.symbols_to_pair)
+        our_trade = trade_from_binance(binance_trade, binance.symbols_to_pair, location=Location.BINANCE)  # noqa: E501
         assert our_trade == our_expected_list[idx]
         assert isinstance(our_trade.fee_currency, Asset)
 
@@ -166,23 +174,16 @@ exchange_info_mock_text = '''{
 }'''
 
 
-def test_binance_assets_are_known(
-        database,
-        inquirer,  # pylint: disable=unused-argument
-):
-    # use a real binance instance so that we always get the latest data
-    binance = Binance(
-        api_key=make_api_key(),
-        secret=make_api_secret(),
-        database=database,
-        msg_aggregator=MessagesAggregator(),
-    )
+def test_binance_assets_are_known(inquirer):  # pylint: disable=unused-argument
+    unsupported_assets = set(UNSUPPORTED_BINANCE_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_BINANCE.values()))
+    assert not common_items, f'Binance assets {common_items} should not be unsupported'
 
-    mapping = binance.symbols_to_pair
+    exchange_data = requests.get('https://binance.com/api/v3/exchangeInfo').json()
     binance_assets = set()
-    for _, pair in mapping.items():
-        binance_assets.add(pair.binance_base_asset)
-        binance_assets.add(pair.binance_quote_asset)
+    for pair_symbol in exchange_data['symbols']:
+        binance_assets.add(pair_symbol['baseAsset'])
+        binance_assets.add(pair_symbol['quoteAsset'])
 
     sorted_assets = sorted(binance_assets)
     for binance_asset in sorted_assets:
@@ -218,22 +219,46 @@ def test_binance_query_balances_include_features(function_scope_binance):
     assert 'unsupported binance asset ETF' in warnings[1]
 
 
+TIMESTAMPS_RE = re.compile(r'.*&startTime\=(.*?)&endTime\=(.*?)&')
+
+
 def test_binance_query_trade_history(function_scope_binance):
     """Test that turning a binance trade as returned by the server to our format works"""
     binance = function_scope_binance
 
-    def mock_my_trades(url):  # pylint: disable=unused-argument
-        if 'symbol=BNBBTC' in url:
-            text = BINANCE_MYTRADES_RESPONSE
+    def mock_my_trades(url, **kwargs):  # pylint: disable=unused-argument
+        if 'myTrades' in url:
+            if 'symbol=BNBBTC' in url:
+                text = BINANCE_MYTRADES_RESPONSE
+            else:
+                text = '[]'
+        elif 'fiat/payments' in url:
+            match = TIMESTAMPS_RE.search(url)
+            assert match
+            groups = match.groups()
+            assert len(groups) == 2
+            from_ts, to_ts = [int(x) for x in groups]
+            if 'transactionType=0' in url:
+                if from_ts < 1624529919000 < to_ts:
+                    text = BINANCE_FIATBUY_RESPONSE
+                else:
+                    text = '[]'
+            elif 'transactionType=1' in url:
+                if from_ts < 1628529919000 < to_ts:
+                    text = BINANCE_FIATSELL_RESPONSE
+                else:
+                    text = '[]'
+            else:
+                raise AssertionError('Unexpected binance request in test')
         else:
-            text = '[]'
+            raise AssertionError('Unexpected binance request in test')
 
         return MockResponse(200, text)
 
     with patch.object(binance.session, 'get', side_effect=mock_my_trades):
-        trades = binance.query_trade_history(start_ts=0, end_ts=1564301134, only_cache=False)
+        trades = binance.query_trade_history(start_ts=0, end_ts=1638529919, only_cache=False)
 
-    expected_trade = Trade(
+    expected_trades = [Trade(
         timestamp=1499865549,
         location=Location.BINANCE,
         base_asset=A_BNB,
@@ -244,10 +269,31 @@ def test_binance_query_trade_history(function_scope_binance):
         fee=FVal('10.10000000'),
         fee_currency=A_BNB,
         link='28457',
-    )
+    ), Trade(
+        timestamp=1624529919,
+        location=Location.BINANCE,
+        base_asset=A_LUNA,
+        quote_asset=A_EUR,
+        trade_type=TradeType.BUY,
+        amount=FVal('4.462'),
+        rate=FVal('4.437472'),
+        fee=FVal('0.2'),
+        fee_currency=A_EUR,
+        link='353fca443f06466db0c4dc89f94f027a',
+    ), Trade(
+        timestamp=1628529919,
+        location=Location.BINANCE,
+        base_asset=A_ETH,
+        quote_asset=A_EUR,
+        trade_type=TradeType.SELL,
+        amount=FVal('4.462'),
+        rate=FVal('4.437472'),
+        fee=FVal('0.2'),
+        fee_currency=A_EUR,
+        link='463fca443f06466db0c4dc89f94f027a',
+    )]
 
-    assert len(trades) == 1
-    assert trades[0] == expected_trade
+    assert trades == expected_trades
 
 
 def test_binance_query_trade_history_unexpected_data(function_scope_binance):
@@ -255,7 +301,7 @@ def test_binance_query_trade_history_unexpected_data(function_scope_binance):
     binance = function_scope_binance
     binance.cache_ttl_secs = 0
 
-    def mock_my_trades(url):  # pylint: disable=unused-argument
+    def mock_my_trades(url, **kwargs):  # pylint: disable=unused-argument
         if 'symbol=BNBBTC' in url or 'symbol=doesnotexist' in url:
             text = BINANCE_MYTRADES_RESPONSE
         else:
@@ -276,11 +322,11 @@ def test_binance_query_trade_history_unexpected_data(function_scope_binance):
             'rotkehlchen.tests.exchanges.test_binance.BINANCE_MYTRADES_RESPONSE',
             new=input_trade_str,
         )
+        binance.selected_pairs = query_specific_markets
         with patch_get, patch_response:
-            trades = binance.query_online_trade_history(
+            trades, _ = binance.query_online_trade_history(
                 start_ts=0,
                 end_ts=1564301134,
-                markets=query_specific_markets,
             )
 
         assert len(trades) == 0
@@ -312,7 +358,7 @@ def test_binance_query_trade_history_unexpected_data(function_scope_binance):
     query_binance_and_test(
         input_str,
         expected_warnings_num=0,
-        expected_errors_num=1,
+        expected_errors_num=0,
         query_specific_markets=['doesnotexist'],
     )
 
@@ -364,14 +410,42 @@ def test_binance_query_deposits_withdrawals(function_scope_binance):
     prevent requesting with a time delta.
     """
     start_ts = 1508022000  # 2017-10-15
-    end_ts = 1508540400  # 2017-10-21 (less than 90 days since `start_ts`)
+    # end_ts = 1508540400  # 2017-10-21 (less than 90 days since `start_ts`)
+    end_ts = 1636400907
     binance = function_scope_binance
 
-    def mock_get_deposit_withdrawal(url):  # pylint: disable=unused-argument
-        if 'deposit' in url:
-            response_str = BINANCE_DEPOSITS_HISTORY_RESPONSE
+    def mock_get_deposit_withdrawal(url, **kwargs):  # pylint: disable=unused-argument
+        match = TIMESTAMPS_RE.search(url)
+        assert match
+        groups = match.groups()
+        assert len(groups) == 2
+        from_ts, to_ts = [int(x) for x in groups]
+        if 'capital/deposit' in url:
+            if from_ts >= 1508022000000 and to_ts <= 1515797999999:
+                response_str = BINANCE_DEPOSITS_HISTORY_RESPONSE
+            else:
+                response_str = '[]'
+        elif 'capital/withdraw' in url:
+            if from_ts <= 1508198532000 <= to_ts:
+                response_str = BINANCE_WITHDRAWALS_HISTORY_RESPONSE
+            else:
+                response_str = '[]'
+        elif 'fiat/orders' in url:
+            from_ts, to_ts = [int(x) for x in groups]
+            if 'transactionType=0' in url:
+                if from_ts < 1626144956000 < to_ts:
+                    response_str = BINANCE_FIATDEPOSITS_RESPONSE
+                else:
+                    response_str = '[]'
+            elif 'transactionType=1' in url:
+                if from_ts < 1636144956000 < to_ts:
+                    response_str = BINANCE_FIATWITHDRAWS_RESPONSE
+                else:
+                    response_str = '[]'
+            else:
+                raise AssertionError('Unexpected binance request in test')
         else:
-            response_str = BINANCE_WITHDRAWALS_HISTORY_RESPONSE
+            raise AssertionError('Unexpected binance request in test')
 
         return MockResponse(200, response_str)
 
@@ -385,7 +459,11 @@ def test_binance_query_deposits_withdrawals(function_scope_binance):
     warnings = binance.msg_aggregator.consume_warnings()
     assert len(errors) == 0
     assert len(warnings) == 0
-    assert_binance_asset_movements_result(movements=movements, location=Location.BINANCE)
+    assert_binance_asset_movements_result(
+        movements=movements,
+        location=Location.BINANCE,
+        got_fiat=True,
+    )
 
 
 def test_binance_query_deposits_withdrawals_unexpected_data(function_scope_binance):
@@ -400,7 +478,7 @@ def test_binance_query_deposits_withdrawals_unexpected_data(function_scope_binan
 
     def mock_binance_and_query(deposits, withdrawals, expected_warnings_num, expected_errors_num):
 
-        def mock_get_deposit_withdrawal(url):  # pylint: disable=unused-argument
+        def mock_get_deposit_withdrawal(url, **kwargs):  # pylint: disable=unused-argument
             if 'deposit' in url:
                 response_str = deposits
             else:
@@ -440,7 +518,7 @@ def test_binance_query_deposits_withdrawals_unexpected_data(function_scope_binan
             new_withdrawals = withdrawals
         else:
             new_deposits = deposits
-            new_withdrawals = withdrawals.replace('1508198532000', '"dasdd"')
+            new_withdrawals = withdrawals.replace('"2017-10-17 00:02:12"', '"dasdd"')
         mock_binance_and_query(
             new_deposits,
             new_withdrawals,
@@ -520,36 +598,31 @@ def test_binance_query_deposits_withdrawals_unexpected_data(function_scope_binan
 
     # To make the test easy to write the values for deposit/withdrawal attributes
     # are the same in the two examples below
-    empty_deposits = '{"success": true, "depositList": []}'
-    empty_withdrawals = '{"success": true, "withdrawList": []}'
-    input_withdrawals = """{
-    "success": true,
-    "withdrawList": [
-        {
-            "id":"7213fea8e94b4a5593d507237e5a555b",
-            "amount": 0.04670582,
-            "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
-            "asset": "ETH",
-            "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
-            "applyTime": 1508198532000,
-            "status": 4
-        }]}"""
+    empty_deposits = '[]'
+    empty_withdrawals = '[]'
+    input_withdrawals = """[{
+        "id":"7213fea8e94b4a5593d507237e5a555b",
+        "amount": 0.04670582,
+        "transactionFee": 0.01,
+        "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
+        "coin": "ETH",
+        "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
+        "applyTime": "2017-10-17 00:02:12",
+        "status": 4
+        }]"""
     check_permutations_of_input_invalid_data(
         deposits=empty_deposits,
         withdrawals=input_withdrawals,
     )
 
-    input_deposits = """{
-    "success": true,
-    "depositList": [
-        {
-            "insertTime": 1508198532000,
-            "amount": 0.04670582,
-            "asset": "ETH",
-            "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
-            "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
-            "status": 1
-        }]}"""
+    input_deposits = """[{
+        "insertTime": 1508198532000,
+        "amount": 0.04670582,
+        "coin": "ETH",
+        "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
+        "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
+        "status": 1
+        }]"""
     check_permutations_of_input_invalid_data(
         deposits=input_deposits,
         withdrawals=empty_withdrawals,
@@ -574,24 +647,44 @@ def test_binance_query_deposits_withdrawals_gte_90_days(function_scope_binance):
     def get_time_delta_deposit_result():
         results = [
             BINANCE_DEPOSITS_HISTORY_RESPONSE,
-            '{}',
+            '[]',
         ]
         for result in results:
             yield result
 
     def get_time_delta_withdraw_result():
         results = [
-            '{}',
+            '[]',
             BINANCE_WITHDRAWALS_HISTORY_RESPONSE,
         ]
         for result in results:
             yield result
 
-    def mock_get_deposit_withdrawal(url):  # pylint: disable=unused-argument
-        if 'deposit' in url:
+    def get_fiat_deposit_result():
+        results = ['[]']
+        for result in results:
+            yield result
+
+    def get_fiat_withdraw_result():
+        results = ['[]']
+        for result in results:
+            yield result
+
+    def mock_get_deposit_withdrawal(url, **kwargs):  # pylint: disable=unused-argument
+        if 'capital/deposit' in url:
             response_str = next(get_deposit_result)
-        else:
+        elif 'capital/withdraw' in url:
             response_str = next(get_withdraw_result)
+        elif 'fiat/orders' in url:
+            if 'transactionType=0' in url:
+                response_str = next(get_fiat_deposit_result())
+            elif 'transactionType=1' in url:
+                response_str = next(get_fiat_withdraw_result())
+            else:
+                raise AssertionError('Unexpected binance request in test')
+
+        else:
+            raise AssertionError('Unexpected binance request in test')
 
         return MockResponse(200, response_str)
 
@@ -613,8 +706,8 @@ def test_binance_query_deposits_withdrawals_gte_90_days(function_scope_binance):
 
 
 @pytest.mark.freeze_time(datetime(2020, 11, 24, 3, 14, 15))
-def test_api_query_dict_calls_with_time_delta(function_scope_binance):
-    """Test the `api_query_dict()` arguments when deposit/withdraw history
+def test_api_query_list_calls_with_time_delta(function_scope_binance):
+    """Test the `api_query_list()` arguments when deposit/withdraw history
     requests involve a time delta.
 
     From `start_ts` to `end_ts` there is a difference gte 90 days, which forces
@@ -625,8 +718,8 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
     end_ts = BINANCE_LAUNCH_TS + API_TIME_INTERVAL_CONSTRAINT_TS  # eq 90 days after
     expected_calls = [
         call(
-            'wapi',
-            'depositHistory.html',
+            'sapi',
+            'capital/deposit/hisrec',
             options={
                 'timestamp': now_ts_ms,
                 'startTime': 1500001200000,
@@ -634,8 +727,8 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
             },
         ),
         call(
-            'wapi',
-            'depositHistory.html',
+            'sapi',
+            'capital/deposit/hisrec',
             options={
                 'timestamp': now_ts_ms,
                 'startTime': 1507777200000,
@@ -643,8 +736,8 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
             },
         ),
         call(
-            'wapi',
-            'withdrawHistory.html',
+            'sapi',
+            'capital/withdraw/history',
             options={
                 'timestamp': now_ts_ms,
                 'startTime': 1500001200000,
@@ -652,8 +745,8 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
             },
         ),
         call(
-            'wapi',
-            'withdrawHistory.html',
+            'sapi',
+            'capital/withdraw/history',
             options={
                 'timestamp': now_ts_ms,
                 'startTime': 1507777200000,
@@ -666,20 +759,20 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
     def get_time_delta_deposit_result():
         results = [
             BINANCE_DEPOSITS_HISTORY_RESPONSE,
-            '{}',
+            '[]',
         ]
         for result in results:
             yield result
 
     def get_time_delta_withdraw_result():
         results = [
-            '{}',
+            '[]',
             BINANCE_WITHDRAWALS_HISTORY_RESPONSE,
         ]
         for result in results:
             yield result
 
-    def mock_get_deposit_withdrawal(url):  # pylint: disable=unused-argument
+    def mock_get_deposit_withdrawal(url, **kwargs):  # pylint: disable=unused-argument
         if 'deposit' in url:
             response_str = next(get_deposit_result)
         else:
@@ -691,12 +784,13 @@ def test_api_query_dict_calls_with_time_delta(function_scope_binance):
     get_withdraw_result = get_time_delta_withdraw_result()
 
     with patch.object(binance.session, 'get', side_effect=mock_get_deposit_withdrawal):
-        with patch.object(binance, 'api_query_dict') as mock_api_query_dict:
+        with patch.object(binance, 'api_query_list') as mock_api_query_list:
             binance.query_online_deposits_withdrawals(
                 start_ts=Timestamp(start_ts),
                 end_ts=Timestamp(end_ts),
             )
-            assert mock_api_query_dict.call_args_list == expected_calls
+            # TODO: Fix this test to deal with fiat deposits too
+            assert mock_api_query_list.call_args_list[:4] == expected_calls
 
 
 @pytest.mark.freeze_time(datetime(2020, 11, 24, 3, 14, 15))
@@ -728,7 +822,11 @@ def test_api_query_retry_on_status_code_429(function_scope_binance):
     exp_request_url = base_url + urlencode(call_options)
 
     # NB: all calls must have the same signature (time frozen)
-    expected_calls = [call(exp_request_url), call(exp_request_url), call(exp_request_url)]
+    expected_calls = [
+        call(exp_request_url, timeout=DEFAULT_TIMEOUT_TUPLE),
+        call(exp_request_url, timeout=DEFAULT_TIMEOUT_TUPLE),
+        call(exp_request_url, timeout=DEFAULT_TIMEOUT_TUPLE),
+    ]
 
     def get_mocked_response():
         responses = [
@@ -739,7 +837,7 @@ def test_api_query_retry_on_status_code_429(function_scope_binance):
         for response in responses:
             yield response
 
-    def mock_response(url):  # pylint: disable=unused-argument
+    def mock_response(url, timeout):  # pylint: disable=unused-argument
         return next(get_response)
 
     get_response = get_mocked_response()
@@ -761,3 +859,36 @@ def test_api_query_retry_on_status_code_429(function_scope_binance):
             )
     assert 'myTrades failed with HTTP status code: 418' in str(e.value)
     assert binance_mock_get.call_args_list == expected_calls
+
+
+def test_binance_query_trade_history_custom_markets(function_scope_binance, user_data_dir):
+    """Test that custom pairs are queried correctly"""
+    msg_aggregator = MessagesAggregator()
+    db = DBHandler(user_data_dir, '123', msg_aggregator, None)
+
+    binance_api_key = ApiKey('binance_api_key')
+    binance_api_secret = ApiSecret(b'binance_api_secret')
+    db.add_exchange('binance', Location.BINANCE, binance_api_key, binance_api_secret)
+
+    binance = function_scope_binance
+
+    markets = ['ETHBTC', 'BNBBTC', 'BTCUSDC']
+    binance.edit_exchange(name=None, api_key=None, api_secret=None, PAIRS=markets)
+    count = 0
+    p = re.compile(r'symbol=[A-Z]*')
+    seen = set()
+
+    def mock_my_trades(url, timeout):  # pylint: disable=unused-argument
+        nonlocal count
+        if '/fiat/payments' not in url:
+            count += 1
+            market = p.search(url).group()[7:]
+            assert market in markets and market not in seen
+            seen.add(market)
+        text = '[]'
+        return MockResponse(200, text)
+
+    with patch.object(binance.session, 'get', side_effect=mock_my_trades):
+        binance.query_trade_history(start_ts=0, end_ts=1564301134, only_cache=False)
+
+    assert count == len(markets)

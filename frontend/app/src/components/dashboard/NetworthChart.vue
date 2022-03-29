@@ -1,7 +1,12 @@
 <template>
   <div class="net-worth-chart__chart">
     <canvas id="net-worth-chart__chart" />
-    <div id="net-worth-chart__tooltip">
+    <div
+      id="net-worth-chart__tooltip"
+      :class="{
+        'theme--dark': $vuetify.theme.dark
+      }"
+    >
       <div
         class="net-worth-chart__tooltip__value font-weight-bold text-center"
       />
@@ -13,7 +18,12 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
+import {
+  TimeFramePeriod,
+  Timeframe,
+  Timeframes
+} from '@rotki/common/lib/settings/graphs';
 import {
   Chart,
   ChartConfiguration,
@@ -29,20 +39,11 @@ import {
   TimeScale,
   TimeUnit
 } from 'chart.js';
-
-import moment from 'moment';
+import dayjs from 'dayjs';
 import { Component, Prop, Vue, Watch } from 'vue-property-decorator';
-import { mapGetters } from 'vuex';
-import { Timeframe, Timeframes } from '@/components/dashboard/types';
-import { Currency } from '@/model/currency';
+import { mapGetters, mapState } from 'vuex';
 import { NetValue } from '@/services/types-api';
-import {
-  TIMEFRAME_ALL,
-  TIMEFRAME_MONTH,
-  TIMEFRAME_PERIOD,
-  TIMEFRAME_WEEK
-} from '@/store/settings/consts';
-import { TimeFramePeriod } from '@/store/settings/types';
+import { Currency } from '@/types/currency';
 import { assert } from '@/utils/assertions';
 import { bigNumberify } from '@/utils/bignumbers';
 
@@ -53,14 +54,15 @@ export interface ValueOverTime {
 
 @Component({
   computed: {
-    ...mapGetters('session', ['currency'])
+    ...mapGetters('session', ['currency']),
+    ...mapState('settings', ['graphZeroBased', 'nftsInNetValue'])
   }
 })
 export default class NetWorthChart extends Vue {
   @Prop({
     required: true,
     type: String,
-    validator: value => TIMEFRAME_PERIOD.includes(value)
+    validator: value => Object.values(TimeFramePeriod).includes(value)
   })
   timeframe!: TimeFramePeriod;
   @Prop({ required: true, type: Object })
@@ -69,6 +71,22 @@ export default class NetWorthChart extends Vue {
   chartData!: NetValue;
 
   currency!: Currency;
+  graphZeroBased!: boolean;
+  nftsInNetValue!: boolean;
+
+  get darkModeEnabled(): boolean {
+    return this.$vuetify.theme.dark;
+  }
+
+  @Watch('darkModeEnabled')
+  onDarkMode() {
+    this.setup();
+  }
+
+  @Watch('nftsInNetValue')
+  onIncludeNFTS() {
+    this.setup();
+  }
 
   chart: Chart | null = null;
   times: number[] = [];
@@ -171,10 +189,10 @@ export default class NetWorthChart extends Vue {
     };
 
     const displayFormats: TimeDisplayFormat = {
-      month: labelFormat(TIMEFRAME_ALL),
-      week: labelFormat(TIMEFRAME_MONTH),
-      day: labelFormat(TIMEFRAME_WEEK),
-      hour: labelFormat(TIMEFRAME_WEEK)
+      month: labelFormat(TimeFramePeriod.ALL),
+      week: labelFormat(TimeFramePeriod.MONTH),
+      day: labelFormat(TimeFramePeriod.WEEK),
+      hour: labelFormat(TimeFramePeriod.WEEK)
     };
 
     const time: TimeScale = {
@@ -190,7 +208,10 @@ export default class NetWorthChart extends Vue {
     };
 
     const yAxes: ChartYAxe = {
-      display: false
+      display: false,
+      ticks: {
+        beginAtZero: this.graphZeroBased
+      }
     };
 
     return {
@@ -200,7 +221,7 @@ export default class NetWorthChart extends Vue {
   }
 
   private tooltipOptions(): ChartTooltipOptions {
-    const symbol = () => this.currency.unicode_symbol;
+    const symbol = () => this.currency.unicodeSymbol;
 
     const setCaretPosition = (
       classList: DOMTokenList,
@@ -263,7 +284,7 @@ export default class NetWorthChart extends Vue {
         BigNumber.ROUND_DOWN
       );
 
-      const time = moment(item.label, 'MMM DD, YYYY, h:mm:ss a').format(
+      const time = dayjs(item.label).format(
         this.activeTimeframe.tooltipTimeFormat
       );
 
@@ -288,11 +309,13 @@ export default class NetWorthChart extends Vue {
   });
 
   private datasets(chartCanvas: CanvasRenderingContext2D): ChartDataSets[] {
-    const color = String(this.$vuetify.theme.currentTheme['rotki-light-blue']);
+    const theme = this.$vuetify.theme;
+    const color = theme.currentTheme['graph'] as string;
+    const secondaryColor = theme.currentTheme['graphFade'] as string;
 
     const areaGradient = chartCanvas.createLinearGradient(0, 0, 0, 160);
     areaGradient.addColorStop(0, color);
-    areaGradient.addColorStop(1, 'white');
+    areaGradient.addColorStop(1, secondaryColor);
 
     const dataset: ChartDataSets = {
       data: this.filteredData,
@@ -318,6 +341,13 @@ export default class NetWorthChart extends Vue {
   }
 
   mounted() {
+    this.setup();
+  }
+
+  private setup() {
+    if (this.chart) {
+      this.chart.destroy();
+    }
     Chart.defaults.global.defaultFontFamily = 'Roboto';
     this.clearData();
     this.chart = this.createChart();
@@ -332,6 +362,12 @@ export default class NetWorthChart extends Vue {
 }
 </script>
 <style scoped lang="scss">
+.theme {
+  &--dark {
+    color: black;
+  }
+}
+
 #net-worth-chart__tooltip {
   opacity: 0;
   background-color: white;

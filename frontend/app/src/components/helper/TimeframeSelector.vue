@@ -14,7 +14,7 @@
       <span v-text="$t('overall_balances.premium_hint')" />
     </v-tooltip>
     <v-chip
-      v-for="(timeframe, i) in timeframes"
+      v-for="(timeframe, i) in visibleTimeframes"
       :key="i"
       :class="activeClass(timeframe)"
       class="ma-2"
@@ -28,10 +28,13 @@
 </template>
 
 <script lang="ts">
+import {
+  TimeFramePersist,
+  TimeFrameSetting
+} from '@rotki/common/lib/settings/graphs';
 import { Component, Emit, Mixins, Prop } from 'vue-property-decorator';
 import PremiumMixin from '@/mixins/premium-mixin';
-import { TIMEFRAME_PERIOD, TIMEFRAME_REMEMBER } from '@/store/settings/consts';
-import { TimeFrameSetting } from '@/store/settings/types';
+
 import { isPeriodAllowed } from '@/store/settings/utils';
 
 @Component({})
@@ -40,25 +43,18 @@ export default class TimeframeSelector extends Mixins(PremiumMixin) {
   value!: TimeFrameSetting;
   @Prop({ required: false, type: Boolean, default: false })
   disabled!: boolean;
-  @Prop({ required: false, type: Boolean, default: false })
-  setting!: boolean;
+  @Prop({ required: true, type: Array })
+  visibleTimeframes!: TimeFrameSetting[];
 
   @Emit()
   input(_value: TimeFrameSetting) {}
 
   worksWithoutPremium(period: TimeFrameSetting): boolean {
-    return isPeriodAllowed(period) || period === TIMEFRAME_REMEMBER;
+    return isPeriodAllowed(period) || period === TimeFramePersist.REMEMBER;
   }
 
   activeClass(timeframePeriod: TimeFrameSetting): string {
     return timeframePeriod === this.value ? 'timeframe-selector--active' : '';
-  }
-
-  get timeframes() {
-    if (this.setting) {
-      return [TIMEFRAME_REMEMBER, ...TIMEFRAME_PERIOD] as const;
-    }
-    return TIMEFRAME_PERIOD;
   }
 }
 </script>

@@ -1,5 +1,6 @@
 import json
 import time
+from json.decoder import JSONDecodeError
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,7 @@ from hexbytes import HexBytes
 from rotkehlchen.chain.ethereum.utils import generate_address_via_create2
 from rotkehlchen.errors import ConversionError
 from rotkehlchen.fval import FVal
+from rotkehlchen.serialization.deserialize import deserialize_timestamp_from_date
 from rotkehlchen.serialization.serialize import process_result
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.utils.misc import (
@@ -19,7 +21,8 @@ from rotkehlchen.utils.misc import (
     iso8601ts_to_timestamp,
     timestamp_to_date,
 )
-from rotkehlchen.utils.mixins import CacheableMixIn, cache_response_timewise
+from rotkehlchen.utils.mixins.cacheable import CacheableMixIn, cache_response_timewise
+from rotkehlchen.utils.serialization import jsonloads_dict, jsonloads_list
 from rotkehlchen.utils.version_check import check_if_version_up_to_date
 
 
@@ -111,7 +114,7 @@ def test_combine_stat_dicts():
 
 
 def test_check_if_version_up_to_date():
-    def mock_github_return_current(url):  # pylint: disable=unused-argument
+    def mock_github_return_current(url, **kwargs):  # pylint: disable=unused-argument
         contents = '{"tag_name": "v1.4.0", "html_url": "https://foo"}'
         return MockResponse(200, contents)
     patch_github = patch('requests.get', side_effect=mock_github_return_current)
@@ -127,7 +130,7 @@ def test_check_if_version_up_to_date():
         result = check_if_version_up_to_date()
         assert result.download_url is None, 'Same version should return None as url'
 
-    def mock_github_return(url):  # pylint: disable=unused-argument
+    def mock_github_return(url, **kwargs):  # pylint: disable=unused-argument
         contents = '{"tag_name": "v99.99.99", "html_url": "https://foo"}'
         return MockResponse(200, contents)
 
@@ -139,7 +142,7 @@ def test_check_if_version_up_to_date():
     assert result.download_url == 'https://foo'
 
     # Also test that bad responses are handled gracefully
-    def mock_non_200_github_return(url):  # pylint: disable=unused-argument
+    def mock_non_200_github_return(url, **kwargs):  # pylint: disable=unused-argument
         contents = '{"tag_name": "v99.99.99", "html_url": "https://foo"}'
         return MockResponse(501, contents)
 
@@ -149,7 +152,7 @@ def test_check_if_version_up_to_date():
         assert not result.latest_version
         assert not result.latest_version
 
-    def mock_missing_fields_github_return(url):  # pylint: disable=unused-argument
+    def mock_missing_fields_github_return(url, **kwargs):  # pylint: disable=unused-argument
         contents = '{"html_url": "https://foo"}'
         return MockResponse(200, contents)
 
@@ -159,7 +162,7 @@ def test_check_if_version_up_to_date():
         assert not result.latest_version
         assert not result.latest_version
 
-    def mock_invalid_json_github_return(url):  # pylint: disable=unused-argument
+    def mock_invalid_json_github_return(url, **kwargs):  # pylint: disable=unused-argument
         contents = '{html_url: "https://foo"}'
         return MockResponse(200, contents)
 
@@ -336,3 +339,29 @@ def test_generate_address_via_create2(
 def test_timestamp_to_date():
     date = timestamp_to_date(1611395717, formatstr='%d/%m/%Y %H:%M:%S %Z')
     assert not date.endswith(' '), 'Make sure %Z empty string is removed'
+
+
+def test_deserialize_timestamp_from_date():
+    timestamp = deserialize_timestamp_from_date(
+        date='2020-10-06T20:46:48Z',  # failed in the past due to the trailing Z
+        formatstr='%Y-%m-%dT%H:%M:%S',
+        location='foo',
+        skip_milliseconds=True,
+    )
+    assert timestamp == 1602017208
+
+
+def test_jsonloads_dict():
+    result = jsonloads_dict('{"foo": 1, "boo": "value"}')
+    assert result == {'foo': 1, 'boo': 'value'}
+    with pytest.raises(JSONDecodeError) as e:
+        jsonloads_dict('["foo", "boo", 3]')
+    assert 'Returned json is not a dict' in str(e.value)
+
+
+def test_jsonloads_list():
+    result = jsonloads_list('["foo", "boo", 3]')
+    assert result == ["foo", "boo", 3]
+    with pytest.raises(JSONDecodeError) as e:
+        jsonloads_list('{"foo": 1, "boo": "value"}')
+    assert 'Returned json is not a list' in str(e.value)

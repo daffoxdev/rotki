@@ -72,7 +72,9 @@ def assert_balances_match(
         expect_found_price: bool = True,
 ) -> None:
     assert len(returned_balances) == len(expected_balances)
-    for idx, entry in enumerate(reversed(returned_balances)):
+    expected_balances.sort(key=lambda x: x['label'])
+    returned_balances.sort(key=lambda x: x['label'])
+    for idx, entry in enumerate(returned_balances):
         for key, val in entry.items():
             if key == 'usd_value':
                 if expect_found_price:
@@ -94,27 +96,51 @@ def assert_balances_match(
 def _populate_initial_balances(api_server) -> List[Dict[str, Any]]:
     # Now add some balances
     balances: List[Dict[str, Any]] = [{
-        "asset": "XMR",
-        "label": "My monero wallet",
-        "amount": "50.315",
-        "tags": ["public", "mInEr"],
-        "location": "blockchain",
+        'asset': 'XMR',
+        'label': 'My monero wallet',
+        'amount': '50.315',
+        'tags': ['public', 'mInEr'],
+        'location': 'blockchain',
+        'balance_type': 'asset',
     }, {
         "asset": "BTC",
         "label": "My XPUB BTC wallet",
         "amount": "1.425",
         "location": "blockchain",
+        'balance_type': 'asset',
     }, {
-        "asset": A_BNB.identifier,
-        "label": "My BNB in binance",
-        "amount": "155",
-        "location": "binance",
-        "tags": ["private"],
+        'asset': A_BNB.identifier,
+        'label': 'My BNB in binance',
+        'amount': '155',
+        'location': 'binance',
+        'tags': ['private'],
+        'balance_type': 'asset',
+    }, {
+        "asset": "ETH",
+        "label": "The ETH I owe to Siretfel. Must pay money or with my life",
+        "amount": "1",
+        'tags': ['private'],
+        "location": "blockchain",
+        'balance_type': 'liability',
+    }, {
+        "asset": "ETH",
+        "label": "ETH owed to the Finanzamt",
+        "amount": "1",
+        'tags': ['private'],
+        "location": "blockchain",
+        'balance_type': 'liability',
+    }, {
+        "asset": "USD",
+        "label": "My gambling debt",
+        "amount": "100",
+        'tags': None,
+        "location": "external",
+        'balance_type': 'liability',
     }]
     response = requests.put(
         api_url_for(
             api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json={'balances': balances},
     )
     result = assert_proper_response_with_result(response)
@@ -145,7 +171,6 @@ def test_add_and_query_manually_tracked_balances(
         result = outcome['result']
     else:
         result = assert_proper_response_with_result(response)
-
     assert result['balances'] == [], 'In the beginning we should have no entries'
 
     balances = _populate_initial_balances(rotkehlchen_api_server)
@@ -183,10 +208,17 @@ def test_add_and_query_manually_tracked_balances(
         else:
             result = assert_proper_response_with_result(response)
 
-    result = result['assets']
-    assert result['BTC']['amount'] == '1.425'
-    assert result['XMR']['amount'] == '50.315'
-    assert result[A_BNB.identifier]['amount'] == '155'
+    assets = result['assets']
+    assert len(assets) == 5
+    assert assets['BTC']['amount'] == '1.425'
+    assert assets['XMR']['amount'] == '50.315'
+    assert assets[A_BNB.identifier]['amount'] == '155'
+    assert assets['ETH']['amount'] == '3E-12'  # from ethereum on-chain balances
+    assert assets[A_RDN.identifier]['amount'] == '4E-12'  # from ethereum on-chain balances
+    liabilities = result['liabilities']
+    assert len(liabilities) == 2
+    assert liabilities['ETH']['amount'] == '2'
+    assert liabilities['USD']['amount'] == '100'
     # Check DB to make sure a save happened
     assert rotki.data.db.get_last_balance_save_time() >= now
     assert set(rotki.data.db.query_owned_assets()) == {
@@ -210,16 +242,17 @@ def test_add_manually_tracked_balances_no_price(rotkehlchen_api_server):
     async_query = random.choice([False, True])
     _populate_tags(rotkehlchen_api_server)
     balances: List[Dict[str, Any]] = [{
-        "asset": A_CYFM.identifier,
-        "label": "CYFM account",
-        "amount": "50.315",
-        "tags": ["public"],
-        "location": "blockchain",
+        'asset': A_CYFM.identifier,
+        'label': 'CYFM account',
+        'amount': '50.315',
+        'tags': ['public'],
+        'location': 'blockchain',
+        'balance_type': 'asset',
     }]
     response = requests.put(
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json={'async_query': async_query, 'balances': balances},
     )
     if async_query:
@@ -237,7 +270,7 @@ def test_add_manually_tracked_balances_no_price(rotkehlchen_api_server):
     response = requests.get(
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json={'async_query': async_query},
     )
     if async_query:
@@ -259,7 +292,7 @@ def test_edit_manually_tracked_balances(rotkehlchen_api_server):
     _populate_tags(rotkehlchen_api_server)
     balances = _populate_initial_balances(rotkehlchen_api_server)
 
-    balances_to_edit = balances[:-1]
+    balances_to_edit = balances[0:2]
     # Give only 2/3 balances for editing to make sure non-given balances are not touched
     balances_to_edit[0]['amount'] = '165.1'
     balances_to_edit[0]['location'] = 'kraken'
@@ -268,7 +301,7 @@ def test_edit_manually_tracked_balances(rotkehlchen_api_server):
     response = requests.patch(
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json={'async_query': async_query, 'balances': balances_to_edit},
     )
     if async_query:
@@ -277,6 +310,7 @@ def test_edit_manually_tracked_balances(rotkehlchen_api_server):
         result = outcome['result']
     else:
         result = assert_proper_response_with_result(response)
+
     expected_balances = balances_to_edit + balances[2:]
     assert_balances_match(
         expected_balances=expected_balances,
@@ -287,7 +321,7 @@ def test_edit_manually_tracked_balances(rotkehlchen_api_server):
     response = requests.get(
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json={'async_query': async_query},
     )
     if async_query:
@@ -328,12 +362,12 @@ def test_add_edit_manually_tracked_balances_errors(
         verb,
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json=[1, 2, 3],
     )
     assert_error_response(
         response=response,
-        contained_in_msg="Invalid input type",
+        contained_in_msg='Invalid input type',
         status_code=HTTPStatus.BAD_REQUEST,
     )
 
@@ -498,12 +532,12 @@ def test_add_edit_manually_tracked_balances_errors(
         verb,
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json=data,
     )
     assert_error_response(
         response=response,
-        contained_in_msg='Failed to deserialize location symbol from',
+        contained_in_msg='Failed to deserialize Location value from non string value',
         status_code=HTTPStatus.BAD_REQUEST,
     )
     # invalid location
@@ -513,12 +547,12 @@ def test_add_edit_manually_tracked_balances_errors(
         verb,
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json=data,
     )
     assert_error_response(
         response=response,
-        contained_in_msg='Failed to deserialize location symbol. Unknown symbol foo for location',
+        contained_in_msg='Failed to deserialize Location value foo',
         status_code=HTTPStatus.BAD_REQUEST,
     )
 
@@ -529,7 +563,7 @@ def test_add_edit_manually_tracked_balances_errors(
         verb,
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json=data,
     )
     assert_error_response(
@@ -544,7 +578,7 @@ def test_add_edit_manually_tracked_balances_errors(
         verb,
         api_url_for(
             rotkehlchen_api_server,
-            "manuallytrackedbalancesresource",
+            'manuallytrackedbalancesresource',
         ), json=data,
     )
     assert_error_response(
@@ -602,8 +636,11 @@ def test_delete_manually_tracked_balances(rotkehlchen_api_server):
     _populate_tags(rotkehlchen_api_server)
     balances = _populate_initial_balances(rotkehlchen_api_server)
 
-    labels_to_delete = ['My monero wallet', 'My BNB in binance']
-    expected_balances = balances[1:2]
+    labels_to_delete = [
+        'My monero wallet',
+        'The ETH I owe to Siretfel. Must pay money or with my life',
+    ]
+    expected_balances = [b for b in balances if b['label'] not in labels_to_delete]
     response = requests.delete(
         api_url_for(
             rotkehlchen_api_server,
@@ -616,7 +653,6 @@ def test_delete_manually_tracked_balances(rotkehlchen_api_server):
         result = outcome['result']
     else:
         result = assert_proper_response_with_result(response)
-    expected_balances = balances[1:2]
     assert_balances_match(
         expected_balances=expected_balances,
         returned_balances=result['balances'],

@@ -1,4 +1,4 @@
-# Rotki development proxy
+# rotki development proxy
 
 The proxy's purpose is to provide an easy way to develop the frontend in parallel
 with the backend, and provide an easy way to test the premium features.
@@ -22,6 +22,13 @@ You can configure the proxy, with the following environment variables:
 - `BACKEND` The url of the real backend. (Default: `http://localhost:4242`)
 - `PREMIUM_COMPONENT_DIR` The premium components directory. (Optional)
 
+> The premium components directory is needed only if you need to test the premium components themselves. 
+> Assuming that the premium-components repo is at the same parent folder as the application repository one would
+> have to add the following in the `.env` file.
+> 
+> `PREMIUM_COMPONENT_DIR=/home/user/path/premium-components/packages/premium-components`
+
+
 You can provide this configuration in a `.env` file in the `dev-proxy` directory.
 
 ## Starting the proxy
@@ -33,7 +40,7 @@ npm ci
 npm run serve
 ```
 
-## Setup Rotki
+## Setup rotki
 
 In order to use rotki with this development proxy you need to create a `.env.development.local`
 environment file. Put the file in the frontend directory of rotki. (`frontend/app`).
@@ -64,7 +71,8 @@ In order to build the bundle you need to go to the premium components directory 
 run the following.
 
 ```bash
-yarn build:bundle
+npm ci
+npm run build
 ```
 
 ## Mocking async queries

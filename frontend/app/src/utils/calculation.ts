@@ -1,5 +1,4 @@
-import { default as BigNumber } from 'bignumber.js';
-import { Balance } from '@/services/types-api';
+import { Balance, BigNumber } from '@rotki/common';
 import { Zero } from '@/utils/bignumbers';
 
 export function assetSum(balances: { [asset: string]: Balance }) {

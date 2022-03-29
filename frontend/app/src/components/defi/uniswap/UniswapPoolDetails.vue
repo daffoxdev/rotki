@@ -17,17 +17,9 @@
     </template>
     <card>
       <template #title>{{ $t('uniswap_pool_details.title') }}</template>
-      <v-row
-        v-for="token in balance.assets"
-        :key="getIdentifier(token.asset)"
-        align="center"
-      >
+      <v-row v-for="token in balance.assets" :key="token.asset" align="center">
         <v-col cols="auto">
-          <asset-icon
-            :identifier="getIdentifier(token.asset)"
-            size="24px"
-            class="mr-1"
-          />
+          <asset-icon :identifier="token.asset" size="24px" class="mr-1" />
         </v-col>
         <v-col>
           <v-row no-gutters>
@@ -37,7 +29,7 @@
             <v-col cols="auto">
               <amount-display
                 class="ps-4"
-                :asset="getIdentifier(token.asset)"
+                :asset="token.asset"
                 :value="token.totalAmount"
               />
             </v-col>
@@ -70,9 +62,9 @@
 </template>
 
 <script lang="ts">
+import { XswapBalance } from '@rotki/common/lib/defi/xswap';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
 import AssetMixin from '@/mixins/asset-mixin';
-import { UniswapBalance } from '@/store/defi/types';
 
 @Component({
   name: 'UniswapPoolDetails'
@@ -80,8 +72,6 @@ import { UniswapBalance } from '@/store/defi/types';
 export default class UniswapPoolDetails extends Mixins(AssetMixin) {
   details: boolean = false;
   @Prop({ required: true })
-  balance!: UniswapBalance;
+  balance!: XswapBalance;
 }
 </script>
-
-<style scoped lang="scss"></style>

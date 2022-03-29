@@ -1,8 +1,8 @@
-import { TaskMeta } from '@/model/task';
-import { TaskType } from '@/model/task-type';
-import { SupportedModules } from '@/services/session/types';
 import { PendingTask } from '@/services/types-api';
 import { Section } from '@/store/const';
+import { Module } from '@/types/modules';
+import { TaskMeta } from '@/types/task';
+import { TaskType } from '@/types/task-type';
 
 type GettersDefinition<S, G, RS, RG> = {
   [P in keyof G]: (
@@ -20,8 +20,8 @@ type OnError = {
   readonly error: (message: string) => string;
 };
 
-export interface FetchPayload<T extends TaskMeta> {
-  readonly module: SupportedModules;
+export interface FetchPayload<T extends TaskMeta, R> {
+  readonly module: Module;
   readonly section: Section;
   readonly refresh: boolean;
   readonly query: () => Promise<PendingTask>;
@@ -30,4 +30,5 @@ export interface FetchPayload<T extends TaskMeta> {
   readonly mutation: string;
   readonly checkPremium: boolean;
   readonly onError: OnError;
+  readonly parser?: (result: any) => R;
 }

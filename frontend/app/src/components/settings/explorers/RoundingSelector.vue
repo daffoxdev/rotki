@@ -27,7 +27,7 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
 import { Component, Vue } from 'vue-property-decorator';
 
 @Component({})
@@ -55,5 +55,3 @@ export default class RoundingSelector extends Vue {
   ];
 }
 </script>
-
-<style scoped lang="scss"></style>

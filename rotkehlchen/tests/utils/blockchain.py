@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import Any, Dict, List, Optional, Union
 from unittest.mock import patch
 
@@ -21,8 +20,6 @@ from rotkehlchen.tests.utils.eth_tokens import CONTRACT_ADDRESS_TO_TOKEN
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.typing import BTCAddress, ChecksumEthAddress
 from rotkehlchen.utils.misc import from_wei, satoshis_to_btc
-
-logger = logging.getLogger(__name__)
 
 
 def assert_btc_balances_result(
@@ -76,6 +73,7 @@ def assert_eth_balances_result(
         eth_balances: List[str],
         token_balances: Dict[EthereumToken, List[str]],
         also_btc: bool,
+        expected_liabilities: Dict[EthereumToken, List[str]] = None,
         totals_only: bool = False,
 ) -> None:
     """Asserts for correct ETH blockchain balances when mocked in tests
@@ -116,6 +114,17 @@ def assert_eth_balances_result(
         totals = result
     else:
         totals = result['totals']['assets']
+
+    if expected_liabilities is not None:
+        per_account = result['per_account']['ETH']
+        for token, balances in expected_liabilities.items():
+            total_amount = ZERO
+            for idx, account in enumerate(eth_accounts):
+                amount = FVal(per_account[account]['liabilities'][token.identifier]['amount'])
+                assert amount == FVal(balances[idx])
+                total_amount += amount
+
+            assert FVal(result['totals']['liabilities'][token.identifier]['amount']) == total_amount  # noqa: E501
 
     # Check our owned eth tokens here since the test may have changed their number
     owned_assets = set(rotki.chain_manager.totals.assets.keys())
@@ -312,12 +321,16 @@ def mock_etherscan_query(
             contract = web3.eth.contract(address=ETH_MULTICALL.address, abi=ETH_MULTICALL.abi)
             if 'b6456b57f03352be48bf101b46c1752a0813491a' in url:
                 multicall_purpose = 'adex_staking'
+            elif 'c2cb1040220768554cf699b0d863a3cd4324ce3' in url:
+                multicall_purpose = 'ds_proxy'
+            elif '2bdded18e2ca464355091266b7616956944ee7e' in url:
+                multicall_purpose = 'compound_balances'
             elif '5f3b5dfeb7b28cdbd7faba78963ee202a494e2a2' in url:
                 multicall_purpose = 'vecrv'
             else:
                 raise AssertionError('Unknown multicall in mocked tests')
             if 'data=0x252dba42' in url:  # aggregate
-                if multicall_purpose == 'adex_staking':
+                if multicall_purpose in ('adex_staking', 'ds_proxy', 'compound_balances'):
                     if 'adex_staking' in original_queries:
                         return original_requests_get(url, *args, **kwargs)
 

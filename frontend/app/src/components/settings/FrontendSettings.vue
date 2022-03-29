@@ -14,7 +14,39 @@
     <time-frame-settings
       :message="settingsMessages[TIMEFRAME]"
       :value="defaultGraphTimeframe"
+      :visible-timeframes="visibleTimeframes"
+      :current-session-timeframe="currentSessionTimeframe"
       @timeframe-change="onTimeframeChange"
+      @visible-timeframes-change="onVisibleTimeframesChange"
+    />
+
+    <div class="text-h6 mt-4">
+      {{ $t('frontend_settings.subtitle.graph_basis') }}
+    </div>
+
+    <v-switch
+      v-model="zeroBased"
+      class="general-settings__fields__zero-base mb-4"
+      :label="$t('frontend_settings.label.zero_based')"
+      :hint="$t('frontend_settings.label.zero_based_hint')"
+      persistent-hint
+      :success-messages="settingsMessages[GRAPH_ZERO_BASED].success"
+      :error-messages="settingsMessages[GRAPH_ZERO_BASED].error"
+      @change="onZeroBasedUpdate($event)"
+    />
+
+    <div class="text-h6 mt-4">
+      {{ $t('frontend_settings.subtitle.include_nfts') }}
+    </div>
+    <v-switch
+      v-model="includeNfts"
+      class="general-settings__fields__zero-base mb-4"
+      :label="$t('frontend_settings.label.include_nfts')"
+      :hint="$t('frontend_settings.label.include_nfts_hint')"
+      persistent-hint
+      :success-messages="settingsMessages[NFTS_IN_NET_VALUE].success"
+      :error-messages="settingsMessages[NFTS_IN_NET_VALUE].error"
+      @change="onIncludeNftChange($event)"
     />
 
     <div class="text-h6">
@@ -71,11 +103,19 @@
     </v-row>
 
     <explorers />
+    <theme-manager v-if="premium" />
+    <theme-manager-lock v-else />
   </setting-category>
 </template>
 
 <script lang="ts">
+import {
+  TimeFramePeriod,
+  TimeFrameSetting
+} from '@rotki/common/lib/settings/graphs';
 import { Component, Mixins } from 'vue-property-decorator';
+import { mapActions } from 'vuex';
+import ThemeManagerLock from '@/components/premium/ThemeManagerLock.vue';
 import Explorers from '@/components/settings/explorers/Explorers.vue';
 import TimeFrameSettings from '@/components/settings/general/TimeFrameSettings.vue';
 import SettingCategory from '@/components/settings/SettingCategory.vue';
@@ -84,53 +124,86 @@ import {
   makeMessage,
   settingsMessages
 } from '@/components/settings/utils';
+import { Constraints } from '@/data/constraints';
+import PremiumMixin from '@/mixins/premium-mixin';
 import SettingsMixin from '@/mixins/settings-mixin';
+import { ThemeManager } from '@/premium/premium';
 import { monitor } from '@/services/monitoring';
 import {
+  FrontendSettingsPayload,
+  GRAPH_ZERO_BASED,
+  NFTS_IN_NET_VALUE,
   QUERY_PERIOD,
   REFRESH_PERIOD,
-  TIMEFRAME_ALL,
-  TIMEFRAME_SETTING
-} from '@/store/settings/consts';
-import {
-  FrontendSettingsPayload,
-  TimeFrameSetting
-} from '@/store/settings/types';
+  TIMEFRAME_SETTING,
+  VISIBLE_TIMEFRAMES
+} from '@/types/frontend-settings';
 
 const SETTING_SCRAMBLE_DATA = 'scrambleData';
 const SETTING_TIMEFRAME = 'timeframe';
+const SETTING_VISIBLE_TIMEFRAMES = 'visibleTimeframes';
 const SETTING_QUERY_PERIOD = 'queryPeriod';
 const SETTING_REFRESH_PERIOD = 'refreshPeriod';
 
 const SETTINGS = [
   SETTING_SCRAMBLE_DATA,
   SETTING_TIMEFRAME,
+  SETTING_VISIBLE_TIMEFRAMES,
   SETTING_QUERY_PERIOD,
-  SETTING_REFRESH_PERIOD
+  SETTING_REFRESH_PERIOD,
+  GRAPH_ZERO_BASED,
+  NFTS_IN_NET_VALUE
 ] as const;
+
+const MAX_REFRESH_PERIOD = Constraints.MAX_MINUTES_DELAY;
 
 type SettingsEntries = typeof SETTINGS[number];
 
 @Component({
   components: {
+    ThemeManagerLock,
+    ThemeManager,
     Explorers,
     TimeFrameSettings,
     SettingCategory
+  },
+  methods: {
+    ...mapActions('statistics', ['fetchNetValue'])
   }
 })
 export default class FrontendSettings extends Mixins<
-  SettingsMixin<SettingsEntries>
->(SettingsMixin) {
+  SettingsMixin<SettingsEntries> & PremiumMixin
+>(SettingsMixin, PremiumMixin) {
   queryPeriod: string = '5';
   scrambleData: boolean = false;
-  defaultGraphTimeframe: TimeFrameSetting = TIMEFRAME_ALL;
+  defaultGraphTimeframe: TimeFrameSetting = TimeFramePeriod.ALL;
+  visibleTimeframes: TimeFrameSetting[] = [];
+  currentSessionTimeframe: TimeFramePeriod = TimeFramePeriod.ALL;
   refreshPeriod: string = '';
   refreshEnabled: boolean = false;
+  zeroBased: boolean = false;
+  includeNfts: boolean = true;
+  fetchNetValue!: () => Promise<void>;
 
   readonly SCRAMBLE_DATA = SETTING_SCRAMBLE_DATA;
   readonly TIMEFRAME = SETTING_TIMEFRAME;
   readonly QUERY_PERIOD = SETTING_QUERY_PERIOD;
   readonly REFRESH_PERIOD = SETTING_REFRESH_PERIOD;
+  readonly GRAPH_ZERO_BASED = GRAPH_ZERO_BASED;
+  readonly NFTS_IN_NET_VALUE = NFTS_IN_NET_VALUE;
+
+  async onZeroBasedUpdate(enabled: boolean) {
+    const payload: FrontendSettingsPayload = {
+      [GRAPH_ZERO_BASED]: enabled
+    };
+
+    const messages: BaseMessage = {
+      success: '',
+      error: ''
+    };
+
+    await this.modifyFrontendSetting(payload, GRAPH_ZERO_BASED, messages);
+  }
 
   async onTimeframeChange(timeframe: TimeFrameSetting) {
     const payload: FrontendSettingsPayload = {
@@ -155,6 +228,41 @@ export default class FrontendSettings extends Mixins<
     }
   }
 
+  async onVisibleTimeframesChange(timeframes: TimeFrameSetting[]) {
+    const payload: FrontendSettingsPayload = {
+      [VISIBLE_TIMEFRAMES]: timeframes
+    };
+
+    const messages: BaseMessage = {
+      success: '',
+      error: ''
+    };
+
+    const { success } = await this.modifyFrontendSetting(
+      payload,
+      SETTING_VISIBLE_TIMEFRAMES,
+      messages
+    );
+
+    if (success) {
+      this.visibleTimeframes = timeframes;
+    }
+  }
+
+  async onIncludeNftChange(include: boolean) {
+    const payload: FrontendSettingsPayload = {
+      [NFTS_IN_NET_VALUE]: include
+    };
+
+    const messages: BaseMessage = {
+      success: '',
+      error: ''
+    };
+
+    await this.modifyFrontendSetting(payload, NFTS_IN_NET_VALUE, messages);
+    await this.fetchNetValue();
+  }
+
   async onQueryPeriodChange(queryPeriod: string) {
     const period = parseInt(queryPeriod);
     if (period < 5 || period > 3600) {
@@ -165,13 +273,7 @@ export default class FrontendSettings extends Mixins<
           end: 3600
         }
       )}`;
-      this.validateSettingChange(
-        SETTING_QUERY_PERIOD,
-        'error',
-        `${this.$t('frontend_settings.validation.periodic_query.error', {
-          message
-        })}`
-      );
+      this.validateSettingChange(SETTING_QUERY_PERIOD, 'error', message);
       this.queryPeriod = this.$store.state.settings![QUERY_PERIOD].toString();
       return;
     }
@@ -206,7 +308,7 @@ export default class FrontendSettings extends Mixins<
     try {
       commit('session/scrambleData', enabled);
       success = true;
-    } catch (error) {
+    } catch (error: any) {
       this.scrambleData = previousValue;
       message = error.message;
     }
@@ -224,6 +326,21 @@ export default class FrontendSettings extends Mixins<
 
   async onRefreshPeriodChange(period: string) {
     const refreshPeriod = parseInt(period);
+    if (refreshPeriod > MAX_REFRESH_PERIOD) {
+      const message = `${this.$t(
+        'frontend_settings.validation.refresh_period.invalid_period',
+        {
+          start: 1,
+          end: MAX_REFRESH_PERIOD
+        }
+      )}`;
+
+      this.validateSettingChange(SETTING_REFRESH_PERIOD, 'error', message);
+      this.refreshPeriod =
+        this.$store.state.settings![REFRESH_PERIOD].toString();
+      return;
+    }
+
     const payload: FrontendSettingsPayload = {
       [REFRESH_PERIOD]: refreshPeriod
     };
@@ -248,7 +365,8 @@ export default class FrontendSettings extends Mixins<
       messages
     );
     if (success) {
-      this.refreshPeriod = refreshPeriod < 0 ? '' : period;
+      this.refreshPeriod = refreshPeriod > 0 ? period : '';
+      this.refreshEnabled = !!this.refreshPeriod;
       monitor.restart();
     }
   }
@@ -260,13 +378,15 @@ export default class FrontendSettings extends Mixins<
   mounted() {
     const state = this.$store.state;
     this.scrambleData = state.session.scrambleData;
+    this.currentSessionTimeframe = state.session.timeframe;
     this.defaultGraphTimeframe = state.settings![TIMEFRAME_SETTING];
+    this.visibleTimeframes = state.settings![VISIBLE_TIMEFRAMES];
     this.queryPeriod = state.settings![QUERY_PERIOD].toString();
     const period = state.settings![REFRESH_PERIOD];
+    this.zeroBased = state.settings![GRAPH_ZERO_BASED];
     this.refreshEnabled = period > 0;
     this.refreshPeriod = this.refreshEnabled ? period.toString() : '';
+    this.includeNfts = state.settings![NFTS_IN_NET_VALUE];
   }
 }
 </script>
-
-<style scoped lang="scss"></style>

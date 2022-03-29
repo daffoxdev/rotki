@@ -1,31 +1,30 @@
 import { currencies } from '@/data/currencies';
 import { Defaults } from '@/data/defaults';
-import { AccountingSettings, GeneralSettings } from '@/typing/types';
+import { AccountingSettings, GeneralSettings } from '@/types/user';
 
 export const defaultGeneralSettings = (): GeneralSettings => ({
-  floatingPrecision: Defaults.FLOATING_PRECISION,
-  anonymizedLogs: Defaults.ANONYMIZED_LOGS,
+  uiFloatingPrecision: Defaults.FLOATING_PRECISION,
   ethRpcEndpoint: Defaults.RPC_ENDPOINT,
   ksmRpcEndpoint: Defaults.KSM_RPC_ENDPOINT,
+  dotRpcEndpoint: Defaults.DOT_RPC_ENDPOINT,
   balanceSaveFrequency: Defaults.BALANCE_SAVE_FREQUENCY,
   dateDisplayFormat: Defaults.DEFAULT_DATE_DISPLAY_FORMAT,
-  thousandSeparator: Defaults.DEFAULT_THOUSAND_SEPARATOR,
-  decimalSeparator: Defaults.DEFAULT_DECIMAL_SEPARATOR,
-  currencyLocation: Defaults.DEFAULT_CURRENCY_LOCATION,
-  anonymousUsageAnalytics: Defaults.ANONYMOUS_USAGE_ANALYTICS,
-  selectedCurrency: currencies[0],
-  krakenAccountType: Defaults.KRAKEN_DEFAULT_ACCOUNT_TYPE,
+  submitUsageAnalytics: Defaults.ANONYMOUS_USAGE_ANALYTICS,
+  mainCurrency: currencies[0],
   activeModules: [],
   btcDerivationGapLimit: Defaults.BTC_DERIVATION_GAP_LIMIT,
   displayDateInLocaltime: Defaults.DISPLAY_DATE_IN_LOCALTIME,
   currentPriceOracles: [],
-  historicalPriceOracles: []
+  historicalPriceOracles: [],
+  ssf0graphMultiplier: 0
 });
 
 export const defaultAccountingSettings = (): AccountingSettings => ({
-  includeCrypto2Crypto: true,
+  pnlCsvHaveSummary: false,
+  pnlCsvWithFormulas: true,
+  includeCrypto2crypto: true,
   includeGasCosts: true,
-  taxFreeAfterPeriod: null,
+  taxfreeAfterPeriod: null,
   accountForAssetsMovements: true,
   calculatePastCostBasis: true,
   taxableLedgerActions: []

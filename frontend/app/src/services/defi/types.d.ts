@@ -1,11 +1,6 @@
-import { default as BigNumber } from 'bignumber.js';
-import {
-  AAVE_BORROWING_EVENTS,
-  AAVE_LENDING_EVENTS,
-  DEFI_PROTOCOLS
-} from '@/services/defi/consts';
+import { Balance, BigNumber } from '@rotki/common';
+import { AaveEventType } from '@rotki/common/lib/defi/aave';
 import { CompoundEventType } from '@/services/defi/types/compound';
-import { Balance } from '@/services/types-api';
 
 export type DSRMovementType = 'withdrawal' | 'deposit';
 export type MakerDAOVaultEventType =
@@ -15,15 +10,8 @@ export type MakerDAOVaultEventType =
   | 'payback'
   | 'liquidation';
 
-export type AaveBorrowingEventType = typeof AAVE_BORROWING_EVENTS[number];
-type AaveLendingEventType = typeof AAVE_LENDING_EVENTS[number];
-
-export type AaveEventType = AaveLendingEventType | AaveBorrowingEventType;
-
 export type CollateralAssetType = 'ETH' | 'BAT' | 'USDC' | 'WBTC';
 export type DefiBalanceType = 'Asset' | 'Debt';
-
-export type SupportedDefiProtocols = typeof DEFI_PROTOCOLS[number];
 
 export type EventType = DSRMovementType | AaveEventType | CompoundEventType;
 
@@ -39,11 +27,3 @@ export interface ApiMakerDAOVault {
   readonly liquidationPrice: BigNumber | null;
   readonly stabilityFee: string;
 }
-
-interface UnknownToken {
-  readonly ethereumAddress: string;
-  readonly name: string;
-  readonly symbol: string;
-}
-
-export type TokenDetails = UnknownToken | string;

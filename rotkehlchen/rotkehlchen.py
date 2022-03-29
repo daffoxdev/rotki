@@ -6,40 +6,38 @@ import os
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    DefaultDict,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Tuple, Union
 
 import gevent
 from typing_extensions import Literal
 
 from rotkehlchen.accounting.accountant import Accountant
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures import Balance, BalanceType
+from rotkehlchen.api.websockets.notifier import RotkiNotifier
+from rotkehlchen.api.websockets.typedefs import WSMessageType
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.balances.manual import account_for_manually_tracked_balances
+from rotkehlchen.balances.manual import (
+    account_for_manually_tracked_asset_balances,
+    get_manually_tracked_balances,
+)
+from rotkehlchen.chain.avalanche.manager import AvalancheManager
 from rotkehlchen.chain.ethereum.manager import (
     ETHEREUM_NODES_TO_CONNECT_AT_START,
     EthereumManager,
     NodeName,
 )
-from rotkehlchen.chain.ethereum.trades import AMMTRADE_LOCATION_NAMES, AMMTrade, AMMTradeLocations
 from rotkehlchen.chain.manager import BlockchainBalancesUpdate, ChainManager
 from rotkehlchen.chain.substrate.manager import SubstrateManager
 from rotkehlchen.chain.substrate.typing import SubstrateChain
-from rotkehlchen.chain.substrate.utils import KUSAMA_NODES_TO_CONNECT_AT_START
+from rotkehlchen.chain.substrate.utils import (
+    KUSAMA_NODES_TO_CONNECT_AT_START,
+    POLKADOT_NODES_TO_CONNECT_AT_START,
+)
 from rotkehlchen.config import default_data_directory
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.data.importer import DataImporter
 from rotkehlchen.data_handler import DataHandler
+from rotkehlchen.data_migrations.manager import DataMigrationManager
 from rotkehlchen.db.settings import DBSettings, ModifiableDBSettings
 from rotkehlchen.errors import (
     EthSyncError,
@@ -48,31 +46,24 @@ from rotkehlchen.errors import (
     RemoteError,
     SystemPermissionError,
 )
-from rotkehlchen.exchanges.data_structures import AssetMovement, Trade
-from rotkehlchen.exchanges.exchange import ExchangeInterface
 from rotkehlchen.exchanges.manager import ExchangeManager
 from rotkehlchen.externalapis.beaconchain import BeaconChain
 from rotkehlchen.externalapis.coingecko import Coingecko
+from rotkehlchen.externalapis.covalent import Covalent, chains_id
 from rotkehlchen.externalapis.cryptocompare import Cryptocompare
 from rotkehlchen.externalapis.etherscan import Etherscan
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb import GlobalDBHandler
 from rotkehlchen.globaldb.updates import AssetsUpdater
 from rotkehlchen.greenlets import GreenletManager
-from rotkehlchen.history.events import FREE_LEDGER_ACTIONS_LIMIT, EventsHistorian
+from rotkehlchen.history.events import EventsHistorian
 from rotkehlchen.history.price import PriceHistorian
 from rotkehlchen.history.typing import HistoricalPriceOracle
 from rotkehlchen.icons import IconManager
 from rotkehlchen.inquirer import Inquirer
-from rotkehlchen.logging import (
-    DEFAULT_ANONYMIZED_LOGS,
-    LoggingSettings,
-    RotkehlchenLogsAdapter,
-    configure_logging,
-)
+from rotkehlchen.logging import RotkehlchenLogsAdapter, configure_logging
 from rotkehlchen.premium.premium import Premium, PremiumCredentials, premium_create_and_verify
 from rotkehlchen.premium.sync import PremiumSyncManager
-from rotkehlchen.serialization.deserialize import deserialize_location
 from rotkehlchen.tasks.manager import DEFAULT_MAX_TASKS_NUM, TaskManager
 from rotkehlchen.typing import (
     ApiKey,
@@ -85,28 +76,20 @@ from rotkehlchen.typing import (
 )
 from rotkehlchen.usage_analytics import maybe_submit_usage_analytics
 from rotkehlchen.user_messages import MessagesAggregator
+from rotkehlchen.utils.misc import combine_dicts
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.bitcoin.xpub import XpubData
+    from rotkehlchen.exchanges.kraken import KrakenAccountType
 
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
 
 MAIN_LOOP_SECS_DELAY = 10
-FREE_TRADES_LIMIT = 250
-FREE_ASSET_MOVEMENTS_LIMIT = 100
-
-LIMITS_MAPPING = {
-    'trade': FREE_TRADES_LIMIT,
-    'asset_movement': FREE_ASSET_MOVEMENTS_LIMIT,
-    'ledger_action': FREE_LEDGER_ACTIONS_LIMIT,
-}
-
-ICONS_BATCH_SIZE = 5
-ICONS_QUERY_SLEEP = 10
 
 
-TRADES_LIST = List[Union[Trade, AMMTrade]]
+ICONS_BATCH_SIZE = 3
+ICONS_QUERY_SLEEP = 60
 
 
 class Rotkehlchen():
@@ -130,6 +113,7 @@ class Rotkehlchen():
             self.data_dir = default_data_directory()
         else:
             self.data_dir = Path(args.data_dir)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
 
         if not os.access(self.data_dir, os.W_OK | os.R_OK):
             raise SystemPermissionError(
@@ -140,12 +124,14 @@ class Rotkehlchen():
         self.api_task_greenlets: List[gevent.Greenlet] = []
         self.msg_aggregator = MessagesAggregator()
         self.greenlet_manager = GreenletManager(msg_aggregator=self.msg_aggregator)
+        self.rotki_notifier = RotkiNotifier(greenlet_manager=self.greenlet_manager)
+        self.msg_aggregator.rotki_notifier = self.rotki_notifier
         self.exchange_manager = ExchangeManager(msg_aggregator=self.msg_aggregator)
         # Initialize the GlobalDBHandler singleton. Has to be initialized BEFORE asset resolver
         GlobalDBHandler(data_dir=self.data_dir)
         self.data = DataHandler(self.data_dir, self.msg_aggregator)
         self.cryptocompare = Cryptocompare(data_directory=self.data_dir, database=None)
-        self.coingecko = Coingecko(data_directory=self.data_dir)
+        self.coingecko = Coingecko()
         self.icon_manager = IconManager(data_dir=self.data_dir, coingecko=self.coingecko)
         self.assets_updater = AssetsUpdater(self.msg_aggregator)
         # Initialize the Inquirer singleton
@@ -154,19 +140,14 @@ class Rotkehlchen():
             cryptocompare=self.cryptocompare,
             coingecko=self.coingecko,
         )
-        # Keeps how many trades we have found per location. Used for free user limiting
-        self.actions_per_location: Dict[str, Dict[Location, int]] = {
-            'trade': defaultdict(int),
-            'asset_movement': defaultdict(int),
-        }
         self.task_manager: Optional[TaskManager] = None
         self.shutdown_event = gevent.event.Event()
 
     def reset_after_failed_account_creation_or_login(self) -> None:
-        """If the account creation or login failed make sure that the Rotki instance is clear
+        """If the account creation or login failed make sure that the rotki instance is clear
 
         Tricky instances are when after either failed premium credentials or user refusal
-        to sync premium databases we relogged in.
+        to sync premium databases we relogged in
         """
         self.cryptocompare.db = None
 
@@ -178,6 +159,7 @@ class Rotkehlchen():
             sync_approval: Literal['yes', 'no', 'unknown'],
             premium_credentials: Optional[PremiumCredentials],
             initial_settings: Optional[ModifiableDBSettings] = None,
+            sync_database: bool = True,
     ) -> None:
         """Unlocks an existing user or creates a new one if `create_new` is True
 
@@ -194,12 +176,21 @@ class Rotkehlchen():
             user=user,
             create_new=create_new,
             sync_approval=sync_approval,
+            sync_database=sync_database,
             initial_settings=initial_settings,
         )
 
         # unlock or create the DB
         self.password = password
         self.user_directory = self.data.unlock(user, password, create_new, initial_settings)
+        # Run the DB integrity check due to https://github.com/rotki/rotki/issues/3010
+        # TODO: Hopefully onece 3010 is handled this can go away
+        self.greenlet_manager.spawn_and_track(
+            after_seconds=None,
+            task_name='user DB data integrity check',
+            exception_is_error=False,
+            method=self.data.db.ensure_data_integrity,
+        )
         self.data_importer = DataImporter(db=self.data.db)
         self.last_data_upload_ts = self.data.db.get_last_data_upload_ts()
         self.premium_sync_manager = PremiumSyncManager(data=self.data, password=password)
@@ -214,6 +205,7 @@ class Rotkehlchen():
                 username=user,
                 create_new=create_new,
                 sync_approval=sync_approval,
+                sync_database=sync_database,
             )
         except PremiumAuthenticationError:
             # Reraise it only if this is during the creation of a new account where
@@ -221,7 +213,7 @@ class Rotkehlchen():
             if create_new:
                 raise
             self.msg_aggregator.add_warning(
-                'Could not authenticate the Rotki premium API keys found in the DB.'
+                'Could not authenticate the rotki premium API keys found in the DB.'
                 ' Has your subscription expired?',
             )
             # else let's just continue. User signed in succesfully, but he just
@@ -233,6 +225,7 @@ class Rotkehlchen():
             task_name='submit_usage_analytics',
             exception_is_error=False,
             method=maybe_submit_usage_analytics,
+            data_dir=self.data_dir,
             should_submit=settings.submit_usage_analytics,
         )
         self.etherscan = Etherscan(database=self.data.db, msg_aggregator=self.msg_aggregator)
@@ -254,8 +247,6 @@ class Rotkehlchen():
             premium=self.premium,
         )
 
-        # Initialize the rotkehlchen logger
-        LoggingSettings(anonymized_logs=settings.anonymized_logs)
         exchange_credentials = self.data.db.get_exchange_credentials()
         self.exchange_manager.initialize_exchanges(
             exchange_credentials=exchange_credentials,
@@ -266,7 +257,6 @@ class Rotkehlchen():
         ethereum_manager = EthereumManager(
             ethrpc_endpoint=eth_rpc_endpoint,
             etherscan=self.etherscan,
-            database=self.data.db,
             msg_aggregator=self.msg_aggregator,
             greenlet_manager=self.greenlet_manager,
             connect_at_start=ETHEREUM_NODES_TO_CONNECT_AT_START,
@@ -279,6 +269,24 @@ class Rotkehlchen():
             connect_on_startup=self._connect_ksm_manager_on_startup(),
             own_rpc_endpoint=settings.ksm_rpc_endpoint,
         )
+        polkadot_manager = SubstrateManager(
+            chain=SubstrateChain.POLKADOT,
+            msg_aggregator=self.msg_aggregator,
+            greenlet_manager=self.greenlet_manager,
+            connect_at_start=POLKADOT_NODES_TO_CONNECT_AT_START,
+            connect_on_startup=self._connect_dot_manager_on_startup(),
+            own_rpc_endpoint=settings.dot_rpc_endpoint,
+        )
+        self.covalent_avalanche = Covalent(
+            database=self.data.db,
+            msg_aggregator=self.msg_aggregator,
+            chain_id=chains_id['avalanche'],
+        )
+        avalanche_manager = AvalancheManager(
+            avaxrpc_endpoint="https://api.avax.network/ext/bc/C/rpc",
+            covalent=self.covalent_avalanche,
+            msg_aggregator=self.msg_aggregator,
+        )
 
         Inquirer().inject_ethereum(ethereum_manager)
         Inquirer().set_oracles_order(settings.current_price_oracles)
@@ -287,6 +295,8 @@ class Rotkehlchen():
             blockchain_accounts=self.data.db.get_blockchain_accounts(),
             ethereum_manager=ethereum_manager,
             kusama_manager=kusama_manager,
+            polkadot_manager=polkadot_manager,
+            avalanche_manager=avalanche_manager,
             msg_aggregator=self.msg_aggregator,
             database=self.data.db,
             greenlet_manager=self.greenlet_manager,
@@ -313,6 +323,7 @@ class Rotkehlchen():
             chain_manager=self.chain_manager,
             exchange_manager=self.exchange_manager,
         )
+        DataMigrationManager(self).maybe_migrate_data()
         self.greenlet_manager.spawn_and_track(
             after_seconds=5,
             task_name='periodically_query_icons_until_all_cached',
@@ -324,7 +335,7 @@ class Rotkehlchen():
         self.user_is_logged_in = True
         log.debug('User unlocking complete')
 
-    def logout(self) -> None:
+    def _logout(self) -> None:
         if not self.user_is_logged_in:
             return
         user = self.data.username
@@ -337,9 +348,6 @@ class Rotkehlchen():
         self.greenlet_manager.clear()
         del self.chain_manager
         self.exchange_manager.delete_all_exchanges()
-
-        # Reset rotkehlchen logger to default
-        LoggingSettings(anonymized_logs=DEFAULT_ANONYMIZED_LOGS)
 
         del self.accountant
         del self.events_historian
@@ -360,9 +368,16 @@ class Rotkehlchen():
             user=user,
         )
 
+    def logout(self) -> None:
+        if self.task_manager is None:  # no user logged in?
+            return
+
+        with self.task_manager.schedule_lock:
+            self._logout()
+
     def set_premium_credentials(self, credentials: PremiumCredentials) -> None:
         """
-        Sets the premium credentials for Rotki
+        Sets the premium credentials for rotki
 
         Raises PremiumAuthenticationError if the given key is rejected by the Rotkehlchen server
         """
@@ -371,13 +386,22 @@ class Rotkehlchen():
             self.premium.set_credentials(credentials)
         else:
             self.premium = premium_create_and_verify(credentials)
-            self.premium_sync_manager.premium = self.premium
-            self.accountant.premium = self.premium
+
+        self.premium_sync_manager.premium = self.premium
+        self.accountant.activate_premium_status(self.premium)
+        self.chain_manager.activate_premium_status(self.premium)
 
         self.data.db.set_rotkehlchen_premium(credentials)
 
+    def deactivate_premium_status(self) -> None:
+        """Deactivate premium in the current session"""
+        self.premium = None
+        self.premium_sync_manager.premium = None
+        self.accountant.deactivate_premium_status()
+        self.chain_manager.deactivate_premium_status()
+
     def delete_premium_credentials(self) -> Tuple[bool, str]:
-        """Deletes the premium credentials for Rotki"""
+        """Deletes the premium credentials for rotki"""
         msg = ''
 
         success = self.data.db.del_rotkehlchen_premium()
@@ -386,13 +410,6 @@ class Rotkehlchen():
         self.deactivate_premium_status()
         return success, msg
 
-    def deactivate_premium_status(self) -> None:
-        """Deactivate premium in the current session"""
-        self.premium = None
-        self.premium_sync_manager.premium = None
-        self.chain_manager.deactivate_premium_status()
-        self.accountant.deactivate_premium_status()
-
     def start(self) -> gevent.Greenlet:
         assert not self.main_loop_spawned, 'Tried to spawn the main loop twice'
         greenlet = gevent.spawn(self.main_loop)
@@ -400,7 +417,7 @@ class Rotkehlchen():
         return greenlet
 
     def main_loop(self) -> None:
-        """Rotki main loop that fires often and runs the task manager's scheduler"""
+        """rotki main loop that fires often and runs the task manager's scheduler"""
         while self.shutdown_event.wait(timeout=MAIN_LOOP_SECS_DELAY) is not True:
             if self.task_manager is not None:
                 self.task_manager.schedule()
@@ -558,7 +575,7 @@ class Rotkehlchen():
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> Tuple[Dict[str, Any], str]:
+    ) -> Tuple[int, str]:
         (
             error_or_empty,
             history,
@@ -572,7 +589,7 @@ class Rotkehlchen():
             end_ts=end_ts,
             has_premium=self.premium is not None,
         )
-        result = self.accountant.process_history(
+        report_id = self.accountant.process_history(
             start_ts=start_ts,
             end_ts=end_ts,
             trade_history=history,
@@ -582,183 +599,12 @@ class Rotkehlchen():
             defi_events=defi_events,
             ledger_actions=ledger_actions,
         )
-        return result, error_or_empty
-
-    @overload
-    def _apply_actions_limit(
-            self,
-            location: Location,
-            action_type: Literal['trade'],
-            location_actions: TRADES_LIST,
-            all_actions: TRADES_LIST,
-    ) -> TRADES_LIST:
-        ...
-
-    @overload
-    def _apply_actions_limit(
-            self,
-            location: Location,
-            action_type: Literal['asset_movement'],
-            location_actions: List[AssetMovement],
-            all_actions: List[AssetMovement],
-    ) -> List[AssetMovement]:
-        ...
-
-    def _apply_actions_limit(
-            self,
-            location: Location,
-            action_type: Literal['trade', 'asset_movement'],
-            location_actions: Union[TRADES_LIST, List[AssetMovement]],
-            all_actions: Union[TRADES_LIST, List[AssetMovement]],
-    ) -> Union[TRADES_LIST, List[AssetMovement]]:
-        """Take as many actions from location actions and add them to all actions as the limit permits
-
-        Returns the modified (or not) all_actions
-        """
-        # If we are already at or above the limit return current actions disregarding this location
-        actions_mapping = self.actions_per_location[action_type]
-        current_num_actions = sum(x for _, x in actions_mapping.items())
-        limit = LIMITS_MAPPING[action_type]
-        if current_num_actions >= limit:
-            return all_actions
-
-        # Find out how many more actions can we return, and depending on that get
-        # the number of actions from the location actions and add them to the total
-        remaining_num_actions = limit - current_num_actions
-        if remaining_num_actions < 0:
-            remaining_num_actions = 0
-
-        num_actions_to_take = min(len(location_actions), remaining_num_actions)
-
-        actions_mapping[location] = num_actions_to_take
-        all_actions.extend(location_actions[0:num_actions_to_take])  # type: ignore
-        return all_actions
-
-    def query_trades(
-            self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Optional[Location],
-            only_cache: bool,
-    ) -> TRADES_LIST:
-        """Queries trades for the given location and time range.
-        If no location is given then all external, all exchange and DEX trades are queried.
-
-        If only_cache is given then only trades cached in the DB are returned.
-        No service is queried.
-
-        DEX Trades are queried only if the user has premium
-        If the user does not have premium then a trade limit is applied.
-
-        May raise:
-        - RemoteError: If there are problems connecting to any of the remote exchanges
-        """
-        trades: TRADES_LIST
-        if location is not None:
-            trades = self.query_location_trades(from_ts, to_ts, location, only_cache)
-        else:
-            trades = self.query_location_trades(from_ts, to_ts, Location.EXTERNAL, only_cache)
-            # crypto.com is not an API key supported exchange but user can import from CSV
-            trades.extend(self.query_location_trades(
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=Location.CRYPTOCOM,
-                only_cache=only_cache,
-            ))
-            for name, exchange in self.exchange_manager.connected_exchanges.items():
-                exchange_trades = exchange.query_trade_history(
-                    start_ts=from_ts,
-                    end_ts=to_ts,
-                    only_cache=only_cache,
-                )
-                if self.premium is None:
-                    trades = self._apply_actions_limit(
-                        location=deserialize_location(name),
-                        action_type='trade',
-                        location_actions=exchange_trades,
-                        all_actions=trades,
-                    )
-                else:
-                    trades.extend(exchange_trades)
-
-            # for all trades we also need the trades from the amm protocols
-            if self.premium is not None:
-                for amm_location in AMMTradeLocations:
-                    amm_module_name = cast(AMMTRADE_LOCATION_NAMES, str(amm_location))
-                    amm_module = self.chain_manager.get_module(amm_module_name)
-                    if amm_module is not None:
-                        trades.extend(
-                            amm_module.get_trades(
-                                addresses=self.chain_manager.queried_addresses_for_module(amm_module_name),  # noqa: E501
-                                from_timestamp=from_ts,
-                                to_timestamp=to_ts,
-                                only_cache=only_cache,
-                            ),
-                        )
-        # return trades with most recent first
-        trades.sort(key=lambda x: x.timestamp, reverse=True)
-        return trades
-
-    def query_location_trades(
-            self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Location,
-            only_cache: bool,
-    ) -> TRADES_LIST:
-        # clear the trades queried for this location
-        self.actions_per_location['trade'][location] = 0
-
-        location_trades: TRADES_LIST
-        if location in (Location.EXTERNAL, Location.CRYPTOCOM):
-            location_trades = self.data.db.get_trades(  # type: ignore  # list invariance
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=location,
-            )
-        elif location in AMMTradeLocations:
-            if self.premium is not None:
-                amm_module_name = cast(AMMTRADE_LOCATION_NAMES, str(location))
-                amm_module = self.chain_manager.get_module(amm_module_name)
-                if amm_module is not None:
-                    location_trades = amm_module.get_trades(  # type: ignore  # list invariance
-                        addresses=self.chain_manager.queried_addresses_for_module(amm_module_name),
-                        from_timestamp=from_ts,
-                        to_timestamp=to_ts,
-                        only_cache=only_cache,
-                    )
-        else:
-            # should only be an exchange
-            exchange = self.exchange_manager.get(str(location))
-            if not exchange:
-                logger.warning(
-                    f'Tried to query trades from {location} which is either not an '
-                    f'exchange or not an exchange the user has connected to',
-                )
-                return []
-
-            location_trades = exchange.query_trade_history(
-                start_ts=from_ts,
-                end_ts=to_ts,
-                only_cache=only_cache,
-            )
-
-        trades: TRADES_LIST = []
-        if self.premium is None:
-            trades = self._apply_actions_limit(
-                location=location,
-                action_type='trade',
-                location_actions=location_trades,
-                all_actions=trades,
-            )
-        else:
-            trades = location_trades
-
-        return trades
+        return report_id, error_or_empty
 
     def query_balances(
             self,
             requested_save_data: bool = False,
+            save_despite_errors: bool = False,
             timestamp: Timestamp = None,
             ignore_cache: bool = False,
     ) -> Dict[str, Any]:
@@ -767,6 +613,8 @@ class Rotkehlchen():
         If requested_save_data is True then the data are always saved in the DB,
         if it is False then data are saved if self.data.should_save_balances()
         is True.
+        If save_despite_errors is True then even if there is any error the snapshot
+        will be saved.
         If timestamp is None then the current timestamp is used.
         If a timestamp is given then that is the time that the balances are going
         to be saved in the DB
@@ -774,17 +622,32 @@ class Rotkehlchen():
 
         Returns a dictionary with the queried balances.
         """
-        log.info('query_balances called', requested_save_data=requested_save_data)
+        log.info(
+            'query_balances called',
+            requested_save_data=requested_save_data,
+            save_despite_errors=save_despite_errors,
+        )
 
         balances: Dict[str, Dict[Asset, Balance]] = {}
         problem_free = True
-        for _, exchange in self.exchange_manager.connected_exchanges.items():
-            exchange_balances, _ = exchange.query_balances(ignore_cache=ignore_cache)
+        for exchange in self.exchange_manager.iterate_exchanges():
+            exchange_balances, error_msg = exchange.query_balances(ignore_cache=ignore_cache)
             # If we got an error, disregard that exchange but make sure we don't save data
             if not isinstance(exchange_balances, dict):
                 problem_free = False
+                self.msg_aggregator.add_message(
+                    message_type=WSMessageType.BALANCE_SNAPSHOT_ERROR,
+                    data={'location': exchange.name, 'error': error_msg},
+                )
             else:
-                balances[exchange.name] = exchange_balances
+                location_str = str(exchange.location)
+                if location_str not in balances:
+                    balances[location_str] = exchange_balances
+                else:  # multiple exchange of same type. Combine balances
+                    balances[location_str] = combine_dicts(
+                        balances[location_str],
+                        exchange_balances,
+                    )
 
         liabilities: Dict[Asset, Balance]
         try:
@@ -800,14 +663,63 @@ class Rotkehlchen():
             problem_free = False
             liabilities = {}
             log.error(f'Querying blockchain balances failed due to: {str(e)}')
+            self.msg_aggregator.add_message(
+                message_type=WSMessageType.BALANCE_SNAPSHOT_ERROR,
+                data={'location': 'blockchain balances query', 'error': str(e)},
+            )
 
+        manually_tracked_liabilities = get_manually_tracked_balances(
+            db=self.data.db,
+            balance_type=BalanceType.LIABILITY,
+        )
+        manual_liabilities_as_dict: DefaultDict[Asset, Balance] = defaultdict(Balance)
+        for manual_liability in manually_tracked_liabilities:
+            manual_liabilities_as_dict[manual_liability.asset] += manual_liability.value
+
+        liabilities = combine_dicts(liabilities, manual_liabilities_as_dict)
         # retrieve loopring balances if module is activated
         if self.chain_manager.get_module('loopring'):
-            loopring_balances = self.chain_manager.get_loopring_balances()
-            if len(loopring_balances) != 0:
-                balances[str(Location.LOOPRING)] = loopring_balances
+            try:
+                loopring_balances = self.chain_manager.get_loopring_balances()
+            except RemoteError as e:
+                problem_free = False
+                self.msg_aggregator.add_message(
+                    message_type=WSMessageType.BALANCE_SNAPSHOT_ERROR,
+                    data={'location': 'loopring', 'error': str(e)},
+                )
+            else:
+                if len(loopring_balances) != 0:
+                    balances[str(Location.LOOPRING)] = loopring_balances
 
-        balances = account_for_manually_tracked_balances(db=self.data.db, balances=balances)
+        # retrieve nft balances if module is activated
+        nfts = self.chain_manager.get_module('nfts')
+        if nfts is not None:
+            try:
+                nft_mapping = nfts.get_balances(
+                    addresses=self.chain_manager.queried_addresses_for_module('nfts'),
+                    return_zero_values=False,
+                    ignore_cache=False,
+                )
+            except RemoteError as e:
+                problem_free = False
+                self.msg_aggregator.add_message(
+                    message_type=WSMessageType.BALANCE_SNAPSHOT_ERROR,
+                    data={'location': 'nfts', 'error': str(e)},
+                )
+            else:
+                if len(nft_mapping) != 0:
+                    if str(Location.BLOCKCHAIN) not in balances:
+                        balances[str(Location.BLOCKCHAIN)] = {}
+
+                    for _, nft_balances in nft_mapping.items():
+                        for balance_entry in nft_balances:
+                            balances[str(Location.BLOCKCHAIN)][Asset(
+                                balance_entry['id'])] = Balance(
+                                amount=FVal(1),
+                                usd_value=balance_entry['usd_price'],
+                            )
+
+        balances = account_for_manually_tracked_asset_balances(db=self.data.db, balances=balances)
 
         # Calculate usd totals
         assets_total_balance: DefaultDict[Asset, Balance] = defaultdict(Balance)
@@ -858,7 +770,7 @@ class Rotkehlchen():
         }
         allowed_to_save = requested_save_data or self.data.should_save_balances()
 
-        if problem_free and allowed_to_save:
+        if (problem_free or save_despite_errors) and allowed_to_save:
             if not timestamp:
                 timestamp = Timestamp(int(time.time()))
             self.data.db.save_balances_data(data=result_dict, timestamp=timestamp)
@@ -868,114 +780,10 @@ class Rotkehlchen():
                 'query_balances data not saved',
                 allowed_to_save=allowed_to_save,
                 problem_free=problem_free,
+                save_despite_errors=save_despite_errors,
             )
 
         return result_dict
-
-    def _query_exchange_asset_movements(
-            self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            all_movements: List[AssetMovement],
-            exchange: Union[ExchangeInterface, Location],
-            only_cache: bool,
-    ) -> List[AssetMovement]:
-        if isinstance(exchange, ExchangeInterface):
-            location = deserialize_location(exchange.name)
-            # clear the asset movements queried for this exchange
-            self.actions_per_location['asset_movement'][location] = 0
-            location_movements = exchange.query_deposits_withdrawals(
-                start_ts=from_ts,
-                end_ts=to_ts,
-                only_cache=only_cache,
-            )
-        else:
-            assert isinstance(exchange, Location), 'only a location should make it here'
-            assert exchange == Location.CRYPTOCOM, 'only cryptocom should make it here'
-            location = exchange
-            # cryptocom has no exchange integration but we may have DB entries
-            self.actions_per_location['asset_movement'][location] = 0
-            location_movements = self.data.db.get_asset_movements(
-                from_ts=from_ts,
-                to_ts=to_ts,
-                location=location,
-            )
-
-        movements: List[AssetMovement] = []
-        if self.premium is None:
-            movements = self._apply_actions_limit(
-                location=location,
-                action_type='asset_movement',
-                location_actions=location_movements,
-                all_actions=all_movements,
-            )
-        else:
-            all_movements.extend(location_movements)
-            movements = all_movements
-
-        return movements
-
-    def query_asset_movements(
-            self,
-            from_ts: Timestamp,
-            to_ts: Timestamp,
-            location: Optional[Location],
-            only_cache: bool,
-    ) -> List[AssetMovement]:
-        """Queries AssetMovements for the given location and time range.
-
-        If no location is given then all exchange asset movements are queried.
-        If only_cache is True then only what is already in the DB is returned.
-        If the user does not have premium then a limit is applied.
-        May raise:
-        - RemoteError: If there are problems connecting to any of the remote exchanges
-        """
-        movements: List[AssetMovement] = []
-        if location is not None:
-            if location == Location.CRYPTOCOM:
-                movements = self._query_exchange_asset_movements(
-                    from_ts=from_ts,
-                    to_ts=to_ts,
-                    all_movements=movements,
-                    exchange=Location.CRYPTOCOM,
-                    only_cache=only_cache,
-                )
-            else:
-                exchange = self.exchange_manager.get(str(location))
-                if not exchange:
-                    logger.warning(
-                        f'Tried to query deposits/withdrawals from {location} which is either '
-                        f'not at exchange or not an exchange the user has connected to',
-                    )
-                    return []
-                movements = self._query_exchange_asset_movements(
-                    from_ts=from_ts,
-                    to_ts=to_ts,
-                    all_movements=movements,
-                    exchange=exchange,
-                    only_cache=only_cache,
-                )
-        else:
-            # cryptocom has no exchange integration but we may have DB entries due to csv import
-            movements = self._query_exchange_asset_movements(
-                from_ts=from_ts,
-                to_ts=to_ts,
-                all_movements=movements,
-                exchange=Location.CRYPTOCOM,
-                only_cache=only_cache,
-            )
-            for _, exchange in self.exchange_manager.connected_exchanges.items():
-                self._query_exchange_asset_movements(
-                    from_ts=from_ts,
-                    to_ts=to_ts,
-                    all_movements=movements,
-                    exchange=exchange,
-                    only_cache=only_cache,
-                )
-
-        # return movements with most recent first
-        movements.sort(key=lambda x: x.timestamp, reverse=True)
-        return movements
 
     def set_settings(self, settings: ModifiableDBSettings) -> Tuple[bool, str]:
         """Tries to set new settings. Returns True in success or False with message if error"""
@@ -989,10 +797,10 @@ class Rotkehlchen():
             if not result:
                 return False, msg
 
-        if settings.kraken_account_type is not None:
-            kraken = self.exchange_manager.get('kraken')
-            if kraken:
-                kraken.set_account_type(settings.kraken_account_type)  # type: ignore
+        if settings.dot_rpc_endpoint is not None:
+            result, msg = self.chain_manager.set_dot_rpc_endpoint(settings.dot_rpc_endpoint)
+            if not result:
+                return False, msg
 
         if settings.btc_derivation_gap_limit is not None:
             self.chain_manager.btc_derivation_gap_limit = settings.btc_derivation_gap_limit
@@ -1016,34 +824,52 @@ class Rotkehlchen():
     def setup_exchange(
             self,
             name: str,
+            location: Location,
             api_key: ApiKey,
             api_secret: ApiSecret,
             passphrase: Optional[str] = None,
+            kraken_account_type: Optional['KrakenAccountType'] = None,
+            PAIRS: Optional[List[str]] = None,  # noqa: N803
+            ftx_subaccount: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """
         Setup a new exchange with an api key and an api secret and optionally a passphrase
         """
         is_success, msg = self.exchange_manager.setup_exchange(
             name=name,
+            location=location,
             api_key=api_key,
             api_secret=api_secret,
             database=self.data.db,
             passphrase=passphrase,
+            ftx_subaccount=ftx_subaccount,
+            PAIRS=PAIRS,
         )
 
         if is_success:
             # Success, save the result in the DB
-            self.data.db.add_exchange(name, api_key, api_secret, passphrase=passphrase)
+            self.data.db.add_exchange(
+                name=name,
+                location=location,
+                api_key=api_key,
+                api_secret=api_secret,
+                passphrase=passphrase,
+                kraken_account_type=kraken_account_type,
+                PAIRS=PAIRS,
+                ftx_subaccount=ftx_subaccount,
+            )
         return is_success, msg
 
-    def remove_exchange(self, name: str) -> Tuple[bool, str]:
-        if not self.exchange_manager.has_exchange(name):
-            return False, 'Exchange {} is not registered'.format(name)
+    def remove_exchange(self, name: str, location: Location) -> Tuple[bool, str]:
+        if self.exchange_manager.get_exchange(name=name, location=location) is None:
+            return False, f'{str(location)} exchange {name} is not registered'
 
-        self.exchange_manager.delete_exchange(name)
+        self.exchange_manager.delete_exchange(name=name, location=location)
         # Success, remove it also from the DB
-        self.data.db.remove_exchange(name)
-        self.data.db.delete_used_query_range_for_exchange(name)
+        self.data.db.remove_exchange(name=name, location=location)
+        if self.exchange_manager.connected_exchanges.get(location) is None:
+            # was last exchange of the location type. Delete used query ranges
+            self.data.db.delete_used_query_range_for_exchange(location)
         return True, ''
 
     def query_periodic_data(self) -> Dict[str, Union[bool, Timestamp]]:
@@ -1062,6 +888,9 @@ class Rotkehlchen():
 
     def _connect_ksm_manager_on_startup(self) -> bool:
         return bool(self.data.db.get_blockchain_accounts().ksm)
+
+    def _connect_dot_manager_on_startup(self) -> bool:
+        return bool(self.data.db.get_blockchain_accounts().dot)
 
     def create_oracle_cache(
             self,

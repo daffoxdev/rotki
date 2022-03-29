@@ -1,4 +1,3 @@
-from enum import Enum
 from sqlite3 import Cursor
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
 
@@ -7,8 +6,8 @@ from typing_extensions import Literal
 
 from rotkehlchen.accounting.structures import BalanceType
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.chain.substrate.typing import KusamaAddress
-from rotkehlchen.chain.substrate.utils import is_valid_kusama_address
+from rotkehlchen.chain.substrate.typing import KusamaAddress, PolkadotAddress
+from rotkehlchen.chain.substrate.utils import is_valid_kusama_address, is_valid_polkadot_address
 from rotkehlchen.typing import (
     BlockchainAccountData,
     BTCAddress,
@@ -21,14 +20,16 @@ from rotkehlchen.typing import (
 from rotkehlchen.utils.misc import rgetattr
 
 if TYPE_CHECKING:
-    from rotkehlchen.chain.bitcoin.xpub import XpubData
     from rotkehlchen.balances.manual import ManuallyTrackedBalance
+    from rotkehlchen.chain.bitcoin.xpub import XpubData
 
 
 class BlockchainAccounts(NamedTuple):
     eth: List[ChecksumEthAddress]
     btc: List[BTCAddress]
     ksm: List[KusamaAddress]
+    dot: List[PolkadotAddress]
+    avax: List[ChecksumEthAddress]
 
     def get(self, blockchain: SupportedBlockchain) -> ListOfBlockchainAddresses:
         if blockchain == SupportedBlockchain.BITCOIN:
@@ -37,6 +38,11 @@ class BlockchainAccounts(NamedTuple):
             return self.eth
         if blockchain == SupportedBlockchain.KUSAMA:
             return self.ksm
+        if blockchain == SupportedBlockchain.POLKADOT:
+            return self.dot
+        if blockchain == SupportedBlockchain.AVALANCHE:
+            return self.avax
+
         raise AssertionError(f'Unsupported blockchain: {blockchain}')
 
 
@@ -69,12 +75,6 @@ class Tag(NamedTuple):
 
     def serialize(self) -> Dict[str, str]:
         return self._asdict()  # pylint: disable=no-member
-
-
-class DBStartupAction(Enum):
-    NOTHING = 1
-    UPGRADE_3_4 = 2
-    STUCK_4_3 = 3
 
 
 def str_to_bool(s: str) -> bool:
@@ -150,13 +150,14 @@ def is_valid_db_blockchain_account(
         blockchain: str,
         account: str,
 ) -> bool:
-    """Validates a blockchain address already stored in DB.
-    """
+    """Validates a blockchain address already stored in DB."""
     if blockchain == SupportedBlockchain.BITCOIN.value:
         return True
-    if blockchain == SupportedBlockchain.ETHEREUM.value:
+    if blockchain in (SupportedBlockchain.ETHEREUM.value, SupportedBlockchain.AVALANCHE.value):
         return is_checksum_address(account)
     if blockchain == SupportedBlockchain.KUSAMA.value:
         return is_valid_kusama_address(account)
+    if blockchain == SupportedBlockchain.POLKADOT.value:
+        return is_valid_polkadot_address(account)
 
     raise AssertionError(f'Unknown blockchain: {blockchain}')

@@ -1,14 +1,13 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from eth_typing import HexAddress, HexStr
 
 from rotkehlchen.accounting.structures import Balance
-from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.fval import FVal
-from rotkehlchen.typing import ChecksumEthAddress, Timestamp
+from rotkehlchen.typing import ChecksumEthAddress, Eth2PubKey, Timestamp
 from rotkehlchen.utils.misc import from_gwei
 
 
@@ -84,8 +83,12 @@ class NodeName(Enum):
 # Ethereum 2 stuff. Perhaps on its own file at some point?
 class ValidatorID(NamedTuple):
     # not using index due to : https://github.com/python/mypy/issues/9043
-    validator_index: Optional[int]  # may be null if the index is not yet determined
-    public_key: str
+    index: Optional[int]  # type: ignore  # may be null if the index is not yet determined
+    public_key: Eth2PubKey
+    ownership_proportion: FVal
+
+    def __hash__(self) -> int:
+        return hash(self.public_key)
 
 
 ValidatorDailyStatsDBTuple = Tuple[
@@ -108,7 +111,8 @@ ValidatorDailyStatsDBTuple = Tuple[
 ]
 
 
-class ValidatorDailyStats(NamedTuple):
+@dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
+class ValidatorDailyStats:
     validator_index: int  # keeping the index here so it can be shown in accounting
     timestamp: Timestamp
     start_usd_price: FVal = ZERO
@@ -201,6 +205,7 @@ class ValidatorDailyStats(NamedTuple):
 
     def serialize(self) -> Dict[str, Any]:
         return {
+            'validator_index': self.validator_index,
             'timestamp': self.timestamp,
             'pnl': self.pnl_balance.serialize(),
             'start_balance': self.start_balance.serialize(),
@@ -253,15 +258,14 @@ DEPOSITING_VALIDATOR_PERFORMANCE = ValidatorPerformance(
 
 Eth2DepositDBTuple = (
     Tuple[
-        str,  # tx_hash
-        int,  # log_index
-        str,  # from_address
-        int,  # timestamp
-        str,  # pubkey
-        str,  # withdrawal_credentials
-        str,  # amount
-        str,  # usd_value
-        int,  # validator_index
+        bytes,  # tx_hash
+        int,    # tx_index
+        str,    # from_address
+        int,    # timestamp
+        str,    # pubkey
+        str,    # withdrawal_credentials
+        str,    # amount
+        str,    # usd_value
     ]
 )
 
@@ -271,7 +275,6 @@ class ValidatorDetails(NamedTuple):
     public_key: str
     eth1_depositor: ChecksumEthAddress
     performance: ValidatorPerformance
-    daily_stats: List['ValidatorDailyStats']
 
     def serialize(self, eth_usd_price: FVal) -> Dict[str, Any]:
         return {
@@ -279,7 +282,6 @@ class ValidatorDetails(NamedTuple):
             'public_key': self.public_key,
             'eth1_depositor': self.eth1_depositor,
             **self.performance.serialize(eth_usd_price),
-            'daily_stats': [x.serialize() for x in self.daily_stats],
         }
 
 
@@ -288,10 +290,15 @@ class Eth2Deposit(NamedTuple):
     pubkey: str  # hexstring
     withdrawal_credentials: str  # hexstring
     value: Balance
-    deposit_index: int  # the deposit index -- not the same as the validator index
-    tx_hash: str  # the transaction hash
-    log_index: int
+    tx_hash: bytes  # the transaction hash in bytes
+    tx_index: int
     timestamp: Timestamp
+
+    def serialize(self) -> Dict[str, Any]:
+        result = self._asdict()  # pylint: disable=no-member
+        result['tx_hash'] = '0x' + self.tx_hash.hex()
+        result['value'] = self.value.serialize()
+        return result
 
     @classmethod
     def deserialize_from_db(
@@ -303,185 +310,33 @@ class Eth2Deposit(NamedTuple):
         Deposit_tuple index - Schema columns
         ------------------------------------
         0 - tx_hash
-        1 - log_index
+        1 - tx_index
         2 - from_address
         3 - timestamp
         4 - pubkey
         5 - withdrawal_credentials
         6 - amount
         7 - usd_value
-        8 - deposit_index
         """
         return cls(
             tx_hash=deposit_tuple[0],
-            log_index=int(deposit_tuple[1]),
+            tx_index=int(deposit_tuple[1]),
             from_address=string_to_ethereum_address(deposit_tuple[2]),
             timestamp=Timestamp(int(deposit_tuple[3])),
             pubkey=deposit_tuple[4],
             withdrawal_credentials=deposit_tuple[5],
             value=Balance(amount=FVal(deposit_tuple[6]), usd_value=FVal(deposit_tuple[7])),
-            deposit_index=int(deposit_tuple[8]),
         )
 
     def to_db_tuple(self) -> Eth2DepositDBTuple:
         """Turns the instance data into a tuple to be inserted in the DB"""
         return (
             self.tx_hash,
-            self.log_index,
+            self.tx_index,
             str(self.from_address),
             int(self.timestamp),
             self.pubkey,
             self.withdrawal_credentials,
             str(self.value.amount),
             str(self.value.usd_value),
-            self.deposit_index,
-        )
-
-
-UnderlyingTokenDBTuple = Tuple[str, str]
-
-
-class UnderlyingToken(NamedTuple):
-    """Represents an underlying token of a token
-
-    Is used for pool tokens, tokensets etc.
-    """
-    address: ChecksumEthAddress
-    weight: FVal  # Floating percentage from 0 to 1
-
-    def serialize(self) -> Dict[str, Any]:
-        return {'address': self.address, 'weight': str(self.weight * 100)}
-
-    @classmethod
-    def deserialize_from_db(cls, entry: UnderlyingTokenDBTuple) -> 'UnderlyingToken':
-        return UnderlyingToken(
-            address=string_to_ethereum_address(entry[0]),
-            weight=FVal(entry[1]),
-        )
-
-
-CustomEthereumTokenDBTuple = Tuple[
-    str,                  # address
-    Optional[int],        # decimals
-    Optional[str],        # name
-    Optional[str],        # symbol
-    Optional[int],        # started
-    Optional[str],        # swapped_for
-    Optional[str],        # coingecko
-    Optional[str],        # cryptocompare
-    Optional[str],        # protocol
-]
-
-CustomEthereumTokenWithIdentifierDBTuple = Tuple[
-    str,                  # identifier
-    str,                  # address
-    Optional[int],        # decimals
-    Optional[str],        # name
-    Optional[str],        # symbol
-    Optional[int],        # started
-    Optional[str],        # swapped_for
-    Optional[str],        # coingecko
-    Optional[str],        # cryptocompare
-    Optional[str],        # protocol
-]
-
-
-@dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
-class CustomEthereumToken:
-    address: ChecksumEthAddress
-    decimals: Optional[int] = None
-    name: Optional[str] = None
-    symbol: Optional[str] = None
-    started: Optional[Timestamp] = None
-    swapped_for: Optional[Asset] = None
-    coingecko: Optional[str] = None
-    cryptocompare: Optional[str] = None
-    protocol: Optional[str] = None
-    underlying_tokens: Optional[List[UnderlyingToken]] = None
-
-    def missing_basic_data(self) -> bool:
-        return self.name is None or self.symbol is None or self.decimals is None
-
-    def serialize(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
-            'address': self.address,
-            'decimals': self.decimals,
-            'name': self.name,
-            'symbol': self.symbol,
-            'started': self.started,
-            'swapped_for': self.swapped_for.identifier if self.swapped_for else None,
-            'coingecko': self.coingecko,
-            'cryptocompare': self.cryptocompare,
-            'protocol': self.protocol,
-            'underlying_tokens': None,
-        }
-        if self.underlying_tokens:
-            result['underlying_tokens'] = [x.serialize() for x in self.underlying_tokens]
-
-        return result
-
-
-# Not using inheritance here due to problems with:
-# Having to make identifier optional and some mypy warnings for incompatible overrides
-# https://mypy.readthedocs.io/en/stable/common_issues.html#incompatible-overrides
-@dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
-class CustomEthereumTokenWithIdentifier():
-
-    identifier: str
-    address: ChecksumEthAddress
-    decimals: Optional[int] = None
-    name: Optional[str] = None
-    symbol: Optional[str] = None
-    started: Optional[Timestamp] = None
-    swapped_for: Optional[Asset] = None
-    coingecko: Optional[str] = None
-    cryptocompare: Optional[str] = None
-    protocol: Optional[str] = None
-    underlying_tokens: Optional[List[UnderlyingToken]] = None
-
-    def missing_basic_data(self) -> bool:
-        return self.name is None or self.symbol is None or self.decimals is None
-
-    def serialize(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
-            'identifier': self.identifier,
-            'address': self.address,
-            'decimals': self.decimals,
-            'name': self.name,
-            'symbol': self.symbol,
-            'started': self.started,
-            'swapped_for': self.swapped_for.identifier if self.swapped_for else None,
-            'coingecko': self.coingecko,
-            'cryptocompare': self.cryptocompare,
-            'protocol': self.protocol,
-            'underlying_tokens': None,
-        }
-        if self.underlying_tokens:
-            result['underlying_tokens'] = [x.serialize() for x in self.underlying_tokens]
-
-        return result
-
-    @classmethod
-    def deserialize_from_db(
-            cls,
-            entry: CustomEthereumTokenWithIdentifierDBTuple,
-            underlying_tokens: Optional[List[UnderlyingToken]] = None,
-    ) -> 'CustomEthereumTokenWithIdentifier':
-        """May raise UnknownAsset if the swapped for asset can't be recognized
-
-        That error would be bad because it would mean somehow an unknown id made it into the DB
-        """
-        swapped_for = Asset(entry[6]) if entry[6] is not None else None
-        return CustomEthereumTokenWithIdentifier(
-            identifier=entry[0],
-            address=string_to_ethereum_address(entry[1]),
-            decimals=entry[2],
-            name=entry[3],
-            symbol=entry[4],
-            started=Timestamp(entry[5]),  # type: ignore
-            swapped_for=swapped_for,
-            coingecko=entry[7],
-            cryptocompare=entry[8],
-            protocol=entry[9],
-            underlying_tokens=underlying_tokens,
         )

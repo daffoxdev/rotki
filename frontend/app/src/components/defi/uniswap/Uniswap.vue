@@ -1,5 +1,5 @@
 <template>
-  <module-not-active v-if="!isUniswapEnabled" :modules="[MODULE_UNISWAP]" />
+  <module-not-active v-if="!isEnabled" :modules="modules" />
   <progress-screen v-else-if="loading">
     <template #message>
       {{ $t('uniswap.loading') }}
@@ -13,12 +13,17 @@
       </i18n>
     </template>
   </progress-screen>
-  <v-container v-else class="uniswap">
+  <div v-else class="uniswap">
     <refresh-header
       :title="$t('uniswap.title')"
+      class="mt-4"
       :loading="anyRefreshing"
       @refresh="refresh()"
-    />
+    >
+      <template #actions>
+        <active-modules :modules="modules" />
+      </template>
+    </refresh-header>
     <v-row class="mt-4">
       <v-col>
         <blockchain-account-selector
@@ -32,33 +37,30 @@
         <uniswap-pool-filter v-model="selectedPools" />
       </v-col>
     </v-row>
-    <v-row class="mt-4">
-      <v-col
-        v-for="entry in balances"
-        :key="entry.poolAddress"
-        cols="12"
-        sm="6"
-        lg="6"
-        xl="4"
-      >
+    <paginated-cards
+      :identifier="item => item.address"
+      :items="balances"
+      class="mt-4"
+    >
+      <template #item="{ item }">
         <card>
           <template #title>
             {{
               $t('uniswap.pool_header', {
-                asset1: getSymbol(entry.assets[0].asset),
-                asset2: getSymbol(entry.assets[1].asset)
+                asset1: getSymbol(item.assets[0].asset),
+                asset2: getSymbol(item.assets[1].asset)
               })
             }}
           </template>
           <template #details>
-            <uniswap-pool-details :balance="entry" />
+            <uniswap-pool-details :balance="item" />
           </template>
           <template #subtitle>
-            <hash-link :text="entry.poolAddress" />
+            <hash-link :text="item.address" />
           </template>
           <template #icon>
             <uniswap-pool-asset
-              :assets="entry.assets.map(({ asset }) => getIdentifier(asset))"
+              :assets="item.assets.map(({ asset }) => asset)"
             />
           </template>
           <v-row align="center">
@@ -70,7 +72,7 @@
             <v-col class="d-flex flex-column">
               <balance-display
                 class="text-h5 mt-1 text"
-                :value="entry.userBalance"
+                :value="item.userBalance"
                 no-icon
                 :min-width="0"
                 asset=""
@@ -80,8 +82,8 @@
           </v-row>
 
           <v-row
-            v-for="asset in entry.assets"
-            :key="`${getIdentifier(asset.asset)}-${entry.poolAddress}-balances`"
+            v-for="asset in item.assets"
+            :key="`${asset.asset}-${item.address}-balances`"
             class="uniswap__tokens"
             align="center"
             justify="end"
@@ -105,21 +107,27 @@
             </v-col>
           </v-row>
         </card>
-      </v-col>
-    </v-row>
+      </template>
+    </paginated-cards>
+
     <uniswap-details
       v-if="premium"
       :loading="secondaryLoading"
       :selected-addresses="selectedAddresses"
       :selected-pool-address="selectedPools"
     />
-  </v-container>
+  </div>
 </template>
 
 <script lang="ts">
+import { GeneralAccount } from '@rotki/common/lib/account';
+import { Blockchain } from '@rotki/common/lib/blockchain';
+import { XswapBalance } from '@rotki/common/lib/defi/xswap';
 import { Component, Mixins } from 'vue-property-decorator';
 import { mapActions, mapGetters } from 'vuex';
 import BaseExternalLink from '@/components/base/BaseExternalLink.vue';
+import PaginatedCards from '@/components/common/PaginatedCards.vue';
+import ActiveModules from '@/components/defi/ActiveModules.vue';
 import ModuleNotActive from '@/components/defi/ModuleNotActive.vue';
 import UniswapPoolDetails from '@/components/defi/uniswap/UniswapPoolDetails.vue';
 import UniswapPoolFilter from '@/components/defi/uniswap/UniswapPoolFilter.vue';
@@ -127,16 +135,17 @@ import UniswapPoolAsset from '@/components/display/icons/UniswapPoolAsset.vue';
 import BlockchainAccountSelector from '@/components/helper/BlockchainAccountSelector.vue';
 import ProgressScreen from '@/components/helper/ProgressScreen.vue';
 import AssetMixin from '@/mixins/asset-mixin';
-import DefiModuleMixin from '@/mixins/defi-module-mixin';
+import ModuleMixin from '@/mixins/module-mixin';
 import PremiumMixin from '@/mixins/premium-mixin';
 import StatusMixin from '@/mixins/status-mixin';
 import { UniswapDetails } from '@/premium/premium';
 import { Section } from '@/store/const';
-import { UniswapBalance } from '@/store/defi/types';
-import { ETH, GeneralAccount } from '@/typing/types';
+import { Module } from '@/types/modules';
 
 @Component({
   components: {
+    PaginatedCards,
+    ActiveModules,
     UniswapPoolDetails,
     UniswapPoolFilter,
     BaseExternalLink,
@@ -155,32 +164,37 @@ import { ETH, GeneralAccount } from '@/typing/types';
 })
 export default class Uniswap extends Mixins(
   StatusMixin,
-  DefiModuleMixin,
+  ModuleMixin,
   PremiumMixin,
   AssetMixin
 ) {
-  readonly ETH = ETH;
+  readonly ETH = Blockchain.ETH;
+  readonly modules: Module[] = [Module.UNISWAP];
   section = Section.DEFI_UNISWAP_BALANCES;
   secondSection = Section.DEFI_UNISWAP_EVENTS;
 
-  uniswapBalances!: (addresses: string[]) => UniswapBalance[];
+  uniswapBalances!: (addresses: string[]) => XswapBalance[];
   uniswapAddresses!: string[];
   selectedAccount: GeneralAccount | null = null;
   selectedPools: string[] = [];
   fetchUniswapBalances!: (refresh: boolean) => Promise<void>;
   fetchUniswapEvents!: (refresh: boolean) => Promise<void>;
 
+  get isEnabled(): boolean {
+    return this.isModuleEnabled(Module.UNISWAP);
+  }
+
   get selectedAddresses(): string[] {
     return this.selectedAccount ? [this.selectedAccount.address] : [];
   }
 
-  get balances(): UniswapBalance[] {
+  get balances(): XswapBalance[] {
     const balances = this.uniswapBalances(this.selectedAddresses);
     if (this.selectedPools.length === 0) {
       return balances;
     }
-    return balances.filter(({ poolAddress }) =>
-      this.selectedPools.includes(poolAddress)
+    return balances.filter(({ address }) =>
+      this.selectedPools.includes(address)
     );
   }
 

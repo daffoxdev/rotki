@@ -2,7 +2,7 @@
   <v-autocomplete
     :value="value"
     :disabled="disabled"
-    :items="assets"
+    :items="visibleAssets"
     class="asset-select"
     :hint="hint"
     single-line
@@ -13,14 +13,20 @@
     :success-messages="successMessages"
     :error-messages="errorMessages"
     item-value="identifier"
+    :filter="customFilter"
+    :search-input.sync="search"
     :item-text="assetText"
+    auto-select-first
     :menu-props="{ closeOnContentClick: true }"
     :outlined="outlined"
     :class="outlined ? 'asset-select--outlined' : null"
     @input="input"
   >
     <template #selection="{ item }">
-      <asset-details class="asset-select__details" :asset="item.identifier" />
+      <asset-details
+        class="asset-select__details ml-2"
+        :asset="item.identifier"
+      />
     </template>
     <template #item="{ item }">
       <v-list-item-avatar>
@@ -39,18 +45,17 @@
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
-import { createNamespacedHelpers } from 'vuex';
+import { SupportedAsset } from '@rotki/common/lib/data';
+import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
+import { mapState } from 'vuex';
 import AssetDetails from '@/components/helper/AssetDetails.vue';
 import AssetIcon from '@/components/helper/display/icons/AssetIcon.vue';
-import { SupportedAsset } from '@/services/types-model';
-
-const { mapState } = createNamespacedHelpers('balances');
+import { compareAssets } from '@/utils/assets';
 
 @Component({
   components: { AssetDetails, AssetIcon },
   computed: {
-    ...mapState(['supportedAssets'])
+    ...mapState('balances', ['supportedAssets'])
   }
 })
 export default class AssetSelect extends Vue {
@@ -92,14 +97,52 @@ export default class AssetSelect extends Vue {
   @Emit()
   input(_value: string) {}
 
-  get assets(): SupportedAsset[] {
-    if (this.items) {
+  search: string = '';
+  visibleAssets: SupportedAsset[] = [];
+
+  mounted() {
+    this.visibleAssets = this.getAvailableAssets();
+  }
+
+  @Watch('items')
+  onItemsUpdate() {
+    this.visibleAssets = this.getAvailableAssets();
+  }
+
+  @Watch('search')
+  onSearchUpdate() {
+    const assets = this.getAvailableAssets();
+    this.visibleAssets = assets
+      .filter(value1 => this.customFilter(value1, this.search))
+      .sort((a, b) => compareAssets(a, b, 'name', this.keyword, false));
+  }
+
+  private getAvailableAssets() {
+    if (this.items && this.items.length > 0) {
       return this.supportedAssets.filter(asset =>
         this.items!.includes(asset.identifier)
       );
     }
-
     return this.supportedAssets;
+  }
+
+  customFilter(item: SupportedAsset, queryText: string): boolean {
+    const toLower = (string?: string | null) => {
+      return string?.toLocaleLowerCase()?.trim() ?? '';
+    };
+    const keyword = toLower(queryText);
+    const name = toLower(item.name);
+    const symbol = toLower(item.symbol);
+    return name.indexOf(keyword) >= 0 || symbol.indexOf(keyword) >= 0;
+  }
+
+  get keyword(): string {
+    const search = this.search;
+    if (!search) {
+      return '';
+    }
+
+    return search.toLocaleLowerCase().trim();
   }
 
   assetText(asset: SupportedAsset): string {

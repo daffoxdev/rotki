@@ -1,36 +1,28 @@
 const path = require('path');
-const rulesDirPlugin = require('eslint-plugin-rulesdir');
-
-rulesDirPlugin.RULES_DIR = path.resolve(__dirname, 'eslint/rules');
 
 module.exports = {
-  root: true,
-
   env: {
     node: true
   },
 
-  plugins: ['vuetify', 'rulesdir', 'import'],
+  plugins: ['vuetify'],
 
   extends: [
     'plugin:vue/recommended',
     'plugin:vue/essential',
-    'eslint:recommended',
     '@vue/prettier',
     '@vue/prettier/@typescript-eslint',
     '@vue/typescript',
-    'plugin:import/errors',
-    'plugin:import/warnings',
-    'plugin:import/typescript',
     'plugin:@intlify/vue-i18n/recommended'
   ],
 
+  parser: 'vue-eslint-parser',
+
   rules: {
-    'no-console': process.env.NODE_ENV === 'production' ? 'error' : 'off',
-    'no-debugger': process.env.NODE_ENV === 'production' ? 'error' : 'off',
     'vuetify/no-deprecated-classes': 'error',
     'vuetify/grid-unknown-attributes': 'error',
     'vuetify/no-legacy-grid': 'error',
+    'vue/no-empty-component-block': 'error',
     'vue/multiline-html-element-content-newline': [
       'error',
       {
@@ -49,16 +41,6 @@ module.exports = {
         named: 'shorthand'
       }
     ],
-    'no-unused-vars': 'off',
-    '@typescript-eslint/no-unused-vars': [
-      'error',
-      {
-        vars: 'all',
-        args: 'after-used',
-        ignoreRestSiblings: true,
-        argsIgnorePattern: '^_'
-      }
-    ],
     'vue/component-name-in-template-casing': [
       'error',
       'kebab-case',
@@ -67,32 +49,12 @@ module.exports = {
         ignores: []
       }
     ],
-    'no-else-return': 'error',
-    eqeqeq: ['error', 'always'],
-    'import/order': [
-      'error',
-      {
-        groups: ['builtin', 'external', 'parent', 'sibling', 'index'],
-        alphabetize: {
-          order: 'asc',
-          caseInsensitive: true
-        },
-        pathGroups: [
-          {
-            pattern: '@/**',
-            group: 'external',
-            position: 'after'
-          }
-        ]
-      }
-    ],
     'vue/no-static-inline-styles': [
       'error',
       {
         allowBinding: false
       }
     ],
-    'rulesdir/no-unused-components': 'error',
     '@intlify/vue-i18n/key-format-style': [
       'error',
       'snake_case',
@@ -104,6 +66,7 @@ module.exports = {
     '@intlify/vue-i18n/no-unused-keys': [
       'error',
       {
+        src: './src',
         extensions: ['.ts', '.vue']
       }
     ],
@@ -136,19 +99,33 @@ module.exports = {
   },
 
   parserOptions: {
-    parser: '@typescript-eslint/parser'
+    parser: '@typescript-eslint/parser',
+    project: './tsconfig.eslint.json',
+    sourceType: 'module',
+    extraFileExtensions: ['.vue']
   },
-
-  settings: {
-    'import/resolver': {
-      alias: {
-        map: [['@', path.resolve(__dirname, 'src')]],
-        extensions: ['.vue', '.ts', '.d.ts']
+  overrides: [
+    {
+      files: ['*.json'],
+      rules: {
+        '@typescript-eslint/naming-convention': 'off'
       }
     },
+    {
+      files: ['*.json', '*.json5'],
+      extends: ['plugin:@intlify/vue-i18n/base']
+    },
+    {
+      files: ['*.yaml', '*.yml'],
+      extends: ['plugin:@intlify/vue-i18n/base']
+    }
+  ],
+
+  settings: {
     'vue-i18n': {
       localeDir:
-        path.resolve(__dirname, 'src', 'locales') + '/*.{json,json5,yaml,yml}'
+        path.resolve(__dirname, 'src', 'locales') + '/*.{json,json5,yaml,yml}',
+      messageSyntaxVersion: '^9.0.0'
     }
   }
 };

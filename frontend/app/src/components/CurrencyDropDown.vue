@@ -5,7 +5,6 @@
       transition="slide-y-transition"
       max-width="350px"
       min-width="350px"
-      bottom
       offset-y
       :close-on-content-click="false"
     >
@@ -15,10 +14,10 @@
           class-name="currency-dropdown secondary--text text--lighten-2"
           :on-menu="on"
         >
-          {{ currency.unicode_symbol }}
+          {{ currency.unicodeSymbol }}
         </menu-tooltip-button>
       </template>
-      <div class="currency-dropdown__content">
+      <div :style="backgroundStyle">
         <v-row class="ps-4 pe-4">
           <v-col>
             <v-text-field
@@ -34,12 +33,12 @@
         <v-list class="currency-dropdown__list">
           <v-list-item
             v-for="currency in currencies"
-            :id="`change-to-${currency.ticker_symbol.toLocaleLowerCase()}`"
-            :key="currency.ticker_symbol"
+            :id="`change-to-${currency.tickerSymbol.toLocaleLowerCase()}`"
+            :key="currency.tickerSymbol"
             @click="onSelected(currency)"
           >
             <v-list-item-avatar class="currency-list primary--text">
-              {{ currency.unicode_symbol }}
+              {{ currency.unicodeSymbol }}
             </v-list-item-avatar>
             <v-list-item-content>
               <v-list-item-title>
@@ -55,12 +54,13 @@
 </template>
 
 <script lang="ts">
-import { Component, Vue } from 'vue-property-decorator';
+import { Component, Mixins } from 'vue-property-decorator';
 import { mapActions, mapGetters } from 'vuex';
 import MenuTooltipButton from '@/components/helper/MenuTooltipButton.vue';
 import { currencies } from '@/data/currencies';
-import { Currency } from '@/model/currency';
-import { SettingsUpdate } from '@/typing/types';
+import ThemeMixin from '@/mixins/theme-mixin';
+import { Currency } from '@/types/currency';
+import { SettingsUpdate } from '@/types/user';
 
 @Component({
   components: { MenuTooltipButton },
@@ -69,7 +69,7 @@ import { SettingsUpdate } from '@/typing/types';
     ...mapActions('session', ['updateSettings'])
   }
 })
-export default class CurrencyDropDown extends Vue {
+export default class CurrencyDropDown extends Mixins(ThemeMixin) {
   currency!: Currency;
   updateSettings!: (update: SettingsUpdate) => Promise<void>;
   filter: string = '';
@@ -81,9 +81,9 @@ export default class CurrencyDropDown extends Vue {
     if (!filter) {
       return currencies;
     }
-    return currencies.filter(({ name, ticker_symbol }) => {
+    return currencies.filter(({ name, tickerSymbol }) => {
       const currencyName = name.toLocaleLowerCase();
-      const symbol = ticker_symbol.toLocaleLowerCase();
+      const symbol = tickerSymbol.toLocaleLowerCase();
       return currencyName.indexOf(filter) >= 0 || symbol.indexOf(filter) >= 0;
     });
   }
@@ -102,11 +102,11 @@ export default class CurrencyDropDown extends Vue {
 
   async onSelected(currency: Currency) {
     this.visible = false;
-    if (currency.ticker_symbol === this.currency.ticker_symbol) {
+    if (currency.tickerSymbol === this.currency.tickerSymbol) {
       return;
     }
 
-    await this.updateSettings({ main_currency: currency.ticker_symbol });
+    await this.updateSettings({ mainCurrency: currency.tickerSymbol });
   }
 }
 </script>
@@ -118,10 +118,6 @@ export default class CurrencyDropDown extends Vue {
   .currency-dropdown {
     font-size: 1.6em !important;
     font-weight: bold !important;
-
-    &__content {
-      background: white;
-    }
 
     &__list {
       max-height: 400px;

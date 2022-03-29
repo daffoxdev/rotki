@@ -3,7 +3,7 @@ from http import HTTPStatus
 import pytest
 import requests
 
-from rotkehlchen.constants.assets import A_ETH, A_USD
+from rotkehlchen.constants.assets import A_ETH, A_EUR, A_KRW, A_USD
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.api import (
     api_url_for,
@@ -11,7 +11,6 @@ from rotkehlchen.tests.utils.api import (
     assert_proper_response,
     assert_proper_response_with_result,
 )
-from rotkehlchen.tests.utils.constants import A_EUR, A_KRW
 
 
 @pytest.mark.parametrize('start_with_logged_in_user', [False])
@@ -46,7 +45,7 @@ def test_querying_exchange_rates(rotkehlchen_api_server):
         api_url_for(rotkehlchen_api_server, 'exchangeratesresource'), json=data,
     )
     assert_okay(response)
-    # The query parameters test serves as a test that a list of parametrs works with query args too
+    # This serves as a test that a list of parameters works with query args too
     response = requests.get(
         api_url_for(rotkehlchen_api_server, 'exchangeratesresource') + '?currencies=' +
         ','.join(data['currencies']),
@@ -63,7 +62,7 @@ def test_querying_exchange_rates_errors(rotkehlchen_api_server):
     """Make sure that querying exchange rates with wrong input is handled"""
 
     # Test with invalid type for currency
-    data = {'currencies': [4234324.21]}
+    data = {'currencies': [4234324.21], 'async_query': False}
     response = requests.get(
         api_url_for(rotkehlchen_api_server, 'exchangeratesresource'), json=data,
     )
@@ -73,13 +72,9 @@ def test_querying_exchange_rates_errors(rotkehlchen_api_server):
         status_code=HTTPStatus.BAD_REQUEST,
     )
 
-    # Test with invalid asset
-    data = {'currencies': ['DDSAS']}
+    # Test with unknown assets
+    data = {'currencies': ['DDSAS', 'EUR'], 'async_query': False}
     response = requests.get(
         api_url_for(rotkehlchen_api_server, 'exchangeratesresource'), json=data,
     )
-    assert_error_response(
-        response=response,
-        contained_in_msg='Unknown asset DDSAS provided',
-        status_code=HTTPStatus.BAD_REQUEST,
-    )
+    assert_proper_response_with_result(response)

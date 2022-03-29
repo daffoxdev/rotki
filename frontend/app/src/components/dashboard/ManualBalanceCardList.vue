@@ -2,6 +2,7 @@
   <v-list-item
     :id="`${name}_box`"
     :ripple="false"
+    :data-cy="`manual-balance-box__item__${name}`"
     class="manual-balance-box__item"
     to="/accounts-balances/manual-balances"
   >
@@ -11,12 +12,12 @@
     <v-list-item-content>
       <v-list-item-title class="d-flex justify-space-between">
         <span>
-          {{ name | capitalize }}
+          {{ capitalize(name) }}
         </span>
         <span class="text-end">
           <amount-display
             show-currency="symbol"
-            :fiat-currency="currency.ticker_symbol"
+            :fiat-currency="currency.tickerSymbol"
             :value="amount"
           />
         </span>
@@ -26,11 +27,12 @@
 </template>
 
 <script lang="ts">
-import { default as BigNumber } from 'bignumber.js';
+import { BigNumber } from '@rotki/common';
 import { Component, Prop, Vue } from 'vue-property-decorator';
 import { createNamespacedHelpers } from 'vuex';
 import AmountDisplay from '@/components/display/AmountDisplay.vue';
-import { Currency } from '@/model/currency';
+import { capitalize } from '@/filters';
+import { Currency } from '@/types/currency';
 
 const { mapGetters } = createNamespacedHelpers('session');
 
@@ -45,6 +47,7 @@ export default class ManualBalanceCardList extends Vue {
   name!: string;
   @Prop({ required: true })
   amount!: BigNumber;
+  readonly capitalize = capitalize;
 
   currency!: Currency;
 }

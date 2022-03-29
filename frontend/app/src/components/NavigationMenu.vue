@@ -14,6 +14,8 @@
               :show-tooltips="showTooltips"
               :text="navItem.text"
               :icon="navItem.icon"
+              :image="navItem.image"
+              :icon-component="navItem.component"
               :crypto-icon="navItem.cryptoIcon"
             />
           </v-list-item>
@@ -24,23 +26,32 @@
                 :text="navItem.text"
                 :icon="navItem.icon"
                 :crypto-icon="navItem.cryptoIcon"
+                :icon-component="navItem.component"
+                :image="navItem.image"
                 :class="`navigation__${navItem.class}`"
               />
             </template>
-            <v-list-item
-              v-for="(subNavItem, si) in navItem.items"
-              :key="si"
-              :class="`navigation__${subNavItem.class}`"
-              active-class="navigation-menu__item--active"
-              :to="subNavItem.route"
-            >
-              <navigation-menu-item
-                :show-tooltips="showTooltips"
-                :text="subNavItem.text"
-                :icon="subNavItem.icon"
-                :crypto-icon="subNavItem.cryptoIcon"
-              />
-            </v-list-item>
+            <div class="pl-3">
+              <v-list-item
+                v-for="(subNavItem, si) in navItem.items"
+                :key="si"
+                :class="`navigation__${subNavItem.class} pl-4`"
+                active-class="navigation-menu__item--active"
+                :to="subNavItem.route"
+              >
+                <template #default="{ active }">
+                  <navigation-menu-item
+                    :show-tooltips="showTooltips"
+                    :text="subNavItem.text"
+                    :icon="subNavItem.icon"
+                    :image="subNavItem.image"
+                    :icon-component="subNavItem.component"
+                    :crypto-icon="subNavItem.cryptoIcon"
+                    :active="active"
+                  />
+                </template>
+              </v-list-item>
+            </div>
           </v-list-group>
           <v-divider
             v-else-if="navItem.type === 'divider'"
@@ -54,7 +65,8 @@
 </template>
 
 <script lang="ts">
-import { Component, Vue, Prop } from 'vue-property-decorator';
+import { Component, Prop, Vue } from 'vue-property-decorator';
+import GitcoinIcon from '@/components/icons/GitcoinIcon.vue';
 import NavigationMenuItem from '@/components/NavigationMenuItem.vue';
 import { Routes } from '@/router/routes';
 
@@ -63,6 +75,8 @@ type NavItemDetails = {
   readonly route: string;
   readonly class?: string;
   readonly icon: string;
+  readonly image?: string;
+  readonly component?: any;
   readonly cryptoIcon?: string;
 };
 
@@ -94,6 +108,13 @@ export default class NavigationMenu extends Vue {
       route: '/accounts-balances',
       class: 'accounts-balances',
       icon: 'mdi-briefcase-variant'
+    },
+    {
+      type: 'item',
+      text: this.$t('navigation_menu.nfts').toString(),
+      route: Routes.NFTS,
+      class: 'nfts',
+      icon: 'mdi-image-area'
     },
     {
       type: 'group',
@@ -131,6 +152,16 @@ export default class NavigationMenu extends Vue {
           route: Routes.HISTORY_LEDGER_ACTIONS,
           icon: 'mdi-book-open-variant',
           class: 'ledger'
+        },
+        {
+          type: 'item',
+          text: this.$t(
+            'navigation_menu.history_sub.gitcoin_grants'
+          ).toString(),
+          route: Routes.HISTORY_GITCOIN,
+          icon: '',
+          component: GitcoinIcon,
+          class: 'gitcoin'
         }
       ]
     },
@@ -207,13 +238,21 @@ export default class NavigationMenu extends Vue {
           icon: '',
           cryptoIcon: 'ADX',
           class: 'staking-adex'
+        },
+        {
+          type: 'item',
+          text: `${this.$t('navigation_menu.staking_sub.liquity')}`,
+          route: Routes.STAKING_LIQUITY,
+          icon: '',
+          cryptoIcon: 'LQTY',
+          class: 'staking-liquity'
         }
       ]
     },
     {
       type: 'item',
       text: this.$tc('navigation_menu.profit_loss_report'),
-      route: Routes.PROFIT_LOSS_REPORT,
+      route: Routes.PROFIT_LOSS_REPORTS,
       class: 'profit-loss-report',
       icon: 'mdi-calculator'
     },
@@ -226,6 +265,16 @@ export default class NavigationMenu extends Vue {
       route: Routes.ASSET_MANAGER,
       class: 'asset-manager',
       icon: 'mdi-database-edit'
+    },
+    {
+      type: 'item',
+      text: this.$t('navigation_menu.manage_prices').toString(),
+      route: Routes.PRICE_MANAGER,
+      class: 'asset-manager',
+      icon: 'mdi-chart-line'
+    },
+    {
+      type: 'divider'
     },
     {
       type: 'item',
@@ -245,15 +294,6 @@ export default class NavigationMenu extends Vue {
 </script>
 
 <style scoped lang="scss">
-.navigation-menu {
-  &__item {
-    &--active {
-      background-color: var(--v-primary-base);
-      color: white !important;
-    }
-  }
-}
-
 ::v-deep {
   .v-list-group {
     &__header {
@@ -263,6 +303,22 @@ export default class NavigationMenu extends Vue {
 
       .v-list-item {
         padding-left: 0 !important;
+      }
+    }
+  }
+}
+
+.navigation-menu {
+  &__item {
+    &--active {
+      background-color: var(--v-primary-base);
+      color: white !important;
+
+      ::v-deep {
+        .nav-icon {
+          opacity: 1 !important;
+          filter: invert(100%);
+        }
       }
     }
   }

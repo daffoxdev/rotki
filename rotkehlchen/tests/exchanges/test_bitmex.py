@@ -12,8 +12,9 @@ from rotkehlchen.utils.misc import ts_now
 
 
 def test_name():
-    exchange = Bitmex('a', b'a', object(), object())
-    assert exchange.name == 'bitmex'
+    exchange = Bitmex('bitmex1', 'a', b'a', object(), object())
+    assert exchange.location == Location.BITMEX
+    assert exchange.name == 'bitmex1'
 
 
 def test_bitmex_api_signature(mock_bitmex):
@@ -133,7 +134,7 @@ def test_bitmex_api_withdrawals_deposit_unexpected_data(sandbox_bitmex):
     now = ts_now()
 
     def query_bitmex_and_test(input_str, expected_warnings_num, expected_errors_num):
-        def mock_get_deposit_withdrawal(url, data):  # pylint: disable=unused-argument
+        def mock_get_deposit_withdrawal(url, data, **kwargs):  # pylint: disable=unused-argument
             return MockResponse(200, input_str)
         with patch.object(sandbox_bitmex.session, 'get', side_effect=mock_get_deposit_withdrawal):
             movements = sandbox_bitmex.query_online_deposits_withdrawals(

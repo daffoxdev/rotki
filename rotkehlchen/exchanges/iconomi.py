@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_ICONOMI_ASSETS, asset_from_iconomi
@@ -36,16 +37,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
-
-
-def iconomi_pair_to_world(pair: str) -> Tuple[Asset, Asset]:
-    """May raise:
-    - UnsupportedAsset
-    - UnknownAsset
-    """
-    tx_asset = asset_from_iconomi(pair[:3])
-    native_asset = asset_from_iconomi(pair[3:])
-    return tx_asset, native_asset
 
 
 def trade_from_iconomi(raw_trade: Dict) -> Trade:
@@ -93,14 +84,30 @@ def trade_from_iconomi(raw_trade: Dict) -> Trade:
 class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
     ):
-        super().__init__('iconomi', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.ICONOMI,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.uri = 'https://api.iconomi.com'
         self.msg_aggregator = msg_aggregator
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        return changed
 
     def _generate_signature(self, request_type: str, request_path: str, timestamp: str) -> str:
         signed_data = ''.join([timestamp, request_type.upper(), request_path, '']).encode()
@@ -145,8 +152,9 @@ class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             )
             headers.update({
                 'ICN-SIGN': signature,
-                'ICN-TIMESTAMP': timestamp,
+                # set api key only here since if given in non authenticated endpoint gives 400
                 'ICN-API-KEY': self.api_key,
+                'ICN-TIMESTAMP': timestamp,
             })
 
         if data != '':
@@ -187,7 +195,7 @@ class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def validate_api_key(self) -> Tuple[bool, str]:
         """
-        Validates that the ICONOMI API key is good for usage in Rotki
+        Validates that the ICONOMI API key is good for usage in rotki
         """
 
         try:
@@ -262,7 +270,7 @@ class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
 
         page = 0
         all_transactions = []
@@ -307,7 +315,7 @@ class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                         trade=tx,
                     )
 
-        return trades
+        return trades, (start_ts, end_ts)
 
     def query_supported_tickers(
             self,
@@ -337,4 +345,11 @@ class Iconomi(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for iconomi
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for iconomi

@@ -2,46 +2,22 @@ import operator
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, DefaultDict, Dict, List, Optional
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
 
+from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.crypto import sha3
 from rotkehlchen.errors import DeserializationError, InputError
 from rotkehlchen.fval import FVal
-from rotkehlchen.typing import Timestamp
+from rotkehlchen.typing import Location, Timestamp
 from rotkehlchen.utils.misc import combine_dicts
+from rotkehlchen.utils.mixins.dbenum import DBEnumMixIn
+from rotkehlchen.utils.mixins.serializableenum import SerializableEnumMixin
 
-if TYPE_CHECKING:
-    from rotkehlchen.assets.asset import Asset
 
-
-class BalanceType(Enum):
+class BalanceType(DBEnumMixIn):
     ASSET = 1
     LIABILITY = 2
-
-    def __str__(self) -> str:
-        if self == BalanceType.ASSET:
-            return 'asset'
-        if self == BalanceType.LIABILITY:
-            return 'liability'
-        # else
-        raise AssertionError(f'Invalid value {self} for BalanceType')
-
-    @staticmethod
-    def deserialize_from_db(value: str) -> 'BalanceType':
-        if value == 'A':
-            return BalanceType.ASSET
-        if value == 'B':
-            return BalanceType.LIABILITY
-        # else
-        raise DeserializationError(f'Encountered unknown BalanceType value {value} in the DB')
-
-    def serialize_for_db(self) -> str:
-        if self == BalanceType.ASSET:
-            return 'A'
-        if self == BalanceType.LIABILITY:
-            return 'B'
-        # else
-        raise AssertionError(f'Invalid value {self} for BalanceType')
 
 
 @dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
@@ -137,6 +113,9 @@ class AssetBalance:
     def __neg__(self) -> 'AssetBalance':
         return AssetBalance(asset=self.asset, balance=-self.balance)
 
+    def serialize_for_db(self) -> Tuple[str, str, str]:
+        return (self.asset.identifier, str(self.amount), str(self.usd_value))
+
 
 class DefiEventType(Enum):
     DSR_EVENT = 0
@@ -146,6 +125,7 @@ class DefiEventType(Enum):
     ADEX_EVENT = auto()
     COMPOUND_EVENT = auto()
     ETH2_EVENT = auto()
+    LIQUITY = auto()
 
     def __str__(self) -> str:
         if self == DefiEventType.DSR_EVENT:
@@ -162,6 +142,8 @@ class DefiEventType(Enum):
             return 'Compound event'
         if self == DefiEventType.ETH2_EVENT:
             return 'ETH2 event'
+        if self == DefiEventType.LIQUITY:
+            return 'Liquity event'
         # else
         raise RuntimeError(f'Corrupt value {self} for DefiEventType -- Should never happen')
 
@@ -286,34 +268,141 @@ def _evaluate_balance_sheet_input(other: Any, operation: str) -> BalanceSheet:
     return transformed_input
 
 
-class ActionType(Enum):
+class ActionType(DBEnumMixIn):
     TRADE = 1
     ASSET_MOVEMENT = 2
-    ETHEREUM_TX = 3
+    ETHEREUM_TRANSACTION = 3
     LEDGER_ACTION = 4
 
-    def __str__(self) -> str:
-        if self == ActionType.TRADE:
-            return 'trade'
-        if self == ActionType.ASSET_MOVEMENT:
-            return 'asset movement'
-        if self == ActionType.ETHEREUM_TX:
-            return 'ethereum transaction'
-        if self == ActionType.LEDGER_ACTION:
-            return 'ledger action'
 
-        # else
-        raise RuntimeError(f'Corrupt value {self} for ActionType -- Should never happen')
+class HistoryEventType(SerializableEnumMixin):
+    TRADE = 1
+    STAKING = 2
+    UNSTAKING = 3
+    DEPOSIT = 4
+    WITHDRAWAL = 5
+    TRANSFER = 6
+    SPEND = 7
+    RECEIVE = 8
+    # forced adjustments of a system, like a CEX. For example having DAO in Kraken
+    # and Kraken delisting them and exchanging them for ETH for you
+    ADJUSTMENT = 9
+    UNKNOWN = 10
 
-    def serialize_for_db(self) -> str:
-        if self == ActionType.TRADE:
-            return 'A'
-        if self == ActionType.ASSET_MOVEMENT:
-            return 'B'
-        if self == ActionType.ETHEREUM_TX:
-            return 'C'
-        if self == ActionType.LEDGER_ACTION:
-            return 'D'
+    @classmethod
+    def from_string(cls, value: str) -> 'HistoryEventType':
+        try:
+            return super().deserialize(value)
+        except DeserializationError:
+            return HistoryEventType.UNKNOWN
 
-        # else
-        raise RuntimeError(f'Corrupt value {self} for ActionType -- Should never happen')
+
+class HistoryEventSubType(SerializableEnumMixin):
+    REWARD = 1
+    STAKING_DEPOSIT_ASSET = 2
+    STAKING_REMOVE_ASSET = 3
+    STAKING_RECEIVE_ASSET = 4
+    FEE = 5
+    SPEND = 6
+    RECEIVE = 7
+
+
+HISTORY_EVENT_DB_TUPLE = Tuple[
+    str,            # identifier
+    str,            # event_identifier
+    int,            # sequence_index
+    int,            # timestamp
+    str,            # location
+    Optional[str],  # location label
+    str,            # asset
+    str,            # amount
+    str,            # usd value
+    Optional[str],  # notes
+    str,            # type
+    Optional[str],  # subtype
+]
+
+
+@dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
+class HistoryBaseEntry:
+    """
+    Intended to be the base unit of any type of accounting. All trades, deposits,
+    swaps etc. are going to be made up of multiple HistoryBaseEntry
+    """
+    event_identifier: str  # identifier shared between related events
+    sequence_index: int  # When this transaction was executed relative to other related events
+    timestamp: Timestamp
+    location: Location
+    # location_label is a string field that allows to provide more information about the location.
+    # When we use this structure in blockchains can be used to specify addresses for example.
+    # currently we use to identify the exchange name assigned by the user.
+    location_label: Optional[str]
+    asset_balance: AssetBalance  # usd value starts 0: https://github.com/rotki/rotki/issues/3865
+    notes: Optional[str]
+    event_type: HistoryEventType
+    event_subtype: Optional[HistoryEventSubType]
+
+    def serialize_for_db(self) -> HISTORY_EVENT_DB_TUPLE:
+        event_subtype = None
+        event_subtype = None if self.event_subtype is None else self.event_subtype.serialize()
+        return (
+            self.identifier,
+            self.event_identifier,
+            self.sequence_index,
+            int(self.timestamp),
+            self.location.serialize_for_db(),
+            self.location_label,
+            *self.asset_balance.serialize_for_db(),
+            self.notes,
+            self.event_type.serialize(),
+            event_subtype,
+        )
+
+    @classmethod
+    def deserialize_from_db(cls, entry: HISTORY_EVENT_DB_TUPLE) -> 'HistoryBaseEntry':
+        """May raise DeserializationError"""
+        event_subtype = None
+        if entry[11] is not None:
+            event_subtype = HistoryEventSubType.deserialize(entry[11])
+        try:
+            return HistoryBaseEntry(
+                event_identifier=entry[1],
+                sequence_index=entry[2],
+                timestamp=Timestamp(entry[3]),
+                location=Location.deserialize_from_db(entry[4]),
+                location_label=entry[5],
+                asset_balance=AssetBalance(
+                    asset=Asset(entry[6]),
+                    balance=Balance(
+                        amount=FVal(entry[7]),
+                        usd_value=FVal(entry[8]),
+                    ),
+                ),
+                notes=entry[9],
+                event_type=HistoryEventType.deserialize(entry[10]),
+                event_subtype=event_subtype,
+            )
+        except ValueError as e:
+            raise DeserializationError(
+                f'Failed to read FVal value from database history event with '
+                f'event identifier {entry[1]}. {str(e)}',
+            ) from e
+
+    @property
+    def identifier(self) -> str:
+        """Generate an unique identifier based on information from the base entry that is later
+        hashed. It follows the pattern that we use in other places and has similar problems.
+        """
+        location_label = self.location_label if self.location_label is not None else ''
+        event_subtype = self.event_subtype if self.event_subtype is not None else ''
+        hashable = (
+            str(self.location) +
+            str(self.timestamp) +
+            self.event_identifier +
+            str(self.sequence_index) +
+            location_label +
+            str(self.asset_balance) +
+            str(self.event_type) +
+            str(event_subtype)
+        )
+        return sha3(hashable.encode()).hex()

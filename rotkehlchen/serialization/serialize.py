@@ -4,9 +4,8 @@ from hexbytes import HexBytes
 from web3.datastructures import AttributeDict
 
 from rotkehlchen.accounting.ledger_actions import LedgerActionType
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures import Balance, BalanceType
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.assets.unknown_asset import UnknownEthereumToken
 from rotkehlchen.balances.manual import ManuallyTrackedBalanceWithValue
 from rotkehlchen.chain.bitcoin.xpub import XpubData
 from rotkehlchen.chain.ethereum.defi.structures import (
@@ -29,6 +28,14 @@ from rotkehlchen.chain.ethereum.modules.balancer import (
     BalancerPoolTokenBalance,
 )
 from rotkehlchen.chain.ethereum.modules.compound import CompoundBalance, CompoundEvent
+from rotkehlchen.chain.ethereum.modules.liquity.trove import (
+    LiquityStakeEvent,
+    LiquityStakeEventType,
+    LiquityTroveEvent,
+    StakePosition,
+    Trove,
+    TroveOperation,
+)
 from rotkehlchen.chain.ethereum.modules.makerdao.dsr import DSRAccountReport, DSRCurrentBalances
 from rotkehlchen.chain.ethereum.modules.makerdao.vaults import (
     MakerdaoVault,
@@ -36,6 +43,8 @@ from rotkehlchen.chain.ethereum.modules.makerdao.vaults import (
     VaultEvent,
     VaultEventType,
 )
+from rotkehlchen.chain.ethereum.modules.nfts import NFTResult
+from rotkehlchen.chain.ethereum.modules.pickle.pickle import DillBalance
 from rotkehlchen.chain.ethereum.modules.uniswap import (
     UniswapPool,
     UniswapPoolAsset,
@@ -56,7 +65,6 @@ from rotkehlchen.exchanges.kraken import KrakenAccountType
 from rotkehlchen.fval import FVal
 from rotkehlchen.history.typing import HistoricalPriceOracle
 from rotkehlchen.inquirer import CurrentPriceOracle
-from rotkehlchen.serialization.deserialize import deserialize_location_from_db
 from rotkehlchen.typing import (
     AssetMovementCategory,
     BlockchainAccountData,
@@ -87,7 +95,7 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
     if isinstance(entry, LocationData):
         return {
             'time': entry.time,
-            'location': str(deserialize_location_from_db(entry.location)),
+            'location': str(Location.deserialize_from_db(entry.location)),
             'usd_value': entry.usd_value,
         }
     if isinstance(entry, SingleDBAssetBalance):
@@ -109,6 +117,7 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             DefiProtocol,
             MakerdaoVault,
             XpubData,
+            Eth2Deposit,
     )):
         return entry.serialize()
     if isinstance(entry, (
@@ -125,7 +134,6 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             AaveEvent,
             UniswapPool,
             UniswapPoolAsset,
-            UnknownEthereumToken,
             AMMTrade,
             UniswapPoolEventsBalance,
             ADXStakingHistory,
@@ -134,6 +142,13 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             BalancerPoolEventsBalance,
             BalancerPoolBalance,
             BalancerPoolTokenBalance,
+            LiquityTroveEvent,
+            LiquityStakeEvent,
+            ManuallyTrackedBalanceWithValue,
+            Trove,
+            StakePosition,
+            DillBalance,
+            NFTResult,
     )):
         return process_result(entry.serialize())
     if isinstance(entry, (
@@ -142,7 +157,6 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             VersionCheckResult,
             DBSettings,
             DSRCurrentBalances,
-            ManuallyTrackedBalanceWithValue,
             VaultEvent,
             MakerdaoVaultDetails,
             AaveBalances,
@@ -151,7 +165,6 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             DefiProtocolBalances,
             YearnVaultHistory,
             BlockchainAccountData,
-            Eth2Deposit,
     )):
         return process_result(entry._asdict())
     if isinstance(entry, tuple):
@@ -168,6 +181,11 @@ def _process_entry(entry: Any) -> Union[str, List[Any], Dict[str, Any], Any]:
             CurrentPriceOracle,
             HistoricalPriceOracle,
             LedgerActionType,
+            TroveOperation,
+            LiquityStakeEvent,
+            TroveOperation,
+            LiquityStakeEventType,
+            BalanceType,
     )):
         return str(entry)
 

@@ -6,9 +6,11 @@
       <div v-if="skipped" class="text-body-1">
         {{ $t('asset_update.manual.skipped', { skipped }) }}
       </div>
-      <v-btn depressed color="primary" class="mt-2" @click="check">
-        {{ $t('asset_update.manual.check') }}
-      </v-btn>
+      <template #buttons>
+        <v-btn depressed color="primary" class="mt-2" @click="check">
+          {{ $t('asset_update.manual.check') }}
+        </v-btn>
+      </template>
     </card>
     <v-dialog
       v-if="showUpdateDialog"
@@ -104,11 +106,12 @@
 </template>
 
 <script lang="ts">
-import { Component, Prop, Vue } from 'vue-property-decorator';
+import { Component, Mixins, Prop } from 'vue-property-decorator';
 import { mapActions } from 'vuex';
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue';
 import Fragment from '@/components/helper/Fragment';
 import ConflictDialog from '@/components/status/update/ConflictDialog.vue';
+import BackendMixin from '@/mixins/backend-mixin';
 import {
   AssetUpdatePayload,
   ConflictResolution
@@ -118,18 +121,18 @@ import {
   AssetUpdateCheckResult,
   AssetUpdateConflictResult
 } from '@/store/assets/types';
-import { currentLogLevel } from '@/utils/log-level';
 
 const SKIP_ASSET_DB_VERSION = 'rotki_skip_asset_db_version';
 
 @Component({
+  name: 'AssetUpdate',
   components: { ConfirmDialog, Fragment, ConflictDialog },
   methods: {
     ...mapActions('assets', ['checkForUpdate', 'applyUpdates']),
     ...mapActions('session', ['logout'])
   }
 })
-export default class AssetUpdate extends Vue {
+export default class AssetUpdate extends Mixins(BackendMixin) {
   @Prop({ required: false, default: false, type: Boolean })
   auto!: Boolean;
   showUpdateDialog: boolean = false;
@@ -227,9 +230,9 @@ export default class AssetUpdate extends Vue {
 
   async updateComplete() {
     await this.logout();
-    this.$store.commit('connected', false);
+    this.$store.commit('setConnected', false);
     if (this.$interop.isPackaged) {
-      await this.$interop.restartBackend(currentLogLevel());
+      await this.restartBackend();
     }
     await this.$store.dispatch('connect');
   }

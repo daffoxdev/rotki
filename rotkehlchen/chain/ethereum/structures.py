@@ -1,7 +1,7 @@
 """Ethereum/defi protocol structures that need to be accessed from multiple places"""
 
 import dataclasses
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from typing_extensions import Literal
 
@@ -10,8 +10,11 @@ from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.constants.ethereum import EthereumContract
 from rotkehlchen.errors import DeserializationError, UnknownAsset
 from rotkehlchen.fval import FVal
-from rotkehlchen.serialization.deserialize import deserialize_optional_fval
-from rotkehlchen.typing import ChecksumEthAddress, Timestamp
+from rotkehlchen.serialization.deserialize import (
+    deserialize_optional_to_fval,
+    deserialize_timestamp,
+)
+from rotkehlchen.typing import ChecksumEthAddress, Eth2PubKey, Timestamp
 
 AAVE_EVENT_TYPE = Literal['deposit', 'withdrawal', 'interest', 'borrow', 'repay', 'liquidation']
 AAVE_EVENT_DB_TUPLE = Tuple[
@@ -28,6 +31,24 @@ AAVE_EVENT_DB_TUPLE = Tuple[
     Optional[str],  # asset2 amount / borrow rate / fee amount
     Optional[str],  # asset2 usd value / borrow accrued interest rate / fee usd value
     Optional[str],  # borrow rate mode
+]
+
+YEARN_EVENT_DB_TUPLE = Tuple[
+    ChecksumEthAddress,
+    Literal['deposit', 'withdraw'],  # event_type
+    str,  # from_asset identifier
+    str,  # from_value amount
+    str,  # from value usd_value
+    str,  # to_asset idientifier
+    str,  # to_value amount
+    str,  # to value usd_value
+    Optional[str],  # pnl amount
+    Optional[str],  # pnl usd value
+    str,  # block number
+    str,  # str of timestamp
+    str,  # tx hash
+    int,  # log index
+    int,  # version
 ]
 
 
@@ -249,12 +270,12 @@ def aave_event_from_db(event_tuple: AAVE_EVENT_DB_TUPLE) -> AaveEvent:
                 f'Invalid borrow rate mode encountered in the DB: {event_tuple[12]}',
             )
         borrow_rate_mode: Literal['stable', 'variable'] = event_tuple[12]  # type: ignore
-        borrow_rate = deserialize_optional_fval(
+        borrow_rate = deserialize_optional_to_fval(
             value=event_tuple[10],
             name='borrow_rate',
             location='reading aave borrow event from DB',
         )
-        accrued_borrow_interest = deserialize_optional_fval(
+        accrued_borrow_interest = deserialize_optional_to_fval(
             value=event_tuple[11],
             name='accrued_borrow_interest',
             location='reading aave borrow event from DB',
@@ -272,12 +293,12 @@ def aave_event_from_db(event_tuple: AAVE_EVENT_DB_TUPLE) -> AaveEvent:
             accrued_borrow_interest=accrued_borrow_interest,
         )
     if event_type == 'repay':
-        fee_amount = deserialize_optional_fval(
+        fee_amount = deserialize_optional_to_fval(
             value=event_tuple[10],
             name='fee_amount',
             location='reading aave repay event from DB',
         )
-        fee_usd_value = deserialize_optional_fval(
+        fee_usd_value = deserialize_optional_to_fval(
             value=event_tuple[11],
             name='fee_usd_value',
             location='reading aave repay event from DB',
@@ -297,12 +318,12 @@ def aave_event_from_db(event_tuple: AAVE_EVENT_DB_TUPLE) -> AaveEvent:
             raise DeserializationError(
                 'Did not find asset2 in an aave liquidation event fom the DB.',
             )
-        principal_amount = deserialize_optional_fval(
+        principal_amount = deserialize_optional_to_fval(
             value=event_tuple[10],
             name='principal_amount',
             location='reading aave liquidation event from DB',
         )
-        principal_usd_value = deserialize_optional_fval(
+        principal_usd_value = deserialize_optional_to_fval(
             value=event_tuple[11],
             name='principal_usd_value',
             location='reading aave liquidation event from DB',
@@ -340,6 +361,7 @@ class YearnVaultEvent:
     realized_pnl: Optional[Balance]
     tx_hash: str
     log_index: int
+    version: int
 
     def serialize(self) -> Dict[str, Any]:
         # Would have been nice to have a customizable asdict() for dataclasses
@@ -357,6 +379,95 @@ class YearnVaultEvent:
             'log_index': self.log_index,
         }
 
+    def serialize_for_db(self, address: ChecksumEthAddress) -> YEARN_EVENT_DB_TUPLE:
+        pnl_amount = None
+        pnl_usd_value = None
+        if self.realized_pnl:
+            pnl_amount = str(self.realized_pnl.amount)
+            pnl_usd_value = str(self.realized_pnl.usd_value)
+        vault_version = self.version
+        return (
+            address,
+            self.event_type,
+            self.from_asset.identifier,
+            str(self.from_value.amount),
+            str(self.from_value.usd_value),
+            self.to_asset.identifier,
+            str(self.to_value.amount),
+            str(self.to_value.usd_value),
+            pnl_amount,
+            pnl_usd_value,
+            str(self.block_number),
+            str(self.timestamp),
+            self.tx_hash,
+            self.log_index,
+            vault_version,
+        )
+
+    @classmethod
+    def deserialize_from_db(cls, result: YEARN_EVENT_DB_TUPLE) -> 'YearnVaultEvent':
+        """
+        Turns a tuple read from the DB into an appropriate YearnVaultEvent
+        May raise a DeserializationError if there is an issue with information in
+        the database
+        """
+        location = 'deserialize yearn vault event from db'
+        realized_pnl = None
+        if result[8] is not None and result[9] is not None:
+            pnl_amount = deserialize_optional_to_fval(
+                value=result[8],
+                name='pnl_amount',
+                location=location,
+            )
+            pnl_usd_value = deserialize_optional_to_fval(
+                value=result[9],
+                name='pnl_usd_value',
+                location=location,
+            )
+            realized_pnl = Balance(amount=pnl_amount, usd_value=pnl_usd_value)
+
+        from_value_amount = deserialize_optional_to_fval(
+            value=result[3],
+            name='from_value_amount',
+            location=location,
+        )
+        from_value_usd_value = deserialize_optional_to_fval(
+            result[4],
+            name='from_value_usd_value',
+            location=location,
+        )
+        to_value_amount = deserialize_optional_to_fval(
+            value=result[6],
+            name='to_value_amount',
+            location=location,
+        )
+        to_value_usd_value = deserialize_optional_to_fval(
+            value=result[7],
+            name='to_value_usd_value',
+            location=location,
+        )
+        try:
+            block_number = int(result[10])
+        except ValueError as e:
+            raise DeserializationError(
+                f'Failed to deserialize block number {result[10]} in yearn vault event: {str(e)}',
+            ) from e
+        from_asset = Asset(result[2])
+        to_asset = Asset(result[5])
+        return cls(
+            event_type=result[1],
+            from_asset=from_asset,
+            from_value=Balance(amount=from_value_amount, usd_value=from_value_usd_value),
+            to_asset=to_asset,
+            to_value=Balance(amount=to_value_amount, usd_value=to_value_usd_value),
+            realized_pnl=realized_pnl,
+            block_number=block_number,
+            timestamp=deserialize_timestamp(result[11]),
+            tx_hash=result[12],
+            log_index=result[13],
+            version=result[14],
+        )
+
     def __str__(self) -> str:
         """Used in DefiEvent processing during accounting"""
         return f'Yearn vault {self.event_type}'
@@ -367,3 +478,50 @@ class YearnVault(NamedTuple):
     contract: EthereumContract
     underlying_token: EthereumToken
     token: EthereumToken
+
+
+@dataclasses.dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
+class EthereumTxReceiptLog:
+    log_index: int
+    data: bytes
+    address: ChecksumEthAddress
+    removed: bool
+    topics: List[bytes] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
+class EthereumTxReceipt:
+    tx_hash: bytes
+    contract_address: Optional[ChecksumEthAddress]
+    status: bool
+    type: int
+    logs: List[EthereumTxReceiptLog] = dataclasses.field(default_factory=list)
+
+
+Eth2ValidatorDBTuple = Tuple[int, str, str]
+
+
+@dataclasses.dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False)
+class Eth2Validator:
+    index: int
+    public_key: Eth2PubKey
+    ownership_proportion: FVal
+
+    def serialize_for_db(self) -> Eth2ValidatorDBTuple:
+        return self.index, self.public_key, str(self.ownership_proportion)
+
+    @classmethod
+    def deserialize_from_db(cls, result: Eth2ValidatorDBTuple) -> 'Eth2Validator':
+        return cls(
+            index=result[0],
+            public_key=Eth2PubKey(result[1]),
+            ownership_proportion=FVal(result[2]),
+        )
+
+    def serialize(self) -> Dict[str, Any]:
+        percentage_value = self.ownership_proportion.to_percentage(precision=2, with_perc_sign=False)  # noqa: E501
+        return {
+            'validator_index': self.index,
+            'public_key': self.public_key,
+            'ownership_percentage': percentage_value,
+        }

@@ -2,6 +2,320 @@
 Changelog
 =========
 
+* :release:`1.23.4 <2022-03-23>`
+* :bug:`4072` Prevent users from inputting future date on trade and ledger action form.
+* :bug:`4077` stkAave balance should no longer be double counted. Also unclaimed stkAave will appear in the balance (as Aave).
+* :bug:`4059` Nexo importer won't consider `LockingTermDeposit` as another deposit.
+* :bug:`-` BlockFi import for trades will use the correct rate.
+* :bug:`3661` NFT won't be displayed as option while adding custom assets since the logic there is not compatible with NFTs.
+* :bug:`4142` If an owned NFT has no image URL, NFTs will still be properly queried and shown in the frontend.
+
+* :release:`1.23.3 <2022-02-04>`
+* :bug:`4034` If a new premium user is created, with DB sync on, premium api keys being correct but wrong password is given then creating same user with right password will now work.
+* :bug:`4013` Fix Bitpanda icon missing in exchange selector.
+* :bug:`3983` Add loading indicator to data directory field.
+* :bug:`4039` Rewards and cashbacks from crypto.com will now be correctly categorized as ledger actions.
+* :bug:`3993` Fix app bar icons misbehavior when windows is resized.
+* :bug:`3998` FTX subaccounts should now be working again.
+* :bug:`-` If binance returns a delisted market as active and rotki queries it, the entire binance trade history query will not fail.
+* :bug:`4010` Crypto.com users won't see errors for rows containing zeros.
+* :bug:`-` All Liquity events will now always be correctly queried.
+* :bug:`3947` Coinbase conversions will now choose in a better way the asset to nominate the fees.
+* :feature:`-` Support for LUNA and card top ups has been added to the crypto.com importer.
+
+* :release:`1.23.2 <2022-01-21>`
+* :bug:`-` Users will now be properly prompted to restart the application after the auto-updater downloads the update.
+* :bug:`3943` Users will now be able to properly add multiple accounts on Avalance even if they exist on Ethereum.
+* :bug:`3964` Liquity Troves managed by a DSProxy will now see their events properly listed.
+* :bug:`-` The application will now notify the user and exit if multiple backend binaries exist due to a failed update.
+* :bug:`-` Kraken's KFEE will use the price of 0.01 USD when it is needed.
+* :bug:`-` If a PnL report is ran for a specific period and there is more events after the period a warning for missing events and prompt to upgrade to premium won't show mistakenly anymore.
+* :bug:`-` Query for AVAX balances will be more reliable now.
+* :feature:`-` Users can now add an OpenSea API key to the external api keys page. Also some changes were made to try and improve opensea retrievals even without the user needing to input a key.
+* :feature:`3952` Maker's WBTC-B, WBTC-C and MATIC-A vaults are now supported.
+
+* :release:`1.23.1 <2022-01-14>`
+* :bug:`3929` Prevent users from using invalid character for thousands and decimal separator.
+* :bug:`3913` NFT Balances table at dashboard should be updated when users remove an ethereum account.
+* :bug:`3916` Users with ethereum transactions that deploy contracts will now be able to load the transactions view properly.
+* :bug:`-` Fix coinbase/pro detection for GTC, TRU and FARM.
+* :bug:`3896` Fix dashboard balance search that does not show ethereum tokens.
+* :bug:`3895` Popup for successful forced sync operation should show correct icon.
+* :bug:`3899` Crypto.com users will now be able to import supercharger events and recurring buy orders. Viban purchases will also now be correct categorized. 
+* :bug:`-` Restores arm64 docker images.
+* :bug:`-` AVAX balances should now be always correctly queried.
+* :bug:`-` PnL report will correctly detect asset cost basis when the fee of a trade is nominated in the received asset.
+* :bug:`3903` The application should now run on macOS 10.14 (Mojave) without errors.
+* :bug:`3901` Coinbase accounts with intenal subaccount movements will now display the Coinbase withdrawals properly.
+
+* :release:`1.23.0 <2021-12-31>`
+* :feature:`3324` Users will be able to set the percentage of ownership for jointly held eth2 validators.
+* :feature:`3425` Users will be able to enter multiple pairs at once for binance exchange settings.
+* :bug:`3847` Remove whitespace when inputting address in new asset form.
+* :feature:`3842` Users will now be taken directly to create account when downloading the application for the first time.
+* :feature:`-` Any ethereum transactions that were ignored for accounting will now need to be re-ignored.
+* :feature:`1242` Users will be asked first whether to activate premium feature, and enable database sync when create new account.
+* :feature:`2876` The application users will now be able to start the auto update mechanism manually from the update indicator.
+* :feature:`2386` Users will see a separate section of L2 balances in Blockchain Balances section.
+* :feature:`2382` Users will now be able to filter specific accounts such as the ones from Loopring using an automatically added tag.
+* :feature:`2901` Users will now be able to select between a full privacy mode and a semi-privacy mode that keeps the percentages visible.
+* :feature:`2624` Users will now be able to filter by tag in the asset details page.
+* :feature:`2265` Users will now be able to see a hint for the trade rate when adding an external trade.
+* :feature:`2848` Users will now get taken to the top of the table automatically when changing a page.
+* :feature:`2121` Users can now select a different timezone when selecting a date to input.
+* :feature:`1875` Users can now enable or disable specific time frames in the graph timeframe
+* :feature:`2446` Users can now switch between adding an external trade using quote asset amount or trade rate.
+* :feature:`2297` The application will now perform an update check every 24h (user-configurable) while the application is running.
+* :feature:`3470` Users can now customize the date input format.
+* :feature:`2918` Users can now select how the percentage column is calculated in the dashboard. Either based on total net value or based on current group (assets, liabilities, or nft).
+* :feature:`3753` Application users will now be able to (copy, cut and paste) using the context menu .
+* :feature:`3525` Users can now see the NFT icon at the NFT Balance table, and Non Fungible Balance table.
+* :feature:`3176` Amount inputs will now adhere to the user specified amount formatting.
+* :feature:`1214` Users will now be able to load and manage previously generated profit and loss reports.
+* :feature:`3716` Users can now see if any of their addresses have PSP available to claim from the PSP airdrop.
+* :feature:`824` Users will now be able to import their trade history from bisq.
+* :feature:`1864` Users will now be able to see trades, deposits and withdrawals imported in CSV from exchanges not connected using API keys.
+* :feature:`3685` Users will now be able to correctly read more transaction types in CSV files imported from crypto.com.
+* :feature:`3497` Users will now be able to add ETH2 validators via index or public key.
+* :feature:`3725` Users can now see if any of their addresses have SDL available to claim from the SDL airdrop.
+* :feature:`3708` Users will now be able to see trades from kraken made from their phone APP and in the kraken's swap UI.
+* :feature:`3549` Users will now be able to select whether to include or not NFT total value in total net worth and graphs.
+* :feature:`3712` Users will now be able to choose a custom date format while importing CSV files.
+* :bug:`3767` The module selector will now properly clear after selecting a module by clicking.
+* :bug:`3128` Bigger net worth values on dashboard should not overlap with the net worth graph.
+* :bug:`3641` Users should now be able to view profit and loss reports that have many thousands of events without the UI freezing.
+* :bug:`-` Deposits and withdrawals in files from cointracking will now be correctly registered.
+* :bug:`-` ShapeShift CSV includes minerFee in rate, but outputAmount does not include minerFee.  Fix to account for the true transacted base amount.
+* :bug:`-` Bitfinex users that used Spankchain in the exchange will now be able to see it properly in their trades, deposits/withdrawals and balances.
+* :bug:`-` Users connected to Alchemy as a node will be able to properly retrieve old ethereum transactions.
+* :bug:`-` Users whose only interaction with a yearn vault was a deposit will no longer see the entire deposit as loss in the PnL.
+* :bug:`3804` Bitpanda users should now be able to see their crypto deposits and withdrawals.
+* :bug:`3847` Inputting an address in the asset form with extra whitespace will now work properly thanks to trimming.
+* :bug:`3859` Trades imported from crypto.com CSV should now have the correct rate imported.
+
+* :release:`1.22.2 <2021-11-30>`
+* :feature:`-` rotki will now detect locked SRM balances in FTX.
+* :bug:`-` Kraken margin trades are not yet supported, so they won't show up or be taken into account in kraken trade history.
+* :bug:`3744` Freshly created users who don't open the app again before an upgrade will now be able to update to new DB versions again.
+* :bug:`3749` Users using multiple instances of the same exchange should now correctly see all their trades.
+* :bug:`-` Liquity users won't make extra balances queries when using DSProxies.
+* :bug:`3767` At module selection clicking on the module chip won't keep the text in the selection field.
+* :bug:`-` Users will now be able to edit exchanges names for Kucoin and Coinbase Pro.
+
+* :release:`1.22.1 <2021-11-19>`
+* :bug:`3726` Manual liabilities should not count as assets and should be deducted from total net value when taking a snapshot. Also multiple liabilities of same asset should now be properly summed.
+* :bug:`3722` Trades details will now properly expand one at a time.
+* :bug:`3714` Airdrops section will now work again for Windows users.
+* :bug:`-` Uniswap trades will be queried correctly now.
+* :bug:`3724` Users should see their per asset liabilities properly aggregated on dashboard.
+* :bug:`3702` RMRK for Kucoin and BCH for Bitfinex should now be properly recognized by rotki again.
+
+* :release:`1.22.0 <2021-11-12>`
+* :feature:`1146` Bitpanda exchange is now supported. Bitpanda balances are now shown and rotki can query trades and deposit/withdrawals from the exchange.
+* :feature:`2483` Users will now get properly notified when saving the balance snapshot fails.
+* :feature:`3579` Users will now be able to sort the NFTs in the gallery by name, collection and price.
+* :feature:`3640` Liquity users that created troves using DefiSaver will be now able to track them.
+* :feature:`1451` Improves performance of the Transactions page.
+* :feature:`3594` Users can now sort the dashboard assets and blockchain balance per asset tables using the price field.
+* :bug:`3328` The asset update resolution dialog should now be usable on mobile screens.
+* :feature:`1513` Users will now be able to add manual liabilities.
+* :feature:`1536` The Account & Balances add button will now be fixed to the right bottom of the screen. The blockchain balances add button will now properly select the appropriate blockchain based on the visible table.
+* :feature:`3686` Users can now see if any of their addresses have ENS available to claim from the ENS airdrop.
+* :feature:`3335` Users will now be able to find the pending tasks in the notification sidebar.
+* :feature:`3235` Users will now be able to create and manage database backups, and view information related to the rotki databases.
+* :bug:`3676` NFT collection floor price should now be properly retrieved again and shown as the valuation for user NFTs that have had no previous sales.
+* :bug:`3667` Users should be able to upload asset icons to docker instances when using a remote connection via the application.
+* :bug:`3664` Binance US users will no longer see errors regarding the fiat payments and orders endpoints.
+* :bug:`3666` An ethereum token's address will be properly filled when navigating to the asset edit from the asset overview page.
+* :bug:`-` Transaction receipts will now be processed properly even for nodes(such as open ethereum) that do not return the type field for non EIP1559 transactions.
+
+* :release:`1.21.3 <2021-10-28>`
+* :bug:`2178` Premium DB sync popup should no longer popup if you only use one instance of rotki in one system.
+* :bug:`3643` The price currency will now be properly visible on the NFT balance header sorting when using a mobile device.
+* :bug:`3629` Kraken api rate limiting should no longer cause a query to get stuck in a loop.
+* :bug:`3624` Editing a CEX api key should now work properly again.
+* :bug:`3619` Binance users should now be able to properly process fiat payments, deposits and withdrawals.
+* :bug:`3613` Users should be now able to save a ledger action without specifying seconds.
+* :bug:`3630` Users will be able to properly see their MakerDAO vault loans
+* :bug:`3647` It should be now possible for users to properly ignore DEX trades in the trade history page.
+
+* :release:`1.21.2 <2021-10-14>`
+* :bug:`-` Users can now ignore any errors when force saving balances.
+* :bug:`3576` User asset charts should no longer have arbitrary zero amounts. There is now a setting they can choose which is off by default. If set it denotes the multiplier of the snapshot saving frequency at which to insert 0 save balances for a graph between two saved values.
+* :bug:`3578` Adding an external trade on a specific date without specifying time will now be possible. Any backend validation errors on the date field should now be properly visible.
+* :bug:`-` The NFT gallery will correctly display NFTs that include a video extension but not at the end of the url.
+* :bug:`3593` Sorting by asset in the dashboard asset table and blockchain balances per asset table should now properly sort alphabetically by the asset symbol.
+* :bug:`3591` Uphold trades will reflect exchanged value instead of received value for base amount.  This will properly arrive at the received amount when the fee is accounted for.
+* :bug:`3580` NFT balances will now get removed from the UI when the user deactivates the module.
+* :bug:`3602` Kusama/Polkadot balances should now be queried properly again.
+* :bug:`3603` The PnL execution will now continue despite potential error calling the compound subgraph.
+
+* :release:`1.21.1 <2021-10-07>`
+* :feature:`3554` Gemini users will now have their earn balances tracked in rotki.
+* :bug:`3555` Users should now be able to see the total value in the table of NFTs in the dashboard
+* :bug:`3579` Asset type selector will now be properly disabled when editing an asset.
+* :bug:`-` Statistics per asset graph will now properly display the name of the NFT.
+* :bug:`3547` Coinbase transactions without network data returned should now be processed properly.
+* :bug:`3546` Coinbase users with trades/deposits/withdrawals/balances of FET (Fetch.ai) should have it properly detected.
+* :bug:`2613` Graphs of assets that used to miss all 0 balance data points between two time point will now properly show a 0 amount in the asset graph for the time period.
+* :bug:`3552` Users with semi-fungible tokens in different ethereum wallets will see them correctly in the NFT gallery.
+* :bug:`-` Docker users will be able to retrieve automatic information for tokens when adding new ethereum assets.
+* :bug:`3414` Coinbase conversions should display the correct fee.
+* :bug:`3208` Rotki will now allow to track the same account for different blockchain types.
+* :bug:`-` The value of NFTs will now be properly included as part of the total net worth when calculating an asset's percentage.
+
+* :release:`1.21.0 <2021-09-30>`
+* :feature:`3251` Users will now be able to easily access the asset edit page from the asset details page.
+* :feature:`3020` Users will now be able to copy their ETH1 addresses when visiting the ETH2 staking page.
+* :feature:`2362` Binance users will now be able to query their fiat deposit/withdrawals and fiat orders and have it taken into account in rotki.
+* :feature:`3326` Introduces pagination for liquidity pool balances to help users with a great number of lps.
+* :feature:`1097` Users will now be able to view their NFTs, track and manage their prices, and also see their value as part of their total net worth.
+* :feature:`2764` Users will now be able to restore the local assets database to its initial state.
+* :feature:`2847` Users will now be able to use a combination of filters in the search for trades and deposits/withdrawals.
+* :feature:`3254` Users can now add a custom Covalent API key in rotki.
+* :feature:`3416` Users will now be able to import ShapeShift trade history CSVs exported from shapeshift.com.
+* :feature:`1345` Users will now be able to import uphold transaction history CSVs exported from uphold.com.
+* :feature:`-` Users will now be able to track balances locked in pickle's DILL.
+* :feature:`2891` Users will now see notes and links for trades in the exported CSV files.
+* :feature:`2836` Users will now be able to track Liquity's troves and staking in the Liquity protocol.
+* :feature:`3474` Users of coinbase will now see deposits for coinbase earn and inflation rewards.
+* :bug:`3239` Users will now see only the relevant addresses suggested when filtering DeFi deposits.
+* :bug:`3340` Users will now be able to properly see the favicon when accessing the frontend using Firefox.
+* :bug:`3266` Users will now be able to properly access most of the top bar content using a mobile device.
+* :bug:`3268` Users will now be able to properly scroll to the hidden tabs when using a mobile device.
+* :bug:`3267` Frontend will now occupy all the available screen when accessed from a mobile device.
+* :bug:`3463` Users using Turkish localization will now be able to use the application.
+* :bug:`3448` Improve Kucoin api rate limit handling. Recognize CFG asset in Kucoin as WCFG.
+* :bug:`3452` Trades from externally imported exchanges (blockfi, crypto.com etc.) should now be properly taken into accounting in the PnL report again.
+* :bug:`3437` Fix a bug where for some active aave v2 lending positions the entire aToken balance would be shown as profit.
+* :bug:`3406` Sushiswap events will now be taken into account during the profit and loss report.
+* :bug:`3407` Users will now see correctly reported their amount of xSUSHI.
+* :bug:`3421` Users will now be able to see solana properly in coinbase assets
+* :bug:`3418` Users will now be able to finish import from crypto.com's CSV files when there is a time mismatch between rows.
+* :bug:`3056` Users will now be better notified when an error occurred while importing information from crypto.com on credit/debit events with special cases.
+* :bug:`3493` Users of Bitstamp will see correctly imported assets movements with fees in any coin.
+* :bug:`3491` Coinbasepro users who own Barnbridge governance token (BOND) will now be able to properly see it in balances, trades and deposits/withdrawals.
+* :bug:`-` Users importing information from Nexo CSVs will correctly detect interest gains and detect special assets symbols.
+* :bug:`3502` MakerDAO vault users who saw double the amount of liabilities for some of their vault/s should now see the proper amount again.
+* :bug:`3490` If a user had historic trades of a delisted asset in coinbasepro the trades query will now work again.
+* :bug:`3535` There should no longer be a problem when changing active modules while an ETH account is already being added.
+
+* :release:`1.20.1 <2021-08-27>`
+* :feature:`3349` AMM swaps now have a transaction hash link in the trade history section.
+* :bug:`3329` Users will now properly see their sushiswap trades in the history page if they have the sushiswap module activated.
+* :bug:`3310` For the edge case of a MakerDAO vault event containing a zero amount the MakerDAO DeFi section and PnL report should no longer get an error.
+* :bug:`3311` The PnL CSV export in Windows should now now longer contain the double number of lines and as such the formulas at the summary should be correct.
+* :bug:`3313` Discrepancies on the sign of net_profit_loss in PnL CSV export between exports with and without formulas should now be fixed.
+* :bug:`3355` Yearn V2 vaults should now display a correct price.
+* :bug:`3373` The form to add a FTX account will now work correctly when the subaccount field is modified and then cleared.
+
+* :release:`1.20.0 <2021-08-06>`
+* :feature:`2426` Sushiswap is now supported. Premium users can see their LP balances, swaps history and LP pool join/exits. Finally the balancer trades are now taken into account in the profit/loss report.
+* :feature:`2145` Users will now be able to customize whether CSV export should contain metadata of the PnL run. Consisting of the rotki version that generated it and the chosen accounting settings.
+* :feature:`3279` Users will now be able to customize whether CSV export should contain a summary of PnL per event type.
+* :feature:`3252` Users will now be able to customize whether CSV export should contain formulas or not.
+* :feature:`3125` Native support for Polkadot blockchain.
+* :feature:`3242` Native support for Avalanche Blockchain and Covalent API.
+* :feature:`3097` Users will now have the option to disable the application tray icon.
+* :feature:`3061` When inserting ledger actions users will now be able to skip the specific time on date input (00:00:00 will be assumed).
+* :feature:`3061` Users will now get the last used location pre-selected when adding ledger actions.
+* :feature:`3138` Users will now see separate cards on the Defi overview for MakerDAO Vaults and MakerDAO DSR.
+* :feature:`3275` Users can now see if any of their addresses have FOX available to claim from the ShapeShift airdrop.
+* :bug:`3264` Users should now be able to properly download the PnL CSV when using docker.
+* :bug:`3289` Aave v2 balances should now be taken into account in the DeFi deposits section.
+* :bug:`3287` Users with AMM trades from different AMMs in a single transaction will now be able to select all and deselect all trades properly in the frontend.
+
+* :release:`1.19.1 <2021-07-22>`
+* :bug:`3236` Users will now see the proper total networth for the current day in the graph tooltip.
+* :bug:`3224` Users will now be able to properly select an end time in earlier dates.
+* :bug:`3198` Firefox docker users will now see a regularly sized Gitcoin icon under the history menu.
+* :bug:`3199` Users will now properly see the node connection status/last sync information update.
+* :bug:`3214` UNIUP and UNIDOWN will now be correctly detected.
+
+* :release:`1.19.0 <2021-07-15>`
+* :feature:`3116` Support for INR (Indian Rupee) as a profit currency has been added.
+* :feature:`1520` Users can now manually add prices for tokens/assets.
+* :feature:`692` Gitcoin Grant owners will now be able to track and generate reports of their grants.
+* :feature:`1666` Users will now be able to see their yearn v2 vaults in in the defi section.
+* :feature:`2456` Users will now be able to correctly retrieve prices for Curve LP tokens.
+* :feature:`2778` Users will now be able to enable modules and queried addresses when adding an ethereum account
+* :feature:`1857` Premium users will now be able to query Aave V2 events.
+* :feature:`2722` The sync conflict dialog dates will now be consistent with the user specified date format.
+* :feature:`3114` Users can easily check and manage which addresses are queried for each defi module directly from the respective module page.
+* :feature:`3069` When adding an asset coingecko/cryptocompare identifiers will now be validated and non-existing ones will be rejected.
+* :bug:`3145` Docker users will now have the ability to logout any other sessions when attempting to connect from a new browser window.
+* :bug:`2685` Invoking `--version` from the rotki backend binary in Windows should no longer raise a Permission error.
+* :bug:`3142` During v26->v27 upgrade if a user has balancer LP events the upgrade should no longer fail.
+* :bug:`3172` COIN should now be properly mapped to Coinbase tokenized stock in both bittrex and FTX.
+* :bug:`3134` The new cWBTC token should now be properly recognized for compound users.
+
+* :release:`1.18.1 <2021-06-30>`
+* :bug:`2447` When fee of a trade is paid in crypto that crypto's asset will now be deducted from the cost basis calculation.
+* :bug:`3133` Users will now properly see a MakerDAO entry in the Defi Overview.
+* :bug:`2887` Upgrade the deprecated binance exchangeInfo and deposit/withdrawal APIs.
+* :bug:`3118` Users will now be able to properly connect to the dockerized backend through the app. (It will not work if the docker container is a previous release).
+* :bug:`3101` Editing ethereum token details via the asset manager in the frontend should now work properly again.
+* :bug:`3100` FTX API keys with permission for subaccounts only will now be correctly validated.
+* :bug:`3096` The Uniswap module will ignore swaps not made by the queried address.
+
+* :release:`1.18.0 <2021-06-18>`
+* :feature:`2064` Users will now be able to close rotki to tray. When logged the tray icon will update based on the net worth value during the selected period (week, two weeks etc).
+* :feature:`2939` Rotki logs will now persist after restart. Number of logs and maximum size for all logs of a run can be now specified.
+* :feature:`1800` Users will now be greeted with an informational notice when trying to access a page that requires a module to be activated.
+* :feature:`1692` IndependentReserve users will now be able to see their balances and have their deposit/withdrawal/trade history taken into account during profit/loss calculation.
+* :feature:`3025` Users will now see the percentage of each location when looking into an asset's details.
+* :feature:`2596` Users will now be able to create new tags directly from the tag selection input.
+* :feature:`2954` On login screen, the password field will now be focused for users that have remember user enabled.
+* :feature:`2786` FTX users will be able to query information for subaccounts only.
+* :feature:`2670` Users will now get results in a better order when using the asset selector.
+* :feature:`2951` Users will now get results in a better order when searching for an asset in asset management. Search will now consider both name and symbol.
+* :feature:`3014` Users will now get a suggested name when adding a new exchange.
+* :feature:`1073` Binance users will now be able to select which markets should be queried for trades history considerably improving the speed of binance history queries.
+* :feature:`3058` Docker users will now get notified when running an outdated version of the frontend cached in their browser.
+* :bug:`3057` Nexo CSV importer will now use the correct time format.
+
+* :release:`1.17.2 <2021-06-04>`
+* :bug:`3043` Collapsed xpubs should now be included in the totals in the btc accounts table.
+* :bug:`3029` Exchanges balances tab will properly adjust to a dark background on dark mode.
+* :bug:`3027` Day should now display properly under all circumstances when a custom date format is evaluated.
+* :bug:`81` Users with more than 10,000 trades in poloniex will now be able to properly pull their trading history.
+* :bug:`3037` Querying a big number of legacy bitcoin addresses from an xpub should now work properly again.
+* :bug:`3038` Binance.us queries should now work properly again.
+* :bug:`3033` Users of Bitstamp should be able to pull their trades, deposits and withdrawals history again.
+* :bug:`3030` Setting up a bitfinex api key should now work properly again.
+* :bug:`3010` Fixes a bug when editing a trade that had a modified/replaced asset could fail with a "trade identifier not found" error.
+* :bug:`1403` When removing an ethereum account that has liabilities, they should now also be removed from the dashboard and from the blockchain accounts view.
+* :bug:`2998` If a new token is added in the rotki list of assets then the token detection cache is now invalidated so it will be detected when refreshing balances.
+* :bug:`2999` If a binance withdrawal is missing the txId field rotki will now still be able to process it correctly.
+* :bug:`2993` If a sell of FIAT for crypto is made, which is effectively a buy of crypto with FIAT, complaints about the source of funds should no longer be generated.
+* :bug:`2994` Nexo users will be able to correctly import their information from a CSV file.
+
+* :release:`1.17.1 <2021-05-26>`
+* :bug:`2984` The notification background will now properly adjust for users using the application in light mode.
+* :bug:`2982` Premium users of v1.17.0 who had DB syncing activated will now be able to open the app again.
+* :bug:`2986` Users won't be affected by a login error at the moment of querying FTX when the keys are correct.
+
+* :release:`1.17.0 <2021-05-25>`
+* :feature:`2898` Users are now able to see the asset identifiers in the asset management view and replace one asset and all its occurences with another.
+* :feature:`2820` Users will now be able to select if they want to view graphs based at a 0 y-axis start instead of the minimum in the selected period.
+* :feature:`2725` Users will now be able to view a small help dialog with the supported options for the date display format.
+* :feature:`1902` Users can now modify the backend settings (e.g. data directory, log directory) through the application.
+* :feature:`2584` Removed the option to anonymize the logs. Logs are off by default anyway and it was never possible to anonymize accurately and completely when activated so the setting was misleading.
+* :feature:`47` Users can now add multiple accounts per supported exchange.
+* :feature:`1881` Users can now access an about screen with information about the application.
+* :feature:`1549` rotki premium users will now be able to switch to a dark mode and change the theme colors.
+* :feature:`1674` Add experimental support for BlockFi imports using CSV files.
+* :feature:`2224` Add experimental support for Nexo imports using CSV files.
+* :feature:`2475` Withdrawals from Binance and Binance US will now have their fee correctly imported.
+* :feature:`2803` Ethereum tokens that consist of underlying tokens will now see their price correctly fetched.
+* :feature:`2844` Premium users will now be able to fetch their Uniswap v3 swaps.
+* :feature:`2893` Users can now see if any of their addresses have CVX available to claim from the ConvexFinance airdrop.
+* :feature:`2529` Crypto.com CSV import functionality has been updated to allow more types of entries.
+* :bug:`2850` User will now see a consistent naming of exchanges across the application.
+* :bug:`367` Fixed edge cases where some tasks would run for hours due to the absence of timeouts.
+* :bug:`2875` Invalid ENS names should now provide a proper error when provided to rotki.
+* :bug:`2888` Ledger actions selected to be ignored in the profit and loss report will now be correctly ignored.
+
 * :release:`1.16.2 <2021-05-08>`
 * :bug:`-` If a DeFi event provides zero amount of an asset to a user the PnL report should now work properly again.
 * :bug:`2857` Users will now properly see their blockchain balances fetched when restoring to a new account using premium.
@@ -18,14 +332,14 @@ Changelog
 
 * :release:`1.16.1 <2021-04-30>`
 * :bug:`2811` ETH and WETH are now considered equivalent for cost basis and accounting purposes.
-* :bug:`2794` Aave v1 data after block 12,152,920 should be now available. Rotki switched to the new Aave v1 subgraph.
+* :bug:`2794` Aave v1 data after block 12,152,920 should be now available. rotki switched to the new Aave v1 subgraph.
 * :bug:`2781` From this version and on, attempting to open a new global DB with an older rotki version will not be allowed and the app will crash with an error message.
 * :bug:`2773` Timestamps will be correctly read for trades in the Kraken exchange.
 * :bug:`2775` Ambiguous FTX assets will now be properly recognized by rotki.
 * :bug:`2767` Curve pool tokens will not be double counted in the dashboard balances.
 
 * :release:`1.16.0 <2021-04-21>`
-* :feature:`2671` Rotki will now detect Adex V5 staked balances
+* :feature:`2671` rotki will now detect Adex V5 staked balances
 * :feature:`2714` Add support for a3CRV Curve pool
 * :feature:`2210` All price history caches are now moved to the global database. The price history sub-directory of the rotki data directory is now deleted. This should optimize price history querying and save disk space.
 * :feature:`2551` Users will now be prompted with asset database updates if changes have happened to the supported rotki assets.
@@ -159,10 +473,10 @@ Changelog
 * :bug:`2391` The signed version of the MacOS binary should now work properly for all users.
 
 * :release:`1.14.0 <2021-02-16>`
-* :feature:`1005` MacOS users will no longer get the dreaded "Can not open the app because developer is not verified" warning. Rotki is now a verified apple developer.
+* :feature:`1005` MacOS users will no longer get the dreaded "Can not open the app because developer is not verified" warning. rotki is now a verified apple developer.
 * :feature:`2299` During a PnL report rotki should now also take into account for cost basis the assets gained from or used in DeFi.
 * :feature:`2318` Users can now see if their accounts are eligible for the Curve CRV airdrop and POAP Delivery badges.
-* :feature:`297` Rotki now supports KuCoin. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
+* :feature:`297` rotki now supports KuCoin. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
 * :feature:`1436` Users will now see any validation errors when adding manual balances under their respective inputs instead of a modal dialog.
 * :feature:`2235` Loopring users will now be able to add their loopring api key to rotki and have it track all their loopring l2 balances.
 * :feature:`2330` Users can now easily navigate to the respective pages by clicking the dashboard cards titles for manual balances, blockchain balances and exchange balances.
@@ -297,7 +611,7 @@ Changelog
 * :bug:`2232` Bitstamp users should now be able to see all their deposit/withdrawals. It's recommended to purge all bitstamp data and re-query it for this to properly work.
 * :bug:`1928` rotki premium DB sync will now work after entering api keys for the first time even without a restart.
 * :bug:`2294` Do not count MakerDAO Oasis proxy assets found by the DeFi SDK as it ends up double counting makerDAO vault deposits.
-* :bug:`2287` Rotki encrypted DB upload for premium users should now respect the user setting.
+* :bug:`2287` rotki encrypted DB upload for premium users should now respect the user setting.
 
 * :feature:`-` Added support for the following tokens:
 
@@ -387,7 +701,7 @@ Changelog
   - `3X Long Stellar Token (XLMBULL) <https://www.coingecko.com/en/coins/3x-long-stellar-token>`__
 
 * :release:`1.12.2 <2021-01-18>`
-* :bug:`2120` Rotki should now display the action datetime when editing a ledger action.
+* :bug:`2120` rotki should now display the action datetime when editing a ledger action.
 * :bug:`2116` Kusama user balance query should now work properly in all cases.
 * :bug:`2113` Iconomi exchange users should now no longer get an error when pulling deposits/withdrawals history
 
@@ -395,14 +709,14 @@ Changelog
 * :bug:`-` Fix the problem introduced with rotki v1.12.0 for OSX users that made them unable to run the app.
 
 * :release:`1.12.0 <2021-01-16>`
-* :feature:`968` Rotki will now run some heavier tasks periodically in the background to alleviate the alleviate the pressure from big tasks like the profit loss report. These tasks for now are: exchanges trades query, ethereum transactions query, cryptocompare historical price queries and xpub address derivation.
+* :feature:`968` rotki will now run some heavier tasks periodically in the background to alleviate the alleviate the pressure from big tasks like the profit loss report. These tasks for now are: exchanges trades query, ethereum transactions query, cryptocompare historical price queries and xpub address derivation.
 * :feature:`2015` Users can now selectively ignores trades, deposits/withdrawals, ethereum transactions and ledger actions in the accounting processing of the profit loss report.
-* :feature:`1920` Rotki now supports addition of a custom Kusama endpoint.
+* :feature:`1920` rotki now supports addition of a custom Kusama endpoint.
 * :feature:`1662` Users are now able to manually input ledger actions such as Income, Donation, Loss, Expense, Dividends Income.
 * :feature:`1866` The tax report is now named Profit and Loss Report.
 * :feature:`1466` The account label is now renamed to account name.
 * :bug:`1140` Users will now see the account balances sorted by label instead of hex when sorting the account column.
-* :feature:`1919` Rotki now supports Kusama blockchain. Users can import their Kusama addresses and see their KSM balances.
+* :feature:`1919` rotki now supports Kusama blockchain. Users can import their Kusama addresses and see their KSM balances.
 * :feature:`1792` Users should now be able to see the accounting settings used when generating a tax report.
 * :bug:`1946` There should no longer be a non 0-100 percentage in the tax report during the progress report.
 * :bug:`2040` Balance snapshotting should now work again for Bitfinex and Bitstamp users.
@@ -442,20 +756,20 @@ Changelog
 
 * :release:`1.11.0 <2020-12-30>`
 * :bug:`1929` Premium users will be able to see the proper balances after a force pull.
-* :feature:`438` Rotki now supports Bitfinex. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
+* :feature:`438` rotki now supports Bitfinex. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
 * :feature:`-` Users can now save the login username across sessions.
 * :feature:`972` Users can now see which aidrops any of their addresses is eligible for.
 * :feature:`1949` All time pickers now use a 24h format to avoid user confusion.
 * :feature:`1961` Users can configure the BTC address derivation gap limit.
 * :feature:`1955` Users can now set their main currency to Swiss Franc.
 * :feature:`1270` Users can now set their main currency to ETH or BTC and see everything in that currency. Their net value, the valueof each asset they own, value of each trade, event e.t.c.
-* :feature:`1515` Rotki now supports Binance US. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
+* :feature:`1515` rotki now supports Binance US. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
 * :feature:`1838` Allow users to input a beaconcha.in API key for better request limits: https://beaconcha.in/pricing
 * :feature:`-` Support MANA and AAVE in Kraken and also detect staked Kava and ETH2.
-* :bug:`1974` Binance USDT margined future and Coin margined future balances should now be visible in Rotki.
+* :bug:`1974` Binance USDT margined future and Coin margined future balances should now be visible in rotki.
 * :bug:`1969` Users who were using open nodes only and were seeing an out of gas error during defi balances query, should be able to query defi balances properly again.
 * :bug:`1287` Querying bitmex balances should now work properly again.
-* :feature:`1515` Rotki now supports Binance US. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
+* :feature:`1515` rotki now supports Binance US. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
 * :bug:`1916` Querying bitstamp trades should now work properly again.
 * :bug:`1917` Users can now properly login if they input the username after the password.
 * :bug:`1953` Show a proper error when a user inputs an invalid xpub or derivation path.
@@ -516,20 +830,20 @@ Changelog
 * :bug:`-` Do not double count Binance lending balances and don't show Zero balances in binance futures and lending.
 
 * :release:`1.10.0 <2020-12-15>`
-* :feature:`1681` AdEx protocol is now supported. Staking balances, events and APR are now detected by Rotki for premium users.
+* :feature:`1681` AdEx protocol is now supported. Staking balances, events and APR are now detected by rotki for premium users.
 * :feature:`1869` Vote-escrowed CRV will now be auto-detected for Curve.fi users. The amount shown will be the total locked CRV for vote-escrow.
 * :feature:`114` Added a frontend-only setting to make the periodic query of the client customizable. The allowed range of values is from 5 seconds to 3600 seconds.
 * :feature:`1753` Users can now filter the DEX trades by address and date range.
-* :feature:`1858` Rotki detects staked ETH2 balances in Kraken
+* :feature:`1858` rotki detects staked ETH2 balances in Kraken
 * :feature:`1810` Users can now set the default timeframe for the net worth graph. The selected timeframe now persist when navigating from and to the dashboard.
-* :feature:`436` Rotki now supports Bitstamp. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
-* :feature:`1611` Rotki can now import data and download the tax report csv when running in the browser.
+* :feature:`436` rotki now supports Bitstamp. Users can see their balances and import trades, deposits and withdrawals from that exchange. They are also taken into account in the tax report.
+* :feature:`1611` rotki can now import data and download the tax report csv when running in the browser.
 * :feature:`1851` Eth2 deposits will now be queried separately from Eth2 staking details in the Eth2 staking view. As a result the loading of the staking view for Eth2 is faster. Also usd_value should now properly appear with the historical ETH value for each deposit.
 * :feature:`1413` Users can now refresh their manual balances from the dashboard.
 * :feature:`176` Add an accounting setting to make asset movements fees (deposits/withdrawals to/from exchanges) inclusion in the profit loss report configurable.
 * :feature:`1840` Better handling double crypto.com entries (dust_conversion, swap, ...) from csv export. Also crypto.com imported trades and asset movements now appear in the history UI component
-* :feature:`1605` User funds in Binance's futures wallet should now also be included in Rotki.
-* :feature:`1776` User funds in Binance's lending/saving wallet should now also be included in Rotki.
+* :feature:`1605` User funds in Binance's futures wallet should now also be included in rotki.
+* :feature:`1776` User funds in Binance's lending/saving wallet should now also be included in rotki.
 * :bug:`1834` Users will not have to close the add account dialog manually while the newly added account balances are queried.
 * :bug:`1671` Users will now see the amounts earned on aave lending aggregated per asset.
 * :bug:`1868` Binance SOL token is now properly mapped to Solana.
@@ -563,7 +877,7 @@ Changelog
 * :bug:`1896` Provide a temporary fix for the breaking change that the Graph introduced into their schemas that breaks all current python implementations. Users should no longer see _SubgraphErrorPolicy_! errors.
 
 * :release:`1.9.1 <2020-11-29>`
-* :feature:`1716` Rotki can now also query data from the following ethereum open nodes:
+* :feature:`1716` rotki can now also query data from the following ethereum open nodes:
   - 1inch
   - my ether walet
   - cloudflare-eth
@@ -599,7 +913,7 @@ Changelog
   - `Cornichon (CORN) <https://www.coingecko.com/en/coins/cornichon>`__
 
 * :release:`1.9.0 <2020-11-20>`
-* :feature:`717` Uniswap v2 LP balances are now detected by Rotki. Faster balance queries, swaps history and LP events history is also supported for premium users. Finally uniswap trades are now taken into account in the profit/loss report for premium users.
+* :feature:`717` Uniswap v2 LP balances are now detected by rotki. Faster balance queries, swaps history and LP events history is also supported for premium users. Finally uniswap trades are now taken into account in the profit/loss report for premium users.
 * :bug:`1664` Properly convert the given xpub to ypub if P2SH_P2WPKH and zpub if WPKH. This should address the problem of importing some types of xpubs for some users.
 * :bug:`1740` SNX token and some other token balances should no longer be double counted.
 * :feature:`1724` YFI and BAL are now supported as collateral for makerdao vaults.
@@ -645,10 +959,10 @@ Changelog
 * :bug:`1636` Users running earlier OSX versions than Catalina can again start the application properly.
 * :bug:`1635` Application will now continue running when changing log level on Windows.
 * :feature:`1642` Force pull/push buttons for premium sync are now accessible in the floppy disk icon on the toolbar.
-* :bug:`1639` Native segwit xpubs will now properly query and display the balances of their derived addresses. Rotki switched to using blockstream's API instead of blockcypher for native segwit addresses.
+* :bug:`1639` Native segwit xpubs will now properly query and display the balances of their derived addresses. rotki switched to using blockstream's API instead of blockcypher for native segwit addresses.
 * :bug:`1638` Balances displayed in dashboard cards should now be properly sorted by value in descending order.
-* :bug:`-` If the DB has not been uploaded in this run of Rotki, the last upload time indicator now shows the last time data was uploaded and not "Never".
-* :bug:`1641` Rotki only accepts derivation paths in the form of m/X/Y/Z... where ``X``, ``Y`` and ``Z`` are integers. Anything else is not processable and invalid. We now check that the given path is valid and reject the addition if not. Also the DB is upgraded and any xpubs with such invalid derivation path are automatically deleted.
+* :bug:`-` If the DB has not been uploaded in this run of rotki, the last upload time indicator now shows the last time data was uploaded and not "Never".
+* :bug:`1641` rotki only accepts derivation paths in the form of m/X/Y/Z... where ``X``, ``Y`` and ``Z`` are integers. Anything else is not processable and invalid. We now check that the given path is valid and reject the addition if not. Also the DB is upgraded and any xpubs with such invalid derivation path are automatically deleted.
 * :bug:`1637` Loading ethereum transactions on the UI should work properly again now
 
 * :feature:`-` Added support for the following tokens:
@@ -823,15 +1137,15 @@ Changelog
 * :bug:`1321` CSV export formulas have now been fixed and should properly calculate profit/loss per different action type.
 * :feature:`-` Add support for New Zealand Dollar (NZD) as a fiat currency
 * :feature:`-` Add support for Brazilian Real (BRL) as a fiat currency
-* :feature:`-` Rotki users can now import data from their Crypto.com mobile application. For more information go to the data import component of Rotki.
-* :feature:`1361` Users of Rotki will now no longer need to wait until the next version is available to be able to access the newly supported assets. Rotki will pull newly available supported assets directly from Github.
+* :feature:`-` rotki users can now import data from their Crypto.com mobile application. For more information go to the data import component of rotki.
+* :feature:`1361` Users of rotki will now no longer need to wait until the next version is available to be able to access the newly supported assets. rotki will pull newly available supported assets directly from Github.
 * :bug:`1352` Defi cached state should now properly reset when an account is added or deleted.
 * :bug:`1329` If aave historical data is queried in quick succession a UNIQUE constraint error will no longer be generated.
 * :feature:`840` Add a new notification UI. Backend errors should now display a notification on the upper right corner.
 * :feature:`983` The asset icons that are displayed in the rotki frontend have been revamped. We are now pulling icon data from coingecko so a lot more token/asset icons should be visible and up to date.
 * :feature:`1235` Numerical displays can now be customized. Users can choose the thousands, the decimals separator. and the position of the currency symbol.
 * :feature:`1186` Add tooltips to all app bar buttons (except drawer button)
-* :bug:`1226` Fix "Get Rotki Premium" menu button on macOS
+* :bug:`1226` Fix "Get rotki Premium" menu button on macOS
 * :feature:`-` Added support for the following tokens:
 
   - `YAM (YAM) <https://coinmarketcap.com/currencies/yam/>`__
@@ -878,15 +1192,15 @@ Changelog
 * :feature:`1178` Users can now select which accounts they want to track for the activated defi modules. If none are selected all accounts are queried.
 * :feature:`1084` Users can now select which of the available defi modules they want to activate.
 * :bug:`1285` Properly track SNX tokens by pointing to the `migrated <https://blog.synthetix.io/proxy-contract-cutover-on-may-10/`__ proxy contract
-* :feature:`820` Multiple open ethereum nodes will be now also queried along with your own ethereum node or etherscan. But in smaller frequency so as not to spam those services. The additional nodes Rotki now queries are:
+* :feature:`820` Multiple open ethereum nodes will be now also queried along with your own ethereum node or etherscan. But in smaller frequency so as not to spam those services. The additional nodes rotki now queries are:
   - MyCrypto
   - Blockscout
   - Avado pool
 * :feature:`1213` Taxable actions table in the tax report and in the CSV exports now include a location.
 * :bug:`1249` Fix some amounts not being converted to user's main currency correctly (two components were affected: Account Asset Balances in Accounts & Balances, and the AssetBalances component which was used in both Blockchain Balances as well as Exchange Balances sub-pages that showed totals across an asset).
 * :bug:`1247` Fix glitchy autocomplete component usage which caused select menus to not open properly if the "dropdown arrows" were clicked. This has fixed the following select menus throughout the app: Asset Select, Tag Input and Tag Filter, Owned Tokens.
-* :bug:`1234` Bittrex history can now be properly queried again. Rotki uses bittrex v3 API from now and on.
-* :bug:`-` ALQO historical price queries should now work properly again. Cryptocompare changed the mapping to XLQ and Rotki had to adjust.
+* :bug:`1234` Bittrex history can now be properly queried again. rotki uses bittrex v3 API from now and on.
+* :bug:`-` ALQO historical price queries should now work properly again. Cryptocompare changed the mapping to XLQ and rotki had to adjust.
 * :feature:`-` Added support for the following tokens
 
   - `UMA (UMA) <https://coinmarketcap.com/currencies/uma/>`__
@@ -909,7 +1223,7 @@ Changelog
 
 
 * :release:`1.6.1 <2020-07-25>`
-* :bug:`1202` The Linux Rotki Appimage binary works properly again for Ubuntu <= 18.04. Rotki v1.6.0 was not able to run in those Ubuntu versions.
+* :bug:`1202` The Linux rotki Appimage binary works properly again for Ubuntu <= 18.04. rotki v1.6.0 was not able to run in those Ubuntu versions.
 * :bug:`1203` The selected tab in Accounts & Balances is now readable again.
 * :bug:`1172` Fix the ethereum addresses for ``CHAI`` and ``cUSDT`` token.
 
@@ -920,8 +1234,8 @@ Changelog
 * :bug:`1140` The Accounts column in "Blockhain Balances" is now correctly sorted by label (if it exists) or the account address.
 * :bug:`1154` Tag filtering in "Manual Balances" within Accounts & Balances now works correctly if any balances do not have any tags assigned.
 * :bug:`1155` Fix the cryptocompate price queries of LUNA Terra
-* :bug:`1151` Fix for bittrex users so that if bittrex returns dates without a millisecond component Rotki can still parse them properly.
-* :feature:`1105` Rotki now uses a standard compliant directory per OS to store user data. If the directory does not exist it is created and at the same time the old directory is migrated by copying it to the new one. The new directories per OS are:
+* :bug:`1151` Fix for bittrex users so that if bittrex returns dates without a millisecond component rotki can still parse them properly.
+* :feature:`1105` rotki now uses a standard compliant directory per OS to store user data. If the directory does not exist it is created and at the same time the old directory is migrated by copying it to the new one. The new directories per OS are:
   - Linux: ``~/.local/share/rotki/data``
   - OSX: ``~/Library/Application Support/rotki/data``
   - Windows: ``%LOCALAPPDATA%/rotki/data``
@@ -995,18 +1309,18 @@ Changelog
 * :bug:`986` Allows the unsetting of the RPC endpoint
 * :feature:`918` Premium users can now set watchers for their vaults. When the watched vault gets below or above a certain collateralization ratio they get an email alert.
 * :bug:`836` Allows the use of non-checksummed eth addresses in the frontend.
-* :bug:`1016` Rotki users can now delete their rotki premium API keys via API Keys -> Rotki Premium.
-* :feature:`1015` Rotki now lets the user manually refresh and take a snapshot of their balances, even if the balance save frequency has not lapsed. This functionality is accessible through the Save Indicator (floppy disk icon on the app bar).
-* :feature:`707` Rotki now supports makerdao vaults. The vaults of the user are autodetected and they can see all details of each
+* :bug:`1016` rotki users can now delete their rotki premium API keys via API Keys -> rotki Premium.
+* :feature:`1015` rotki now lets the user manually refresh and take a snapshot of their balances, even if the balance save frequency has not lapsed. This functionality is accessible through the Save Indicator (floppy disk icon on the app bar).
+* :feature:`707` rotki now supports makerdao vaults. The vaults of the user are autodetected and they can see all details of each
   vault in the DeFi borrowing section. Premium users can also see historical information and total interest owed or USD lost to liquidation.
-* :feature:`917` Rotki now has a new and improved Dashboard. Users can view their total net worth as well as totals per source of balances (exchanges, blockchains, and manual entries), as well as filter the full asset listing.
+* :feature:`917` rotki now has a new and improved Dashboard. Users can view their total net worth as well as totals per source of balances (exchanges, blockchains, and manual entries), as well as filter the full asset listing.
 * :bug:`995` Importing from cointracking.info should now work again. Adjust to the latest cointracking.info CSV export format.
-* :feature:`971` Rotki's initial loading and welcome screens are now integrated with an improved UI and a scrolling robin in the background to welcome the user.
+* :feature:`971` rotki's initial loading and welcome screens are now integrated with an improved UI and a scrolling robin in the background to welcome the user.
 * :feature:`988` General and Accounting settings have been consolidated into one Settings page, accessed via the User Menu, where users can access them as separate tabs.
-* :feature:`763` Rotki users can now change their password in the app's settings in the "User & Security" tab.
+* :feature:`763` rotki users can now change their password in the app's settings in the "User & Security" tab.
 * :bug:`962` Fix infinite loop in Coinbase trades query
-* :feature:`-` Rotki users now have two options to further enhance their privacy. If a user wants to temporarily obscure values in the application, they can do so by turning `Privacy Mode` on and off in the User Menu. Additionally, if a user wants to scramble their data (e.g. before sharing screenshots or videos), they can do so via the `Scramble Data` setting in the application's General Settings.
-* :bug:`966` Rotki now supports the new Kraken LTC and XRP trade pairs
+* :feature:`-` rotki users now have two options to further enhance their privacy. If a user wants to temporarily obscure values in the application, they can do so by turning `Privacy Mode` on and off in the User Menu. Additionally, if a user wants to scramble their data (e.g. before sharing screenshots or videos), they can do so via the `Scramble Data` setting in the application's General Settings.
+* :bug:`966` rotki now supports the new Kraken LTC and XRP trade pairs
 * :feature:`-` Added support for the following tokens
 
   - `Aave Interest bearing DAI (aDAI) <https://www.coingecko.com/en/coins/aave-dai>`__
@@ -1028,11 +1342,11 @@ Changelog
   - `Unicorn Technology International (UTI) <https://www.cryptocompare.com/coins/uti/overview>`__
 
 * :release:`1.4.2 <2020-04-29>`
-* :bug:`927` Rotki should no longer fail to handle HTTP Rate limiting if your web3 providing node rate limits you.
-* :bug:`950` If too many BTC accounts are used Rotki will no longer delay for a long time due to balance query rate limiting. Proper batching of queries to both bitcoin.info and blockcypher is now happening.
+* :bug:`927` rotki should no longer fail to handle HTTP Rate limiting if your web3 providing node rate limits you.
+* :bug:`950` If too many BTC accounts are used rotki will no longer delay for a long time due to balance query rate limiting. Proper batching of queries to both bitcoin.info and blockcypher is now happening.
 * :bug:`942` Properly save all historical balances to the DB when a user has input manually tracked balances.
 * :bug:`946` Handle the malformed response by kraken that is sent if a Kraken user has no balances.
-* :bug:`943` If Kraken sends a malformed response Rotki no longer raises a 500 Internal server error. Also if such an error is thrown during setup of any exchange and a stale object is left in the Rotki state, trying to setup the exchange again should now work and no longer give an error that the exchange is already registered.
+* :bug:`943` If Kraken sends a malformed response rotki no longer raises a 500 Internal server error. Also if such an error is thrown during setup of any exchange and a stale object is left in the rotki state, trying to setup the exchange again should now work and no longer give an error that the exchange is already registered.
 * :bug:`930` Etherscan API keys are now properly included in all etherscan api queries. Also etherscan API key is no longer compulsory.
 * :feature:`922` Speed up ethereum chain balance queries by utilizing the eth-scan contract to batch multiple ether and token balance queries into a single call.
 * :bug:`928` Action buttons in overlays ('Sign In', 'Create', etc.) are now never hidden by the privacy dialog regardless of resolution, app scaling, or zoom.
@@ -1048,12 +1362,12 @@ Changelog
   - `YOU COIN (YOU) <https://coinmarketcap.com/currencies/you-coin/>`__
 
 * :release:`1.4.1 <2020-04-22>`
-* :bug:`-` Improve internal DSR mechanics so that even with hardly anyone using the DSR as of this release, Rotki can still find DSR chi values to provide historical reports of DSR profit.
+* :bug:`-` Improve internal DSR mechanics so that even with hardly anyone using the DSR as of this release, rotki can still find DSR chi values to provide historical reports of DSR profit.
 * :bug:`904` For Kraken users take into account the worst-case API call counter and make sure the maximum calls are not reached to avoid prolonged API bans.
 * :bug:`895` Fixes manually tracked balances value column header not updating properly.
 * :bug:`899` If a user's ethereum account held both old and new REP the new REP's account balance should now be properly automatically detected.
 * :bug:`896` If the current price of an asset of a manually tracked balance can not be found, a value of zero is returned instead of breaking all manually tracked balances.
-* :feature:`838` Added additional information about API Keys that can be set up by the user and grouped the API connections page into 3 categories: Rotki Premium / Exchanges / External Services.
+* :feature:`838` Added additional information about API Keys that can be set up by the user and grouped the API connections page into 3 categories: rotki Premium / Exchanges / External Services.
 * :feature:`-` Added support for the following tokens
 
   - `Rupiah token (IDRT) <https://coinmarketcap.com/currencies/rupiah-token/>`__
@@ -1070,7 +1384,7 @@ Changelog
 * :feature:`807` Enables the addition and querying of manually tracked balances.
 * :bug:`874` Fixed a bug where if invalid credentials were given to setup an exchange a 500 error was returned. The error is now handled gracefully.
 * :bug:`852` PUT or DELETE on ``/api/1/blockchains/eth`` without etherscan keys configured no longer results in 500 internal server error.
-* :feature:`869` The application menu now has some customized menu items. Users can now access the `Usage Guide`, `FAQ`, `Issues & Feature Requests`, and `Logs Directory` from within the Help menu. Additionally, there is a `Get Rotki Premium` menu item for easy access to the premium subscription purchase page. Finally, both backend and frontend logs (``rotkehlchen.log`` and ``rotki-electron.log`` respectively) are now found in these standard locations per OS:
+* :feature:`869` The application menu now has some customized menu items. Users can now access the `Usage Guide`, `FAQ`, `Issues & Feature Requests`, and `Logs Directory` from within the Help menu. Additionally, there is a `Get rotki Premium` menu item for easy access to the premium subscription purchase page. Finally, both backend and frontend logs (``rotkehlchen.log`` and ``rotki-electron.log`` respectively) are now found in these standard locations per OS:
 
   * Linux: ``~/.config/rotki/logs``
   * OSX: ``~/Library/Application Support/rotki/logs``
@@ -1080,7 +1394,7 @@ Changelog
 * :bug:`848` Querying ``/api/1/balances/blockchains/btc`` with no BTC accounts tracked no longer results in a 500 Internal server error.
 * :bug:`837` If connected to an ethereum node, the connection status indicator should now properly show that to the user.
 * :bug:`830` If using alethio detecting tokens from an address that contains more than 10 tokens should now work properly
-* :bug:`805` Rotki can now accept passwords containing the " character
+* :bug:`805` rotki can now accept passwords containing the " character
 * :feature:`764` Gemini exchange is now supported. Trades, deposits, withdrawals and balances from that exchange can now be queried.
 * :feature:`-` Add support for the South African Rand  (ZAR - R) as a fiat currency
 * :feature:`-` Added support for the following tokens
@@ -1111,9 +1425,9 @@ Changelog
 * :release:`1.3.0 <2020-03-20>`
 * :feature:`779` OSX: User can now exit the application by simply pressing [X]
 * :bug:`794` If etherscan rate limits the user it should now be handled correctly after their new changes ... again
-* :feature:`643` Rotki will now autodetect the tokens owned by each of your ethereum accounts. Integration with alethio is possible, and you can add an Alethio API key.
+* :feature:`643` rotki will now autodetect the tokens owned by each of your ethereum accounts. Integration with alethio is possible, and you can add an Alethio API key.
 * :bug:`790` SegWit addresses (Bech32) can now be added to BTC balances.
-* :feature:`-` Rotki should now remember your window size, position, and maximized state after closing the app.
+* :feature:`-` rotki should now remember your window size, position, and maximized state after closing the app.
 * :bug:`783` Fixes the update indicator to indicate to users if their client is out of date.
 * :feature:`-` Added support for the following tokens
 
@@ -1130,8 +1444,8 @@ Changelog
 * :release:`1.2.0 <2020-03-01>`
 * :feature:`705` Support MakerDAO's DAI Savings Rate (DSR)
 * :bug:`502` The OSX rotki app icon should no longer be blurry.
-* :bug:`698` Rotki should now also display the version in the UI for Windows and OSX.
-* :bug:`709` Rotki no longer crashes after second time of opening the application in Windows.
+* :bug:`698` rotki should now also display the version in the UI for Windows and OSX.
+* :bug:`709` rotki no longer crashes after second time of opening the application in Windows.
 * :bug:`716` The rotki logs for linux now go into a proper directory: ``~/.config/rotki/logs``
 * :feature:`461` You can now label your blockchain accounts and tag them with any numer of custom tags to group them into categories. Tags can be customized.
 * :bug:`739` If there is an error during DBUpgrade or if the user uses old software to run a new DB we don't crash and burn with a 500 error but instead show a proper message.
@@ -1152,7 +1466,7 @@ Changelog
 * :bug:`693` Fix crash in OSX .dmg package version that occured with v1.1.0
 
 * :release:`1.1.0 <2020-02-05>`
-* :feature:`626` Rotki now accepts addition of API keys for external services such as etherscan or cryptocompare.
+* :feature:`626` rotki now accepts addition of API keys for external services such as etherscan or cryptocompare.
 * :feature:`46` Coinbase Pro is now supported. Trades, deposits, withdrawals and balances in that exchange can now be queried.
 * :feature:`583` The UI's notifications can finally be copy pasted.
 * :feature:`168` Users can now force-refresh exchange/blockchain balances via the UI and ignore the cache.
@@ -1188,11 +1502,11 @@ Changelog
 * :release:`1.0.5 <2019-11-30>`
 * :feature:`547` Support Multicollateral DAI upgrade and Single Collateral DAI renaming to SAI.
 * :bug:`545` Trades from all Kraken pairs should now be processed properly again. For example all SC trade pairs should now work again.
-* :bug:`543` User will not get unexpected balance results in the same Rotki run due to same cache being used for different arguments.
+* :bug:`543` User will not get unexpected balance results in the same rotki run due to same cache being used for different arguments.
 * :feature:`541` If the user allows anonymous usage analytics are submitted to a server for analysis of the application's active users.
-* :feature:`-` Rebranding Rotkehlchen to Rotki inside the application. All website and api links should now target rotki.com
+* :feature:`-` Rebranding Rotkehlchen to rotki inside the application. All website and api links should now target rotki.com
 * :bug:`534` Old external trades can now be edited/deleted properly again.
-* :bug:`527` If cryptocompare query returns an empty object Rotki client no longer crashes.
+* :bug:`527` If cryptocompare query returns an empty object rotki client no longer crashes.
 
 * :feature:`-` Added support for the following tokens
 
@@ -1208,7 +1522,7 @@ Changelog
   - `Hdac (HDAC) <https://coinmarketcap.com/currencies/hdac/>`__
 
 * :release:`1.0.4 <2019-10-04>`
-* :feature:`498` Users can now import data from Cointracking into Rotki. Create a CSV export from Cointracking and import it from the Import Data menu.
+* :feature:`498` Users can now import data from Cointracking into rotki. Create a CSV export from Cointracking and import it from the Import Data menu.
 * :bug:`500` Fix cryptocompare price queries for LBRY credits.
 * :feature:`505` Support the new cryptocompare v2 historical price [API](https://blog.cryptocompare.com/historical-data-api-update-4ee44c549a8f).
 * :feature:`499` All actions (trades, deposits, withdrawals, ethereum transactions, margin positions) are now saved in the DB.
@@ -1227,8 +1541,8 @@ Changelog
 * :release:`1.0.3 <2019-08-30>`
 * :feature:`453` If a newer version exists the user is notified at the start of the application and is given a link to download it.
 * :feature:`487` USDT can now also be monitored as an ethereum token.
-* :feature:`26` Rotki is now available as a .dmg installer for OSX.
-* :bug:`426` Opening the Rotki electron app in OSX now works properly the first time.
+* :feature:`26` rotki is now available as a .dmg installer for OSX.
+* :bug:`426` Opening the rotki electron app in OSX now works properly the first time.
 * :feature:`296` Add support for the Coinbase exchange.
 * :bug:`480` Calculating accounting with empty history no longer throws an exception.
 * :bug:`469` Fixes error with OTC trades.

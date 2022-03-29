@@ -1,17 +1,18 @@
 <template>
-  <span class="date-display" :class="privacyMode ? 'blur-content' : null">
-    {{ displayTimestamp | formatDate(dateFormat) }}
+  <span class="date-display" :class="!shouldShowAmount ? 'blur-content' : null">
+    {{ formatDate(displayTimestamp, dateFormat) }}
   </span>
 </template>
 
 <script lang="ts">
 import { Component, Prop, Vue } from 'vue-property-decorator';
 import { mapGetters, mapState } from 'vuex';
+import { displayDateFormatter } from '@/data/date_formatter';
 
 @Component({
   computed: {
-    ...mapGetters('session', ['dateDisplayFormat']),
-    ...mapState('session', ['privacyMode', 'scrambleData'])
+    ...mapGetters('session', ['dateDisplayFormat', 'shouldShowAmount']),
+    ...mapState('session', ['scrambleData'])
   }
 })
 export default class DateDisplay extends Vue {
@@ -23,8 +24,12 @@ export default class DateDisplay extends Vue {
   noTime!: boolean;
 
   dateDisplayFormat!: string;
-  privacyMode!: boolean;
+  shouldShowAmount!: boolean;
   scrambleData!: boolean;
+
+  formatDate(value: number, format: string): string {
+    return displayDateFormatter.format(new Date(value * 1000), format);
+  }
 
   get dateFormat(): string {
     const display = this.noTimezone

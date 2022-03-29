@@ -1,6 +1,6 @@
 <template>
-  <v-app v-if="!isPlayground" id="rotki">
-    <update-popup />
+  <v-app v-if="!isPlayground" id="rotki" class="app">
+    <app-update-popup />
     <div v-if="logged" class="app__content rotki-light-grey">
       <asset-update auto />
       <notification-popup />
@@ -11,6 +11,7 @@
         class="app__navigation-drawer"
         fixed
         :mini-variant="mini"
+        :color="appBarColor"
         clipped
         app
       >
@@ -31,34 +32,65 @@
         </div>
       </v-navigation-drawer>
 
-      <v-app-bar app fixed clipped-left flat color="white" class="app__app-bar">
+      <v-app-bar
+        app
+        fixed
+        clipped-left
+        flat
+        :color="appBarColor"
+        class="app__app-bar"
+      >
         <v-app-bar-nav-icon
           class="secondary--text text--lighten-2"
           @click="toggleDrawer()"
         />
-        <node-status-indicator />
-        <balance-saved-indicator />
-        <back-button :can-navigate-back="canNavigateBack" />
+        <div class="d-flex overflow-hidden">
+          <node-status-indicator v-if="!xsOnly" />
+          <balance-saved-indicator />
+          <back-button :can-navigate-back="canNavigateBack" />
+        </div>
         <v-spacer />
-        <update-indicator />
-        <notification-indicator
-          :visible="notifications"
-          class="app__app-bar__button"
-          @click="notifications = !notifications"
-        />
-        <progress-indicator class="app__app-bar__button" />
-        <currency-drop-down class="red--text app__app-bar__button" />
-        <user-dropdown class="app__app-bar__button" />
-        <help-indicator :visible="help" @visible:update="help = $event" />
+        <div class="d-flex overflow-hidden">
+          <v-btn v-if="isDevelopment" to="/playground" icon>
+            <v-icon>mdi-crane</v-icon>
+          </v-btn>
+          <app-update-indicator />
+          <theme-switch v-if="premium" />
+          <theme-switch-lock v-else />
+          <notification-indicator
+            :visible="notifications"
+            class="app__app-bar__button"
+            @click="notifications = !notifications"
+          />
+          <currency-drop-down class="app__app-bar__button" />
+          <user-dropdown class="app__app-bar__button" />
+          <help-indicator
+            v-if="!xsOnly"
+            :visible="help"
+            @visible:update="help = $event"
+          />
+        </div>
       </v-app-bar>
       <notification-sidebar
         :visible="notifications"
         @close="notifications = false"
       />
-      <help-sidebar :visible="help" @visible:update="help = $event" />
-      <v-main v-if="logged" class="fill-height">
-        <router-view />
-      </v-main>
+      <help-sidebar
+        :visible="help"
+        @visible:update="help = $event"
+        @about="showAbout = true"
+      />
+      <div
+        class="app-main"
+        :class="{
+          small: drawer && mini,
+          expanded: drawer && !mini && !xsOnly
+        }"
+      >
+        <v-main>
+          <router-view />
+        </v-main>
+      </div>
     </div>
     <message-dialog
       :title="message.title"
@@ -77,15 +109,21 @@
         v-if="startupError.length === 0 && !loginIn"
         :logged="logged"
         @login-complete="completeLogin(true)"
+        @about="showAbout = true"
       />
     </v-fade-transition>
+    <v-dialog v-if="showAbout" v-model="showAbout" max-width="500">
+      <about />
+    </v-dialog>
+    <frontend-update-notifier />
   </v-app>
   <dev-app v-else />
 </template>
 
 <script lang="ts">
-import { Component, Vue, Watch } from 'vue-property-decorator';
+import { Component, Mixins, Watch } from 'vue-property-decorator';
 import { mapGetters, mapMutations, mapState } from 'vuex';
+import About from '@/components/About.vue';
 import AccountManagement from '@/components/AccountManagement.vue';
 import CurrencyDropDown from '@/components/CurrencyDropDown.vue';
 import MessageDialog from '@/components/dialogs/MessageDialog.vue';
@@ -96,38 +134,45 @@ import HelpIndicator from '@/components/help/HelpIndicator.vue';
 import HelpSidebar from '@/components/help/HelpSidebar.vue';
 import BackButton from '@/components/helper/BackButton.vue';
 import NavigationMenu from '@/components/NavigationMenu.vue';
+import ThemeSwitchLock from '@/components/premium/ThemeSwitchLock.vue';
+import AppUpdateIndicator from '@/components/status/AppUpdateIndicator.vue';
+import FrontendUpdateNotifier from '@/components/status/FrontendUpdateNotifier.vue';
 import NodeStatusIndicator from '@/components/status/NodeStatusIndicator.vue';
 import NotificationIndicator from '@/components/status/NotificationIndicator.vue';
 import NotificationPopup from '@/components/status/notifications/NotificationPopup.vue';
 import NotificationSidebar from '@/components/status/notifications/NotificationSidebar.vue';
-import ProgressIndicator from '@/components/status/ProgressIndicator.vue';
 import SyncIndicator from '@/components/status/sync/SyncIndicator.vue';
-import '@/services/task-manager';
+import AppUpdatePopup from '@/components/status/update/AppUpdatePopup.vue';
 import AssetUpdate from '@/components/status/update/AssetUpdate.vue';
-import UpdatePopup from '@/components/status/update/UpdatePopup.vue';
-import UpdateIndicator from '@/components/status/UpdateIndicator.vue';
 import UserDropdown from '@/components/UserDropdown.vue';
 import DevApp from '@/DevApp.vue';
 import { BackendCode } from '@/electron-main/backend-code';
+import PremiumMixin from '@/mixins/premium-mixin';
+import ThemeMixin from '@/mixins/theme-mixin';
+import { ThemeSwitch } from '@/premium/premium';
 import { monitor } from '@/services/monitoring';
+import { OverallPerformance } from '@/store/statistics/types';
 import { Message } from '@/store/types';
 
 @Component({
   components: {
+    FrontendUpdateNotifier,
+    About,
+    ThemeSwitchLock,
     MacOsVersionUnsupported,
     AssetUpdate,
     HelpIndicator,
     HelpSidebar,
     BackButton,
-    UpdatePopup,
+    AppUpdatePopup,
     StartupErrorScreen,
+    ThemeSwitch,
     DevApp,
     NotificationPopup,
     NotificationSidebar,
     ErrorScreen,
     AccountManagement,
-    UpdateIndicator,
-    ProgressIndicator,
+    AppUpdateIndicator,
     NotificationIndicator,
     BalanceSavedIndicator: SyncIndicator,
     NodeStatusIndicator,
@@ -145,7 +190,7 @@ import { Message } from '@/store/types';
     ...mapMutations('session', ['completeLogin'])
   }
 })
-export default class App extends Vue {
+export default class App extends Mixins(PremiumMixin, ThemeMixin) {
   logged!: boolean;
   message!: Message;
   version!: string;
@@ -155,6 +200,11 @@ export default class App extends Vue {
 
   notifications: boolean = false;
   help: boolean = false;
+  showAbout: boolean = false;
+
+  get xsOnly(): boolean {
+    return this.$vuetify.breakpoint.xsOnly;
+  }
 
   get canNavigateBack(): boolean {
     const canNavigateBack = this.$route.meta?.canNavigateBack ?? false;
@@ -201,6 +251,10 @@ export default class App extends Vue {
     }
   }
 
+  get isDevelopment(): boolean {
+    return process.env.NODE_ENV === 'development';
+  }
+
   async created(): Promise<void> {
     this.$interop.onError((backendOutput: string, code: BackendCode) => {
       if (code === BackendCode.TERMINATED) {
@@ -212,11 +266,25 @@ export default class App extends Vue {
         console.error(backendOutput, code);
       }
     });
+    this.$interop.onAbout(() => {
+      this.showAbout = true;
+    });
 
     await this.$store.dispatch('connect');
-    if (process.env.NODE_ENV === 'development' && this.logged) {
+    if (this.isDevelopment && this.logged) {
       monitor.start();
     }
+    this.$store.watch(
+      (state, getters) => {
+        return getters['statistics/overall'];
+      },
+      (value: OverallPerformance) => {
+        if (value.percentage === '-') {
+          return;
+        }
+        this.$interop.updateTray(value);
+      }
+    );
   }
 
   get isPlayground(): boolean {
@@ -240,6 +308,12 @@ export default class App extends Vue {
 }
 
 .app {
+  overflow: hidden;
+
+  &__content {
+    height: 100vh;
+  }
+
   &__app-bar {
     &__button {
       i {
@@ -288,9 +362,30 @@ export default class App extends Vue {
   }
 }
 
+.app-main {
+  top: 64px;
+  position: fixed;
+  width: 100%;
+  height: calc(100vh - 64px);
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+
+  &.small {
+    left: 56px;
+    width: calc(100vw - 56px);
+  }
+
+  &.expanded {
+    left: 300px;
+    width: calc(100vw - 300px);
+  }
+
+  @extend .themed-scrollbar;
+}
+
 ::v-deep {
   .v-navigation-drawer {
-    background: #ffffff;
     box-shadow: 0 2px 12px rgba(74, 91, 120, 0.1);
 
     &__border {
@@ -299,14 +394,7 @@ export default class App extends Vue {
   }
 
   .v-main {
-    overflow-y: scroll;
-    margin-top: 64px;
-    padding-top: 0 !important;
-    height: calc(100vh - 64px);
-
-    &__wrap {
-      padding-left: 25px;
-    }
+    padding: 0 !important;
   }
 
   .v-app-bar {

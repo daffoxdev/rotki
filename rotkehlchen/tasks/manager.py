@@ -1,24 +1,28 @@
 import logging
 import random
 from collections import defaultdict
-from typing import DefaultDict, List, NamedTuple, Set
+from typing import DefaultDict, List, NamedTuple, Set, Tuple
 
 import gevent
 
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.chain.bitcoin.xpub import XpubManager
+from rotkehlchen.chain.ethereum.transactions import EthTransactions
 from rotkehlchen.chain.manager import ChainManager
 from rotkehlchen.db.dbhandler import DBHandler
+from rotkehlchen.db.ethtx import DBEthTx
 from rotkehlchen.exchanges.manager import ExchangeManager
 from rotkehlchen.externalapis.cryptocompare import Cryptocompare
 from rotkehlchen.globaldb.handler import GlobalDBHandler
 from rotkehlchen.greenlets import GreenletManager
 from rotkehlchen.history.typing import HistoricalPriceOracle
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.sync import PremiumSyncManager
-from rotkehlchen.typing import ChecksumEthAddress
+from rotkehlchen.typing import ChecksumEthAddress, Location
 from rotkehlchen.utils.misc import ts_now
 
 logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 CRYPTOCOMPARE_QUERY_AFTER_SECS = 86400  # a day
@@ -29,12 +33,12 @@ ETH_TX_QUERY_FREQUENCY = 3600  # every hour
 EXCHANGE_QUERY_FREQUENCY = 3600  # every hour
 
 
-def noop_exchange_succes_cb(trades, margin, asset_movements, exchange_specific_data) -> None:  # type: ignore # noqa: E501
+def noop_exchange_succes_cb(trades, margin, asset_movements, ledger_actions, exchange_specific_data) -> None:  # type: ignore # noqa: E501
     pass
 
 
 def exchange_fail_cb(error: str) -> None:
-    logger.error(error)
+    log.error(error)
 
 
 class CCHistoQuery(NamedTuple):
@@ -66,7 +70,7 @@ class TaskManager():
         self.chain_manager = chain_manager
         self.last_xpub_derivation_ts = 0
         self.last_eth_tx_query_ts: DefaultDict[ChecksumEthAddress, int] = defaultdict(int)
-        self.last_exchange_query_ts: DefaultDict[str, int] = defaultdict(int)
+        self.last_exchange_query_ts: DefaultDict[Tuple[str, Location], int] = defaultdict(int)
         self.prepared_cryptocompare_query = False
         self.greenlet_manager.spawn_and_track(  # Needs to run in greenlet, is slow
             after_seconds=None,
@@ -81,7 +85,9 @@ class TaskManager():
             self._maybe_schedule_xpub_derivation,
             self._maybe_query_ethereum_transactions,
             self._maybe_schedule_exchange_history_query,
+            self._maybe_schedule_ethereum_txreceipts,
         ]
+        self.schedule_lock = gevent.lock.Semaphore()
 
     def _prepare_cryptocompare_queries(self) -> None:
         """Prepare the queries to do to cryptocompare
@@ -100,7 +106,6 @@ class TaskManager():
         if len(self.cryptocompare_queries) != 0:
             return
 
-        self.preparing_cryptocompare_query = True
         assets = self.database.query_owned_assets()
         main_currency = self.database.get_main_currency()
         for asset in assets:
@@ -149,7 +154,7 @@ class TaskManager():
 
         query = self.cryptocompare_queries.pop()
         task_name = f'Cryptocompare historical prices {query.from_asset} / {query.to_asset} query'
-        logger.debug(f'Scheduling task for {task_name}')
+        log.debug(f'Scheduling task for {task_name}')
         self.greenlet_manager.spawn_and_track(
             after_seconds=None,
             task_name=task_name,
@@ -171,7 +176,7 @@ class TaskManager():
         if len(xpubs) == 0:
             return
 
-        logger.debug('Scheduling task for Xpub derivation')
+        log.debug('Scheduling task for Xpub derivation')
         self.greenlet_manager.spawn_and_track(
             after_seconds=None,
             task_name='Derive new xpub addresses',
@@ -196,21 +201,50 @@ class TaskManager():
         if len(queriable_accounts) == 0:
             return
 
+        tx_module = EthTransactions(
+            ethereum=self.chain_manager.ethereum,
+            database=self.database,
+        )
         address = random.choice(queriable_accounts)
         task_name = f'Query ethereum transactions for {address}'
-        logger.debug(f'Scheduling task to {task_name}')
+        log.debug(f'Scheduling task to {task_name}')
         self.greenlet_manager.spawn_and_track(
             after_seconds=None,
             task_name=task_name,
             exception_is_error=True,
-            method=self.chain_manager.ethereum.transactions.single_address_query_transactions,
+            method=tx_module.single_address_query_transactions,
             address=address,
             start_ts=0,
             end_ts=now,
-            with_limit=False,
-            only_cache=False,
         )
         self.last_eth_tx_query_ts[address] = now
+
+    def _run_ethereum_txreceipts_query(self, hash_results: List[Tuple]) -> None:
+        dbethtx = DBEthTx(self.database)
+        for entry in hash_results:
+            tx_hash = '0x' + entry[0].hex()
+            tx_receipt_data = self.chain_manager.ethereum.get_transaction_receipt(tx_hash=tx_hash)
+            dbethtx.add_receipt_data(tx_receipt_data)
+
+    def _maybe_schedule_ethereum_txreceipts(self) -> None:
+        """Schedules the ethereum transaction receipts query task"""
+        cursor = self.database.conn.cursor()
+        result = cursor.execute(
+            'SELECT tx_hash from ethereum_transactions WHERE tx_hash NOT IN '
+            '(SELECT tx_hash from ethtx_receipts) LIMIT 100;',
+        ).fetchall()
+        if len(result) == 0:
+            return
+
+        task_name = f'Query {len(result)} ethereum transactions receipts'
+        log.debug(f'Scheduling task to {task_name}')
+        self.greenlet_manager.spawn_and_track(
+            after_seconds=None,
+            task_name=task_name,
+            exception_is_error=True,
+            method=self._run_ethereum_txreceipts_query,
+            hash_results=result,
+        )
 
     def _maybe_schedule_exchange_history_query(self) -> None:
         """Schedules the exchange history query task if enough time has passed"""
@@ -219,12 +253,12 @@ class TaskManager():
 
         now = ts_now()
         queriable_exchanges = []
-        for name, exchange in self.exchange_manager.connected_exchanges.items():
-            if name in ('binance', 'binance_us'):
+        for exchange in self.exchange_manager.iterate_exchanges():
+            if exchange.location in (Location.BINANCE, Location.BINANCEUS):
                 continue  # skip binance due to the way their history is queried and rate limiting
-            queried_range = self.database.get_used_query_range(f'{name}_trades')
+            queried_range = self.database.get_used_query_range(f'{str(exchange.location)}_trades')
             end_ts = queried_range[1] if queried_range else 0
-            if now - max(self.last_exchange_query_ts[name], end_ts) > EXCHANGE_QUERY_FREQUENCY:
+            if now - max(self.last_exchange_query_ts[exchange.location_id()], end_ts) > EXCHANGE_QUERY_FREQUENCY:  # noqa: E501
                 queriable_exchanges.append(exchange)
 
         if len(queriable_exchanges) == 0:
@@ -232,7 +266,7 @@ class TaskManager():
 
         exchange = random.choice(queriable_exchanges)
         task_name = f'Query history of {exchange.name} exchange'
-        logger.debug(f'Scheduling task to {task_name}')
+        log.debug(f'Scheduling task to {task_name}')
         self.greenlet_manager.spawn_and_track(
             after_seconds=None,
             task_name=task_name,
@@ -243,14 +277,14 @@ class TaskManager():
             success_callback=noop_exchange_succes_cb,
             fail_callback=exchange_fail_cb,
         )
-        self.last_exchange_query_ts[exchange.name] = now
+        self.last_exchange_query_ts[exchange.location_id()] = now
 
-    def schedule(self) -> None:
+    def _schedule(self) -> None:
         """Schedules background tasks"""
         self.greenlet_manager.clear_finished()
         current_greenlets = len(self.greenlet_manager.greenlets) + len(self.api_task_greenlets)
         not_proceed = current_greenlets >= self.max_tasks_num
-        logger.debug(
+        log.debug(
             f'At task scheduling. Current greenlets: {current_greenlets} '
             f'Max greenlets: {self.max_tasks_num}. '
             f'{"Will not schedule" if not_proceed else "Will schedule"}.',
@@ -265,3 +299,12 @@ class TaskManager():
 
         for callable_fn in callables:
             callable_fn()  # type: ignore
+
+    def schedule(self) -> None:
+        """Schedules background task while holding the scheduling lock
+
+        Used during logout to make sure no task is being scheduled at the same time
+        as logging out
+        """
+        with self.schedule_lock:
+            self._schedule()

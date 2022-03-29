@@ -1,12 +1,12 @@
 <template>
-  <fragment>
+  <div class="mb-5">
     <v-btn-toggle
       :value="value"
       class="input-mode-select"
       mandatory
       @change="input($event)"
     >
-      <v-btn :value="MANUAL_ADD">
+      <v-btn :value="MANUAL_ADD" data-cy="input-mode-manual">
         <v-icon>mdi-pencil-plus</v-icon>
         <span class="hidden-sm-and-down ml-1">
           {{ $t('input_mode_select.manual_add.label') }}
@@ -43,10 +43,11 @@
       class="mt-3 warning--text text-caption"
       v-text="$t('input_mode_select.metamask_import.missing')"
     />
-  </fragment>
+  </div>
 </template>
 
 <script lang="ts">
+import { Blockchain } from '@rotki/common/lib/blockchain';
 import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
 import {
   MANUAL_ADD,
@@ -55,7 +56,6 @@ import {
 } from '@/components/accounts/const';
 import { AccountInput } from '@/components/accounts/types';
 import Fragment from '@/components/helper/Fragment';
-import { Blockchain, BTC, ETH, SupportedBlockchains } from '@/typing/types';
 import { isMetaMaskSupported } from '@/utils/metamask';
 
 @Component({
@@ -65,7 +65,7 @@ export default class InputModeSelect extends Vue {
   @Prop({
     required: true,
     type: String,
-    validator: (value: any) => SupportedBlockchains.includes(value)
+    validator: (value: any) => Object.values(Blockchain).includes(value)
   })
   blockchain!: Blockchain;
 
@@ -78,11 +78,11 @@ export default class InputModeSelect extends Vue {
   readonly isMetaMaskSupported = isMetaMaskSupported;
 
   get isEth(): boolean {
-    return this.blockchain === ETH;
+    return this.blockchain === Blockchain.ETH;
   }
 
   get isBtc(): boolean {
-    return this.blockchain === BTC;
+    return this.blockchain === Blockchain.BTC;
   }
 
   get isMetaMask(): boolean {
@@ -93,5 +93,3 @@ export default class InputModeSelect extends Vue {
   input(_value: AccountInput) {}
 }
 </script>
-
-<style scoped lang="scss"></style>

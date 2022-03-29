@@ -5,7 +5,13 @@
     class="pb-3"
   >
     <v-card-title
-      class="font-weight-medium text-capitalize pa-3 secondary--text summary-card__header"
+      class="
+        font-weight-medium
+        text-capitalize
+        pa-3
+        secondary--text
+        summary-card__header
+      "
     >
       <card-title :class="navigatesTo ? 'summary-card--navigates' : null">
         <span @click="navigatesTo ? navigate() : null">
@@ -91,6 +97,7 @@ export default class SummaryCard extends Vue {
 
   &__refresh-icon {
     filter: grayscale(100%);
+    padding: 1rem;
 
     &:hover {
       filter: grayscale(0);

@@ -1,45 +1,51 @@
 import { ActionTree } from 'vuex';
 import i18n from '@/i18n';
-import { createTask, taskCompletion, TaskMeta } from '@/model/task';
-import { TaskType } from '@/model/task-type';
 import { AssetUpdatePayload } from '@/services/assets/types';
 import { api } from '@/services/rotkehlchen-api';
 import {
   ApplyUpdateResult,
   AssetDBVersion,
+  AssetMergePayload,
   AssetState,
   AssetUpdateCheckResult,
   AssetUpdateResult
 } from '@/store/assets/types';
-import { Severity } from '@/store/notifications/consts';
-import { notify } from '@/store/notifications/utils';
-import { RotkehlchenState } from '@/store/types';
+import { useNotifications } from '@/store/notifications';
+import { useTasks } from '@/store/tasks';
+import { ActionStatus, RotkehlchenState } from '@/store/types';
+import { TaskMeta } from '@/types/task';
+import { TaskType } from '@/types/task-type';
 
 export const actions: ActionTree<AssetState, RotkehlchenState> = {
-  async checkForUpdate({ commit }): Promise<AssetUpdateCheckResult> {
+  async checkForUpdate(): Promise<AssetUpdateCheckResult> {
+    const { awaitTask } = useTasks();
     try {
       const taskType = TaskType.ASSET_UPDATE;
       const { taskId } = await api.assets.checkForAssetUpdate();
-      const task = createTask(taskId, taskType, {
-        title: i18n.t('actions.assets.versions.task.title').toString(),
-        ignoreResult: false,
-        numericKeys: []
-      });
-
-      commit('tasks/add', task, { root: true });
-      const { result } = await taskCompletion<AssetDBVersion, TaskMeta>(
-        taskType
+      const { result } = await awaitTask<AssetDBVersion, TaskMeta>(
+        taskId,
+        taskType,
+        {
+          title: i18n.t('actions.assets.versions.task.title').toString(),
+          numericKeys: []
+        }
       );
+
       return {
         updateAvailable: result.local < result.remote,
         versions: result
       };
-    } catch (e) {
+    } catch (e: any) {
       const title = i18n.t('actions.assets.versions.task.title').toString();
       const description = i18n
         .t('actions.assets.versions.error.description', { message: e.message })
         .toString();
-      notify(description, title, Severity.ERROR, true);
+      const { notify } = useNotifications();
+      notify({
+        title,
+        message: description,
+        display: true
+      });
       return {
         updateAvailable: false
       };
@@ -47,22 +53,21 @@ export const actions: ActionTree<AssetState, RotkehlchenState> = {
   },
 
   async applyUpdates(
-    { commit },
+    _,
     { version, resolution }: AssetUpdatePayload
   ): Promise<ApplyUpdateResult> {
     try {
-      const taskType = TaskType.ASSET_UPDATE_PERFORM;
+      const { awaitTask } = useTasks();
       const { taskId } = await api.assets.performUpdate(version, resolution);
-      const task = createTask(taskId, taskType, {
-        title: i18n.t('actions.assets.update.task.title').toString(),
-        ignoreResult: false,
-        numericKeys: []
-      });
-
-      commit('tasks/add', task, { root: true });
-      const { result } = await taskCompletion<AssetUpdateResult, TaskMeta>(
-        taskType
+      const { result } = await awaitTask<AssetUpdateResult, TaskMeta>(
+        taskId,
+        TaskType.ASSET_UPDATE_PERFORM,
+        {
+          title: i18n.t('actions.assets.update.task.title').toString(),
+          numericKeys: []
+        }
       );
+
       if (typeof result === 'boolean') {
         return {
           done: true
@@ -72,14 +77,39 @@ export const actions: ActionTree<AssetState, RotkehlchenState> = {
         done: false,
         conflicts: result
       };
-    } catch (e) {
+    } catch (e: any) {
       const title = i18n.t('actions.assets.update.task.title').toString();
       const description = i18n
         .t('actions.assets.update.error.description', { message: e.message })
         .toString();
-      notify(description, title, Severity.ERROR, true);
+      const { notify } = useNotifications();
+      notify({
+        title,
+        message: description,
+        display: true
+      });
       return {
         done: false
+      };
+    }
+  },
+
+  async mergeAssets(
+    _,
+    { sourceIdentifier, targetIdentifier }: AssetMergePayload
+  ): Promise<ActionStatus> {
+    try {
+      const success = await api.assets.mergeAssets(
+        sourceIdentifier,
+        targetIdentifier
+      );
+      return {
+        success
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        message: e.message
       };
     }
   }

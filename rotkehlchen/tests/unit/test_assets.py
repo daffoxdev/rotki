@@ -1,6 +1,4 @@
-import json
 import warnings as test_warnings
-from pathlib import Path
 
 import pytest
 from eth_utils import is_checksum_address
@@ -8,20 +6,30 @@ from eth_utils import is_checksum_address
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.assets.resolver import AssetResolver
 from rotkehlchen.assets.typing import AssetType
-from rotkehlchen.assets.unknown_asset import UnknownEthereumToken
-from rotkehlchen.assets.utils import get_ethereum_token, symbol_to_ethereum_token
-from rotkehlchen.constants.assets import A_DAI
+from rotkehlchen.assets.utils import get_or_create_ethereum_token, symbol_to_ethereum_token
+from rotkehlchen.constants.assets import A_DAI, A_USDT
 from rotkehlchen.constants.resolver import ethaddress_to_identifier
 from rotkehlchen.errors import InputError, UnknownAsset
 from rotkehlchen.externalapis.coingecko import DELISTED_ASSETS, Coingecko
 from rotkehlchen.globaldb.handler import GlobalDBHandler
-from rotkehlchen.utils.hashing import file_md5
 
 
 def test_unknown_asset():
     """Test than an unknown asset will throw"""
     with pytest.raises(UnknownAsset):
         Asset('jsakdjsladjsakdj')
+
+
+def test_asset_nft():
+    a = Asset('_nft_foo')
+    assert a.identifier == '_nft_foo'
+    assert a.symbol is not None
+    assert a.name == 'nft with id _nft_foo'
+    assert a.started is not None
+    assert a.forked is None
+    assert a.swapped_for is None
+    assert a.cryptocompare is not None
+    assert a.coingecko is None
 
 
 def test_repr():
@@ -118,7 +126,53 @@ def test_cryptocompare_asset_support(cryptocompare):
         ethaddress_to_identifier('0xe2DA716381d7E0032CECaA5046b34223fC3f218D'),  # noqa: E501 # Carbon Utility Token but CUTCoin in CC
         ethaddress_to_identifier('0x1FA3bc860bF823d792f04F662f3AA3a500a68814'),  # noqa: E501 # 1X Short Bitcoin Token but Hedgecoin in CC
         ethaddress_to_identifier('0xc7283b66Eb1EB5FB86327f08e1B5816b0720212B'),  # noqa: E501 # Tribe Token (FEI) but another TribeToken in CC
+        ethaddress_to_identifier('0x16980b3B4a3f9D89E33311B5aa8f80303E5ca4F8'),  # noqa: E501 # Kira Network (KEX) but another KEX in CC
         'DON',     # Donnie Finance but Donation Coin in CC
+        'BAG',     # Baguette but not in CC
+        ethaddress_to_identifier('0xDe30da39c46104798bB5aA3fe8B9e0e1F348163F'),  # noqa: E501 # Gitcoin (GTC) but another GTC in CC
+        ethaddress_to_identifier('0x6D0F5149c502faf215C89ab306ec3E50b15e2892'),  # noqa: E501 # Portion (PRT) but another PRT in CC
+        'ANI',     # Animecoin (ANI) but another ANI in CC
+        'XEP',     # Electra Protocol (XEP) but another XEP in CC
+        ethaddress_to_identifier('0xcbb20D755ABAD34cb4a9b5fF6Dd081C76769f62e'),  # noqa: E501 # Cash Global Coin (CGC) but another CGC in CC
+        ethaddress_to_identifier('0x9BE89D2a4cd102D8Fecc6BF9dA793be995C22541'),  # noqa: E501 # Binance Wrapped BTC (BBTC) but another BBTC in CC
+        'NRV',     # Nerve Finance (NRV) but another NRV in CC
+        'EDR-2',   # Endor Protocol Token but we have E-Dinar Coin
+        ethaddress_to_identifier('0xDa007777D86AC6d989cC9f79A73261b3fC5e0DA0'),  # noqa: E501 # Dappnode (NODE) but another NODE in CC
+        'QI',  # noqa: E501 # BENQI (QI) but another QI in CC
+        ethaddress_to_identifier('0x1A4b46696b2bB4794Eb3D4c26f1c55F9170fa4C5'),  # noqa: E501 # BitDao (BIT) but another BIT in CC
+        ethaddress_to_identifier('0x993864E43Caa7F7F12953AD6fEb1d1Ca635B875F'),  # noqa: E501 # Singularity DAO (SDAO) but another SDAO in CC
+        ethaddress_to_identifier('0x114f1388fAB456c4bA31B1850b244Eedcd024136'),  # noqa: E501 # Cool Vauld (COOL) but another COOL in CC
+        ethaddress_to_identifier('0xD70240Dd62F4ea9a6A2416e0073D72139489d2AA'),  # noqa: E501 # Glyph vault (GLYPH) but another GLYPH in CC
+        ethaddress_to_identifier('0x269616D549D7e8Eaa82DFb17028d0B212D11232A'),  # noqa: E501 # PUNK vault (PUNK) but another PUNK in CC
+        ethaddress_to_identifier('0x2d94AA3e47d9D5024503Ca8491fcE9A2fB4DA198'),  # noqa: E501 # Bankless token (BANK) but another BANK in CC
+        ethaddress_to_identifier('0x1456688345527bE1f37E9e627DA0837D6f08C925'),  # noqa: E501 # USDP stablecoin (USDP) but another USDP in CC
+        'POLIS',  # noqa: E501 # Star Atlas DAO (POLIS) but another POLIS in CC
+        ethaddress_to_identifier('0x670f9D9a26D3D42030794ff035d35a67AA092ead'),  # noqa: E501 # XBullion Token (GOLD) but another GOLD in CC
+        ethaddress_to_identifier('0x3b58c52C03ca5Eb619EBa171091c86C34d603e5f'),  # noqa: E501 # MCI Coin (MCI) but another MCI in CC
+        ethaddress_to_identifier('0x5dD57Da40e6866C9FcC34F4b6DDC89F1BA740DfE'),  # noqa: E501 # Bright(BRIGHT) but another BRIGHT in CC
+        ethaddress_to_identifier('0x40284109c3309A7C3439111bFD93BF5E0fBB706c'),  # noqa: E501 # Motiv protocol but another MOV in CC
+        ethaddress_to_identifier('0xba5BDe662c17e2aDFF1075610382B9B691296350'),  # noqa: E501 # Super Rare but another RARE in CC
+        ethaddress_to_identifier('0x9D65fF81a3c488d585bBfb0Bfe3c7707c7917f54'),  # noqa: E501 # SSV token but another SSV in CC
+        ethaddress_to_identifier('0x7b35Ce522CB72e4077BaeB96Cb923A5529764a00'),  # noqa: E501 # Impermax but another IMX in CC
+        ethaddress_to_identifier('0x47481c1b44F2A1c0135c45AA402CE4F4dDE4D30e'),  # noqa: E501 # Meetple but another MPT in CC
+        'CATE',  # catecoin but another CATE in CC
+        'CHESS'  # tranchess but another CHESS in CC
+        'BNC',  # Bifrost but another BNC in CC
+        'BNX',  # BinaryX but anohter BNX in CC
+        'DAR',  # Mines of Dalarnia but a different DAR in CC
+        ethaddress_to_identifier('0xEf51c9377FeB29856E61625cAf9390bD0B67eA18'),  # noqa: E501 # Bionic but another BNC in CC
+        'CHESS',  # tranchess but another chess in CC
+        'BNC',  # bifrost but another BNC in CC
+        ethaddress_to_identifier('0x9e6C59321CEB205d5d3BC6c539c017aF6159B16c'),  # noqa: E501 # Mindcell but another MDC in CC
+        'TIME',  # Wonderland but another TIME in CC
+        'STARS',  # StarLaunch but another STARS in CC
+        ethaddress_to_identifier('0x60EF10EDfF6D600cD91caeCA04caED2a2e605Fe5'),  # noqa: E501 # Mochi inu but MOCHI SWAP in CC
+        ethaddress_to_identifier('0x3496B523e5C00a4b4150D6721320CdDb234c3079'),  # noqa: E501 # numbers protocol but another NUM in CC
+        ethaddress_to_identifier('0x8dB253a1943DdDf1AF9bcF8706ac9A0Ce939d922'),  # noqa: E501 # unbound protocol but another UNB in CC
+        'GODZ',  # gozilla but another GODZ in CC
+        'DFL',  # Defi land but another DFL in CC
+        'CDEX',  # Codex but another CDEX in CC
+        'MIMO',  # mimosa but another MIMO in CC
     )
     for asset_data in GlobalDBHandler().get_all_asset_data(mapping=False):
         potential_support = (
@@ -170,11 +224,11 @@ def test_case_does_not_matter_for_asset_constructor():
     assert a3.identifier == a4.identifier == ethaddress_to_identifier('0xdAC17F958D2ee523a2206206994597C13D831ec7')  # noqa: E501
 
 
-def test_coingecko_identifiers_are_reachable(data_dir):
+def test_coingecko_identifiers_are_reachable():
     """
     Test that all assets have a coingecko entry and that all the identifiers exist in coingecko
     """
-    coingecko = Coingecko(data_directory=data_dir)
+    coingecko = Coingecko()
     all_coins = coingecko.all_coins()
     # If coingecko identifier is missing test is trying to suggest possible assets.
     symbol_checked_exceptions = (  # This is the list of already checked assets
@@ -222,6 +276,22 @@ def test_coingecko_identifiers_are_reachable(data_dir):
         ethaddress_to_identifier('0xBfaA8cF522136C6FAfC1D53Fe4b85b4603c765b8'),
         # no Snowball in coingecko. Got other SNBL symbol token
         ethaddress_to_identifier('0x198A87b3114143913d4229Fb0f6D4BCb44aa8AFF'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0xFD25676Fc2c4421778B18Ec7Ab86E7C5701DF187'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0xcca0c9c383076649604eE31b20248BC04FdF61cA'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0xAef38fBFBF932D1AeF3B808Bc8fBd8Cd8E1f8BC5'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0x662aBcAd0b7f345AB7FfB1b1fbb9Df7894f18e66'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0x497bAEF294c11a5f0f5Bea3f2AdB3073DB448B56'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0xAbdf147870235FcFC34153828c769A70B3FAe01F'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0x4DF47B4969B2911C966506E3592c41389493953b'),
+        # Token suggestion doesn't match token in db
+        ethaddress_to_identifier('0xB563300A3BAc79FC09B93b6F84CE0d4465A2AC27'),
         'ACC',  # no Adcoin in Coingecko. Got other ACC symbol token
         'APH',  # no Aphelion in Coingecko. Got other APH symbol token
         'ARCH',  # no ARCH in Coingecko. Got other ARCH symbol token
@@ -235,12 +305,96 @@ def test_coingecko_identifiers_are_reachable(data_dir):
         'FLAP',  # no FlappyCoin coin in Coingecko. Got other FLAP symbol token
         'HC-2',  # no Harvest Masternode Coin in Coingecko. Got other HC symbol token
         'KEY-3',  # no KeyCoin Coin in Coingecko. Got other KEY symbol token
+        'MUSIC',  # Music in coingecko is nftmusic and not our MUSIC
+        'NAUT',  # Token suggestion doesn't match token in db
         'OCC',  # no Octoin Coin in Coingecko. Got other OCC symbol token
         'SPA',  # no SpainCoin Coin in Coingecko. Got other SPA symbol token
         'WEB-2',  # no Webchain in Coingecko. Got other WEB symbol token
         'WOLF',  # no Insanity Coin in Coingecko. Got other WOLF symbol token
+        'XAI',  # Token suggestion doesn't match token in db
         'XPB',  # no Pebble Coin in Coingecko. Got other XPB symbol token
         'XNS',  # no Insolar in Coingecko. Got other XNS symbol token
+        'PIGGY',  # Coingecko listed another asset PIGGY that is not Piggy Coin
+        # coingecko listed CAR that is not our token CarBlock.io
+        ethaddress_to_identifier('0x4D9e23a3842fE7Eb7682B9725cF6c507C424A41B'),
+        # coingecko listed newb farm with symbol NEWB that is not our newb
+        ethaddress_to_identifier('0x5A63Eb358a751b76e58325eadD86c2473fC40e87'),
+        # coingecko has BigBang Core (BBC) that is not tradove
+        ethaddress_to_identifier('0xe7D3e4413E29ae35B0893140F4500965c74365e5'),
+        # MNT is Meownaut in coingecko and not media network token
+        ethaddress_to_identifier('0xA9877b1e05D035899131DBd1e403825166D09f92'),
+        # Project quantum in coingecko but we have Qubitica
+        ethaddress_to_identifier('0xCb5ea3c190d8f82DEADF7ce5Af855dDbf33e3962'),
+        # We have Cashbery Coin for symbol CBC that is not listed in the coingecko list
+        'CBC-2',
+        # We have Air token for symbol AIR. Got another AIR symbol token
+        ethaddress_to_identifier('0x27Dce1eC4d3f72C3E457Cc50354f1F975dDEf488'),
+        # We have Acorn Collective for symbol OAK. Got another OAK symbol token
+        ethaddress_to_identifier('0x5e888B83B7287EED4fB7DA7b7d0A0D4c735d94b3'),
+        # Coingecko has yearn v1 vault yUSD
+        ethaddress_to_identifier('0x0ff3773a6984aD900f7FB23A9acbf07AC3aDFB06'),
+        # Coingecko has yearn v1 vault yUSD (different vault from above but same symbol)
+        ethaddress_to_identifier('0x4B5BfD52124784745c1071dcB244C6688d2533d3'),
+        # Coingecko has Aston Martin Cognizant Fan Token and we have AeroME
+        'AM',
+        # Coingecko has Swarm (BZZ) and we have SwarmCoin
+        'SWARM',
+        # Coingecko has aircoin and we have a different airtoken
+        'AIR-2',
+        # Coingecko has Attlas Token and we have Authorship
+        ethaddress_to_identifier('0x2dAEE1AA61D60A252DC80564499A69802853583A'),
+        # Coingecko has Lever Network and we have Leverj
+        ethaddress_to_identifier('0x0F4CA92660Efad97a9a70CB0fe969c755439772C'),
+        # Coingecko has Twirl Governance Token and we have Target Coin
+        ethaddress_to_identifier('0xAc3Da587eac229C9896D919aBC235CA4Fd7f72c1'),
+        # Coingecko has MyWish and we have another WISH (ethereum addresses don't match)
+        ethaddress_to_identifier('0x1b22C32cD936cB97C28C5690a0695a82Abf688e6'),
+        # Coingecko has DroneFly and we have KlondikeCoin for symbol KDC
+        'KDC',
+        # Coingecko has CoinStarter and we have Student Coin for symbol STC
+        ethaddress_to_identifier('0x15B543e986b8c34074DFc9901136d9355a537e7E'),
+        # Coingecko has Nano Dogecoin symbol:ndc and we have NEVERDIE
+        ethaddress_to_identifier('0xA54ddC7B3CcE7FC8b1E3Fa0256D0DB80D2c10970'),
+        # Coingecko has olecoin and we have Olive
+        ethaddress_to_identifier('0x9d9223436dDD466FC247e9dbbD20207e640fEf58'),
+        # Coingecko has orica and we have origami
+        ethaddress_to_identifier('0xd2Fa8f92Ea72AbB35dBD6DECa57173d22db2BA49'),
+        # Coingeckop has a different storm token
+        ethaddress_to_identifier('0xD0a4b8946Cb52f0661273bfbC6fD0E0C75Fc6433'),
+        # We have Centra (CTR) but coingecko has creator platform
+        ethaddress_to_identifier('0x96A65609a7B84E8842732DEB08f56C3E21aC6f8a'),
+        # We have Gladius Token (GLA) but coingecko has Galaxy adventure
+        ethaddress_to_identifier('0x71D01dB8d6a2fBEa7f8d434599C237980C234e4C'),
+        # We have reftoken (REF) and coingecko has Ref Finance
+        ethaddress_to_identifier('0x89303500a7Abfb178B274FD89F2469C264951e1f'),
+        # We have Aidus (AID) and coingecko has aidcoin
+        ethaddress_to_identifier('0xD178b20c6007572bD1FD01D205cC20D32B4A6015'),
+        # We have depository network but coingecko has depo
+        ethaddress_to_identifier('0x89cbeAC5E8A13F0Ebb4C74fAdFC69bE81A501106'),
+        # Sinthetic ETH but coingecko has iEthereum
+        ethaddress_to_identifier('0xA9859874e1743A32409f75bB11549892138BBA1E'),
+        # blocklancer but coingecko has Linker
+        ethaddress_to_identifier('0x63e634330A20150DbB61B15648bC73855d6CCF07'),
+        # Kora network but coingecko Knekted
+        ethaddress_to_identifier('0xfF5c25D2F40B47C4a37f989DE933E26562Ef0Ac0'),
+        # gambit but coingecko has another gambit
+        ethaddress_to_identifier('0xF67451Dc8421F0e0afEB52faa8101034ed081Ed9'),
+        # publica but coingecko has another polkalab
+        ethaddress_to_identifier('0x55648De19836338549130B1af587F16beA46F66B'),
+        # Spin protocol but spinada in coingecko
+        ethaddress_to_identifier('0x4F22310C27eF39FEAA4A756027896DC382F0b5E2'),
+        # REBL but another REBL (rebel finance) in coingecko
+        ethaddress_to_identifier('0x5F53f7A8075614b699Baad0bC2c899f4bAd8FBBF'),
+        # Sp8de (SPX) but another SPX in coingecko
+        ethaddress_to_identifier('0x05aAaA829Afa407D83315cDED1d45EB16025910c'),
+        # marginless but another MRS in coingecko
+        ethaddress_to_identifier('0x1254E59712e6e727dC71E0E3121Ae952b2c4c3b6'),
+        # oyster (PRL) but another PRL in coingecko
+        ethaddress_to_identifier('0x1844b21593262668B7248d0f57a220CaaBA46ab9'),
+        # oyster shell but another SHL in coingecko
+        ethaddress_to_identifier('0x8542325B72C6D9fC0aD2Ca965A78435413a915A0'),
+        # dorado but another DOR in coingecko
+        ethaddress_to_identifier('0x906b3f8b7845840188Eab53c3f5AD348A787752f'),
     )
     for asset_data in GlobalDBHandler().get_all_asset_data(mapping=False):
         identifier = asset_data.identifier
@@ -256,21 +410,17 @@ def test_coingecko_identifiers_are_reachable(data_dir):
         have_id = True
         if coingecko_str is not None or coingecko_str != '':
             have_id = False
-            found = False
-            for entry in all_coins:
-                if coingecko_str == entry['id']:
-                    found = True
-                    break
+            found = coingecko_str in all_coins
 
         suggestions = []
         if not found:
-            for entry in all_coins:
+            for cc_id, entry in all_coins.items():
                 if entry['symbol'].upper() == asset_data.symbol.upper():
-                    suggestions.append((entry['id'], entry['name'], entry['symbol']))
+                    suggestions.append((cc_id, entry['name'], entry['symbol']))
                     continue
 
                 if entry['name'].upper() == asset_data.symbol.upper():
-                    suggestions.append((entry['id'], entry['name'], entry['symbol']))
+                    suggestions.append((cc_id, entry['name'], entry['symbol']))
                     continue
 
         if have_id is False and (len(suggestions) == 0 or identifier in symbol_checked_exceptions):
@@ -282,24 +432,6 @@ def test_coingecko_identifiers_are_reachable(data_dir):
                 msg += f'\nSuggestion: id:{s[0]} name:{s[1]} symbol:{s[2]}'
         if not found:
             test_warnings.warn(UserWarning(msg))
-
-
-def test_assets_json_meta():
-    """Test that all_assets.json md5 matches and that if md5 changes since last
-    time then version is also bumped"""
-    last_meta = {'md5': '51bddc1b4e8bd6d30027c4380cdf9d4f', 'version': 72}
-    data_dir = Path(__file__).resolve().parent.parent.parent / 'data'
-    data_md5 = file_md5(data_dir / 'all_assets.json')
-
-    with open(data_dir / 'all_assets.meta', 'r') as f:
-        saved_meta = json.loads(f.read())
-
-    assert data_md5 == saved_meta['md5']
-
-    msg = 'The last meta md5 of the test does not match the one in all_assets.meta'
-    assert saved_meta['md5'] == last_meta['md5'], msg
-    msg = 'The last meta version of the test does not match the one in all_assets.meta'
-    assert saved_meta['version'] == last_meta['version'], msg
 
 
 @pytest.mark.parametrize('mock_asset_meta_github_response', ['{"md5": "", "version": 99999999}'])
@@ -314,7 +446,7 @@ def test_assets_json_meta():
 }"""])
 @pytest.mark.parametrize('force_reinitialize_asset_resolver', [True])
 def test_asset_with_unknown_type_does_not_crash(asset_resolver):  # pylint: disable=unused-argument
-    """Test that finding an asset with an unknown type does not crash Rotki"""
+    """Test that finding an asset with an unknown type does not crash rotki"""
     with pytest.raises(UnknownAsset):
         Asset('COMPRLASSET2')
     # After the test runs we must reset the asset resolver so that it goes back to
@@ -322,26 +454,38 @@ def test_asset_with_unknown_type_does_not_crash(asset_resolver):  # pylint: disa
     AssetResolver._AssetResolver__instance = None
 
 
-def test_get_ethereum_token():
-    assert A_DAI == get_ethereum_token(
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+@pytest.mark.parametrize('force_reinitialize_asset_resolver', [True])
+def test_get_or_create_ethereum_token(globaldb, database):
+    cursor = globaldb._conn.cursor()
+    assets_num = cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0]
+    assert A_DAI == get_or_create_ethereum_token(
+        userdb=database,
         symbol='DAI',
         ethereum_address='0x6B175474E89094C44Da98b954EedeAC495271d0F',
     )
-    unknown_token = UnknownEthereumToken(
+    # Try getting a DAI token of a different address. Shold add new token to DB
+    new_token = get_or_create_ethereum_token(
+        userdb=database,
         symbol='DAI',
         ethereum_address='0xA379B8204A49A72FF9703e18eE61402FAfCCdD60',
-        decimals=18,
     )
-    assert unknown_token == get_ethereum_token(
-        symbol='DAI',
-        ethereum_address='0xA379B8204A49A72FF9703e18eE61402FAfCCdD60',
-    ), 'correct symbol but wrong address should result in unknown token'
-    unknown_token = UnknownEthereumToken(
+    assert cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0] == assets_num + 1
+    assert new_token.symbol == 'DAI'
+    assert new_token.ethereum_address == '0xA379B8204A49A72FF9703e18eE61402FAfCCdD60'
+    # Try getting a symbol of normal chain with different address. Should add new token to DB
+    new_token = get_or_create_ethereum_token(
+        userdb=database,
         symbol='DOT',
-        ethereum_address='0xA379B8204A49A72FF9703e18eE61402FAfCCdD60',
-        decimals=18,
+        ethereum_address='0xB179B8204A49672FF9703e18eE61402FAfCCdD60',
     )
-    assert unknown_token == get_ethereum_token(
-        symbol='DOT',
-        ethereum_address='0xA379B8204A49A72FF9703e18eE61402FAfCCdD60',
-    ), 'symbol of normal chain (polkadot here) should result in unknown token'
+    assert new_token.symbol == 'DOT'
+    assert new_token.ethereum_address == '0xB179B8204A49672FF9703e18eE61402FAfCCdD60'
+    assert cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0] == assets_num + 2
+    # Check that token with wrong symbol but existing address is returned
+    assert A_USDT == get_or_create_ethereum_token(
+        userdb=database,
+        symbol='ROFL',
+        ethereum_address='0xdAC17F958D2ee523a2206206994597C13D831ec7',
+    )
+    assert cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0] == assets_num + 2

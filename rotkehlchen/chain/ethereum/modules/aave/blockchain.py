@@ -9,34 +9,36 @@ from rotkehlchen.chain.ethereum.structures import (
     AaveInterestEvent,
 )
 from rotkehlchen.constants.ethereum import (
-    AAVE_LENDING_POOL,
+    AAVE_V1_LENDING_POOL,
     ATOKEN_ABI,
     MAX_BLOCKTIME_CACHE,
     ZERO_ADDRESS,
 )
 from rotkehlchen.fval import FVal
+from rotkehlchen.globaldb.handler import GlobalDBHandler
 from rotkehlchen.history.price import query_usd_price_zero_if_error
 from rotkehlchen.inquirer import Inquirer
+from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
 from rotkehlchen.typing import ChecksumEthAddress, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import hex_or_bytes_to_address, hexstr_to_int
 
-from .common import AaveBalances, AaveHistory, AaveInquirer, _get_reserve_address_decimals
-from .constants import ATOKENS_LIST, ATOKENV1_TO_ASSET
+from .common import (
+    AaveBalances,
+    AaveHistory,
+    AaveInquirer,
+    _get_reserve_address_decimals,
+    atoken_to_asset,
+)
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.manager import EthereumManager
     from rotkehlchen.db.dbhandler import DBHandler
 
-log = logging.getLogger(__name__)
 
-
-def _atoken_to_reserve_asset(atoken: EthereumToken) -> Asset:
-    reserve_symbol = atoken.identifier[1:]
-    if reserve_symbol == 'SUSD':
-        reserve_symbol = 'sUSD'
-    return Asset(reserve_symbol)
+logger = logging.getLogger(__name__)
+log = RotkehlchenLogsAdapter(logger)
 
 
 class AaveBlockchainInquirer(AaveInquirer):
@@ -88,7 +90,6 @@ class AaveBlockchainInquirer(AaveInquirer):
             self,
             user_address: ChecksumEthAddress,
             to_block: int,
-            atokens_list: Optional[List[EthereumToken]] = None,
             given_from_block: Optional[int] = None,
     ) -> AaveHistory:
         """
@@ -98,7 +99,7 @@ class AaveBlockchainInquirer(AaveInquirer):
         semaphore
         """
         # Get all deposit events for the address
-        from_block = AAVE_LENDING_POOL.deployed_block if given_from_block is None else given_from_block  # noqa: E501
+        from_block = AAVE_V1_LENDING_POOL.deployed_block if given_from_block is None else given_from_block  # noqa: E501
         argument_filters = {
             '_user': user_address,
         }
@@ -110,16 +111,16 @@ class AaveBlockchainInquirer(AaveInquirer):
         withdraw_events = []
         if query_events:
             deposit_events.extend(self.ethereum.get_logs(
-                contract_address=AAVE_LENDING_POOL.address,
-                abi=AAVE_LENDING_POOL.abi,
+                contract_address=AAVE_V1_LENDING_POOL.address,
+                abi=AAVE_V1_LENDING_POOL.abi,
                 event_name='Deposit',
                 argument_filters=argument_filters,
                 from_block=from_block,
                 to_block=to_block,
             ))
             withdraw_events.extend(self.ethereum.get_logs(
-                contract_address=AAVE_LENDING_POOL.address,
-                abi=AAVE_LENDING_POOL.abi,
+                contract_address=AAVE_V1_LENDING_POOL.address,
+                abi=AAVE_V1_LENDING_POOL.abi,
                 event_name='RedeemUnderlying',
                 argument_filters=argument_filters,
                 from_block=from_block,
@@ -127,7 +128,7 @@ class AaveBlockchainInquirer(AaveInquirer):
             ))
 
         # now for each atoken get all mint events and pass then to profit calculation
-        tokens = atokens_list if atokens_list is not None else ATOKENS_LIST
+        tokens = GlobalDBHandler().get_ethereum_tokens(protocol='aave')
         total_address_events = []
         total_earned_map: Dict[Asset, Balance] = {}
         for token in tokens:
@@ -193,7 +194,7 @@ class AaveBlockchainInquirer(AaveInquirer):
         # Even if no events are found for an address we need to remember the range
         self.database.update_used_block_query_range(
             name=f'aave_events_{user_address}',
-            from_block=AAVE_LENDING_POOL.deployed_block,
+            from_block=AAVE_V1_LENDING_POOL.deployed_block,
             to_block=to_block,
         )
 
@@ -243,7 +244,12 @@ class AaveBlockchainInquirer(AaveInquirer):
             mint_data.add(entry)
             mint_data_to_log_index[entry] = event['logIndex']
 
-        reserve_asset = ATOKENV1_TO_ASSET[atoken]  # should never raise KeyError
+        reserve_asset = atoken_to_asset(atoken)
+        if reserve_asset is None:
+            log.error(
+                f'Could not determine reserve address for {atoken}. Skipping events for it')
+            return []
+
         reserve_address, decimals = _get_reserve_address_decimals(reserve_asset)
         aave_events: List[AaveEvent] = []
         for event in deposit_events:
@@ -263,7 +269,7 @@ class AaveBlockchainInquirer(AaveInquirer):
                 usd_price = query_usd_price_zero_if_error(
                     asset=reserve_asset,
                     time=timestamp,
-                    location='aave deposit',
+                    location=f'aave deposit {tx_hash}',
                     msg_aggregator=self.msg_aggregator,
                 )
                 deposit_amount = deposit / (FVal(10) ** FVal(decimals))
@@ -282,10 +288,11 @@ class AaveBlockchainInquirer(AaveInquirer):
                 ))
 
         for data in mint_data:
+            tx_hash = data[3]
             usd_price = query_usd_price_zero_if_error(
                 asset=atoken,
                 time=data[2],
-                location='aave interest profit',
+                location=f'aave interest profit {tx_hash}',
                 msg_aggregator=self.msg_aggregator,
             )
             interest_amount = data[1] / (FVal(10) ** FVal(decimals))
@@ -298,7 +305,7 @@ class AaveBlockchainInquirer(AaveInquirer):
                 ),
                 block_number=data[0],
                 timestamp=data[2],
-                tx_hash=data[3],
+                tx_hash=tx_hash,
                 log_index=mint_data_to_log_index[data],
             ))
 
@@ -312,7 +319,7 @@ class AaveBlockchainInquirer(AaveInquirer):
                 usd_price = query_usd_price_zero_if_error(
                     asset=reserve_asset,
                     time=timestamp,
-                    location='aave withdrawal',
+                    location=f'aave withdrawal {tx_hash}',
                     msg_aggregator=self.msg_aggregator,
                 )
                 withdrawal_amount = withdrawal / (FVal(10) ** FVal(decimals))

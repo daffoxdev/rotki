@@ -3,6 +3,7 @@
     <v-tooltip top open-delay="400" :disabled="!truncated">
       <template #activator="{ on }">
         <span
+          data-cy="labeled-address-display"
           class="labeled-address-display__address"
           :class="
             $vuetify.breakpoint.xsOnly
@@ -11,7 +12,7 @@
           "
           v-on="on"
         >
-          <v-chip label outlined>
+          <v-chip label outlined class="labeled-address-display__chip">
             <span v-if="!!label" class="text-truncate">
               {{
                 $t('labeled_address_display.label', {
@@ -27,16 +28,14 @@
             </span>
             <span
               v-if="!$vuetify.breakpoint.smAndDown || !label"
-              :class="privacyMode ? 'blur-content' : null"
+              :class="!shouldShowAmount ? 'blur-content' : null"
             >
               {{ displayAddress }}
             </span>
           </v-chip>
         </span>
       </template>
-      <span v-if="$vuetify.breakpoint.mobile && !!label">
-        {{ account.label }} <br />
-      </span>
+      <span v-if="!!label"> {{ account.label }} <br /> </span>
       <span> {{ address }} </span>
     </v-tooltip>
     <div class="labeled-address-display__actions">
@@ -46,18 +45,20 @@
 </template>
 
 <script lang="ts">
+import { GeneralAccount } from '@rotki/common/lib/account';
 import { Component, Mixins, Prop } from 'vue-property-decorator';
-import { mapState } from 'vuex';
+import { mapGetters } from 'vuex';
 import { truncateAddress, truncationPoints } from '@/filters';
 import ScrambleMixin from '@/mixins/scramble-mixin';
-import { GeneralAccount } from '@/typing/types';
-import { randomHex } from '@/typing/utils';
+import { randomHex } from '@/utils/data';
 
 @Component({
-  computed: { ...mapState('session', ['privacyMode']) }
+  computed: {
+    ...mapGetters('session', ['shouldShowAmount'])
+  }
 })
 export default class LabeledAddressDisplay extends Mixins(ScrambleMixin) {
-  privacyMode!: boolean;
+  shouldShowAmount!: boolean;
 
   @Prop({ required: true })
   account!: GeneralAccount;
@@ -75,7 +76,11 @@ export default class LabeledAddressDisplay extends Mixins(ScrambleMixin) {
   }
 
   get truncationLength(): number {
-    return truncationPoints[this.breakpoint] ?? 4;
+    let truncationPoint = truncationPoints[this.breakpoint];
+    if (truncationPoint && this.account.label) {
+      return 4;
+    }
+    return truncationPoint ?? 4;
   }
 
   get displayAddress(): string {
@@ -119,8 +124,10 @@ export default class LabeledAddressDisplay extends Mixins(ScrambleMixin) {
 <style scoped lang="scss">
 .labeled-address-display {
   max-height: 30px;
+  width: 100%;
 
   &__address {
+    width: 100%;
     font-weight: 500;
     padding-top: 6px;
     padding-bottom: 6px;
@@ -150,6 +157,10 @@ export default class LabeledAddressDisplay extends Mixins(ScrambleMixin) {
     border-left-width: 0;
     border-radius: 0 4px 4px 0;
     display: inline-block;
+  }
+
+  &__chip {
+    width: 100%;
   }
 }
 

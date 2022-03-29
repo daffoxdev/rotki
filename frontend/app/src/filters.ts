@@ -1,15 +1,5 @@
-import { default as BigNumber } from 'bignumber.js';
-import Vue from 'vue';
-import { displayDateFormatter } from '@/data/date_formatter';
+import { BigNumber } from '@rotki/common';
 import { Zero } from '@/utils/bignumbers';
-
-export function precision(value: number, precision: number): string {
-  return value.toFixed(precision);
-}
-
-export function formatDate(value: number, format: string): string {
-  return displayDateFormatter.format(new Date(value * 1000), format);
-}
 
 export function capitalize(string: string): string {
   return string[0].toUpperCase() + string.slice(1);
@@ -61,29 +51,12 @@ export function balanceSum(value: BigNumber[]): BigNumber {
 export function aggregateTotal(
   balances: any[],
   mainCurrency: string,
-  exchangeRate: BigNumber,
-  precision: number
+  exchangeRate: BigNumber
 ): BigNumber {
   return balances.reduce((previousValue, currentValue) => {
     if (currentValue.asset === mainCurrency) {
-      return previousValue
-        .plus(currentValue.amount)
-        .dp(precision, BigNumber.ROUND_DOWN);
+      return previousValue.plus(currentValue.amount);
     }
-    return previousValue
-      .plus(currentValue.usdValue.multipliedBy(exchangeRate))
-      .dp(precision, BigNumber.ROUND_DOWN);
+    return previousValue.plus(currentValue.usdValue.multipliedBy(exchangeRate));
   }, Zero);
 }
-
-export function optional(value?: string): string {
-  return value ?? '-';
-}
-
-Vue.filter('precision', precision);
-Vue.filter('formatDate', formatDate);
-Vue.filter('capitalize', capitalize);
-Vue.filter('balanceSum', balanceSum);
-Vue.filter('truncateAddress', truncateAddress);
-Vue.filter('aggregateTotal', aggregateTotal);
-Vue.filter('optional', optional);

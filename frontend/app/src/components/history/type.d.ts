@@ -5,5 +5,6 @@ export type TradeLocationData = {
   readonly name: string;
   readonly icon: string;
   readonly imageIcon: boolean;
+  readonly component?: any;
   readonly exchange: boolean;
 };

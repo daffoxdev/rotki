@@ -9,18 +9,22 @@
 # rotki-custom-docker:latest
 
 # build stage
-FROM node:lts-alpine as frontend-build-stage
+FROM node:14-buster as frontend-build-stage
 
 WORKDIR /app
-COPY frontend/app/package*.json frontend/app/check-versions.js ./
-RUN npm install -g npm@7 && if ! npm ci --exit-code; then npm ci; fi
-COPY frontend/app/ .
-RUN npm run build -- --mode docker
+COPY frontend/ .
+RUN apt-get update && apt-get install -y build-essential python3
+RUN npm install -g npm@7
+RUN npm ci
+RUN npm run docker:build
 
-FROM python:3.7 as backend-build-stage
+FROM python:3.7-buster as backend-build-stage
 
+ARG PYINSTALLER_VERSION=v3.5
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+RUN apt-get update && apt-get install -y build-essential zlib1g-dev
 
 RUN git clone https://github.com/sqlcipher/sqlcipher && \
     cd sqlcipher && \
@@ -33,18 +37,30 @@ RUN git clone https://github.com/sqlcipher/sqlcipher && \
     make install && \
     ldconfig
 
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup default nightly-2021-03-24 
+
+RUN python3 -m pip install --upgrade pip setuptools wheel
 COPY ./requirements.txt /app/requirements.txt
+
 WORKDIR /app
 RUN pip install -r requirements.txt
 
 COPY . /app
 
+RUN git clone https://github.com/pyinstaller/pyinstaller.git && cd pyinstaller && \
+    git checkout ${PYINSTALLER_VERSION} && \
+    cd bootloader && \
+    ./waf all && \
+    cd .. && \
+    python setup.py install
+
 RUN pip install -e . && \
-    pip install pyinstaller==3.5 && \
     python -c "import sys;from rotkehlchen.db.dbhandler import detect_sqlcipher_version; version = detect_sqlcipher_version();sys.exit(0) if version == 4 else sys.exit(1)" && \
     pyinstaller --noconfirm --clean --distpath /tmp/dist rotkehlchen.spec
 
-FROM nginx:stable as runtime
+FROM nginx:1.21 as runtime
 
 LABEL maintainer="Rotki Solutions GmbH <info@rotki.com>"
 
@@ -59,7 +75,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-build-stage /tmp/dist /opt/rotki
-COPY --from=frontend-build-stage /app/dist /opt/rotki/frontend
+COPY --from=frontend-build-stage /app/app/dist /opt/rotki/frontend
 
 RUN APP=$(find "/opt/rotki" -name "rotkehlchen-*-linux"  | head -n 1) && \
     echo ${APP} && \
@@ -73,4 +89,4 @@ COPY ./packaging/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY ./packaging/docker/docker-entrypoint.sh ./opt/rotki
 CMD ["sh", "-c", "exec /opt/rotki/docker-entrypoint.sh"]
 
-HEALTHCHECK CMD curl --fail http://localhost/api/1/users || exit 1
+HEALTHCHECK CMD curl --fail http://localhost/api/1/ping || exit 1

@@ -1,26 +1,32 @@
 import { mount, Wrapper } from '@vue/test-utils';
+import { createPinia, PiniaVuePlugin } from 'pinia';
 import Vue from 'vue';
 import Vuetify from 'vuetify';
 import AssetBalances from '@/components/settings/AssetBalances.vue';
-import { Task, TaskMeta } from '@/model/task';
-import { TaskType } from '@/model/task-type';
 import store from '@/store/store';
+import { useTasks } from '@/store/tasks';
+import { TaskType } from '@/types/task-type';
 import '../../i18n';
 
 Vue.use(Vuetify);
+Vue.use(PiniaVuePlugin);
 
 describe('AssetBalances.vue', () => {
-  let wrapper: Wrapper<AssetBalances>;
+  let wrapper: Wrapper<any>;
 
   beforeEach(() => {
     const vuetify = new Vuetify();
+    const pinia = createPinia();
+
     wrapper = mount(AssetBalances, {
-      store,
       vuetify,
+      store,
+      pinia,
+      provide: {
+        'vuex-store': store
+      },
       propsData: {
-        blockchain: 'ETH',
-        balances: [],
-        title: 'Blockchain assets'
+        balances: []
       }
     });
   });
@@ -30,15 +36,16 @@ describe('AssetBalances.vue', () => {
   });
 
   test('table enters into loading state when balances load', async () => {
-    const payload: Task<TaskMeta> = {
+    const { add, remove } = useTasks();
+    add({
       id: 1,
       type: TaskType.QUERY_BLOCKCHAIN_BALANCES,
       meta: {
-        ignoreResult: false,
         title: 'test'
-      }
-    };
-    store.commit('tasks/add', payload);
+      },
+      time: 0
+    });
+
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('.v-data-table__progress').exists()).toBeTruthy();
@@ -46,7 +53,8 @@ describe('AssetBalances.vue', () => {
       'asset_balances.loading'
     );
 
-    store.commit('tasks/remove', 1);
+    remove(1);
+
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('.v-data-table__progress').exists()).toBeFalsy();

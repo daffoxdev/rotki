@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional
 
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures import Balance, BalanceType
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.errors import InputError, RemoteError
@@ -18,22 +18,30 @@ class ManuallyTrackedBalance(NamedTuple):
     amount: FVal
     location: Location
     tags: Optional[List[str]]
+    balance_type: BalanceType
 
 
 class ManuallyTrackedBalanceWithValue(NamedTuple):
-    # NamedTuples can't use inheritance. Make sure this has same fields as
-    # ManuallyTrackedBalance until usd_value
     asset: Asset
     label: str
-    amount: FVal
+    value: Balance
     location: Location
     tags: Optional[List[str]]
-    usd_value: FVal
+    balance_type: BalanceType
+
+    def serialize(self) -> Dict[str, Any]:
+        result = self._asdict()  # pylint: disable=no-member
+        del result['value']
+        result = {**result, **self.value.serialize()}
+        return result
 
 
-def get_manually_tracked_balances(db: 'DBHandler') -> List[ManuallyTrackedBalanceWithValue]:
+def get_manually_tracked_balances(
+    db: 'DBHandler',
+    balance_type: Optional[BalanceType] = None,
+) -> List[ManuallyTrackedBalanceWithValue]:
     """Gets the manually tracked balances"""
-    balances = db.get_manually_tracked_balances()
+    balances = db.get_manually_tracked_balances(balance_type=balance_type)
     balances_with_value = []
     for entry in balances:
         try:
@@ -45,9 +53,14 @@ def get_manually_tracked_balances(db: 'DBHandler') -> List[ManuallyTrackedBalanc
             )
             price = Price(ZERO)
 
+        value = Balance(amount=entry.amount, usd_value=price * entry.amount)
         balances_with_value.append(ManuallyTrackedBalanceWithValue(
-            **entry._asdict(),
-            usd_value=price * entry.amount,
+            asset=entry.asset,
+            label=entry.label,
+            value=value,
+            location=entry.location,
+            tags=entry.tags,
+            balance_type=entry.balance_type,
         ))
 
     return balances_with_value
@@ -101,22 +114,21 @@ def remove_manually_tracked_balances(db: 'DBHandler', labels: List[str]) -> None
     db.remove_manually_tracked_balances(labels)
 
 
-def account_for_manually_tracked_balances(
+def account_for_manually_tracked_asset_balances(
         db: 'DBHandler',
         balances: Dict[str, Dict[Asset, Balance]],
 ) -> Dict[str, Any]:
-    """Given the big balances mapping adds to it all manually tracked balances"""
-    manually_tracked_balances = get_manually_tracked_balances(db)
+    """Given the big balances mapping adds to it all manually tracked asset balances"""
+    manually_tracked_balances = get_manually_tracked_balances(
+        db=db,
+        balance_type=BalanceType.ASSET,
+    )
     for m_entry in manually_tracked_balances:
         location_str = str(m_entry.location)
-        balance = Balance(
-            amount=m_entry.amount,
-            usd_value=m_entry.usd_value,
-        )
         if location_str not in balances:
-            balances[location_str] = {m_entry.asset: balance}
+            balances[location_str] = {m_entry.asset: m_entry.value}
         elif m_entry.asset not in balances[location_str]:
-            balances[location_str][m_entry.asset] = balance
+            balances[location_str][m_entry.asset] = m_entry.value
         else:
-            balances[location_str][m_entry.asset] += balance
+            balances[location_str][m_entry.asset] += m_entry.value
     return balances

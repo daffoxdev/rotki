@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rotkehlchen.assets.asset import Asset
+from rotkehlchen.assets.converters import asset_from_binance
 from rotkehlchen.crypto import sha3
 from rotkehlchen.errors import UnknownAsset
 from rotkehlchen.fval import FVal
@@ -9,9 +10,8 @@ from rotkehlchen.history.deserialization import deserialize_price
 from rotkehlchen.serialization.deserialize import (
     deserialize_asset_amount,
     deserialize_fee,
-    deserialize_location,
+    deserialize_optional,
     deserialize_timestamp,
-    deserialize_trade_type,
 )
 from rotkehlchen.typing import (
     AssetAmount,
@@ -30,6 +30,21 @@ from rotkehlchen.user_messages import MessagesAggregator
 def hash_id(hashable: str) -> TradeID:
     id_bytes = sha3(hashable.encode())
     return TradeID(id_bytes.hex())
+
+
+AssetMovementDBTuple = Tuple[
+    str,  # id
+    str,  # location
+    str,  # category
+    str,  # address
+    str,  # transaction_id
+    int,  # time
+    str,  # asset
+    str,  # amount
+    str,  # fee_asset
+    str,  # fee
+    str,  # link
+]
 
 
 class AssetMovement(NamedTuple):
@@ -76,6 +91,43 @@ class AssetMovement(NamedTuple):
         result = self._asdict()  # pylint: disable=no-member
         result['identifier'] = self.identifier
         return result
+
+    @classmethod
+    def deserialize_from_db(cls, entry: AssetMovementDBTuple) -> 'AssetMovement':
+        """May raise:
+            - DeserializationError
+            - UnknownAsset
+        """
+        return AssetMovement(
+            location=Location.deserialize_from_db(entry[1]),
+            category=AssetMovementCategory.deserialize_from_db(entry[2]),
+            address=entry[3],
+            transaction_id=entry[4],
+            timestamp=Timestamp(entry[5]),
+            asset=Asset(entry[6]),
+            # TODO: should we also _force_positive here? I guess not since
+            # we always make sure to save it as positive
+            amount=deserialize_asset_amount(entry[7]),
+            fee_asset=Asset(entry[8]),
+            fee=deserialize_fee(entry[9]),
+            link=entry[10],
+        )
+
+
+TradeDBTuple = Tuple[
+    str,  # id
+    int,  # time
+    str,  # location
+    str,  # base_asset
+    str,  # quote_asset
+    str,  # type
+    str,  # amount
+    str,  # rate
+    str,  # fee
+    str,  # fee_currency
+    str,  # link
+    str,  # notes
+]
 
 
 class Trade(NamedTuple):
@@ -155,6 +207,40 @@ class Trade(NamedTuple):
             f'and quote asset: {self.quote_asset.name}'
         )
 
+    @classmethod
+    def deserialize_from_db(cls, entry: TradeDBTuple) -> 'Trade':
+        """May raise:
+            - DeserializationError
+            - UnknownAsset
+        """
+        return Trade(
+            timestamp=deserialize_timestamp(entry[1]),
+            location=Location.deserialize_from_db(entry[2]),
+            base_asset=Asset(entry[3]),
+            quote_asset=Asset(entry[4]),
+            trade_type=TradeType.deserialize_from_db(entry[5]),
+            amount=deserialize_asset_amount(entry[6]),
+            rate=deserialize_price(entry[7]),
+            fee=deserialize_optional(entry[8], deserialize_fee),
+            fee_currency=deserialize_optional(entry[9], Asset),
+            link=entry[10],
+            notes=entry[11],
+        )
+
+
+MarginPositionDBTuple = Tuple[
+    str,  # id
+    str,  # location
+    int,  # open_time
+    int,  # close_time
+    str,  # profit_loss
+    str,  # pl_currency
+    str,  # fee
+    str,  # fee_currency
+    str,  # link
+    str,  # notes
+]
+
 
 class MarginPosition(NamedTuple):
     """We only support margin positions on poloniex and bitmex at the moment"""
@@ -198,6 +284,28 @@ class MarginPosition(NamedTuple):
         )
         return hash_id(string)
 
+    @classmethod
+    def deserialize_from_db(cls, entry: MarginPositionDBTuple) -> 'MarginPosition':
+        """May raise:
+            - DeserializationError
+            - UnknownAsset
+        """
+        if entry[2] == 0:
+            open_time = None
+        else:
+            open_time = deserialize_timestamp(entry[2])
+        return MarginPosition(
+            location=Location.deserialize_from_db(entry[1]),
+            open_time=open_time,
+            close_time=deserialize_timestamp(entry[3]),
+            profit_loss=deserialize_asset_amount(entry[4]),
+            pl_currency=Asset(entry[5]),
+            fee=deserialize_fee(entry[6]),
+            fee_currency=Asset(entry[7]),
+            link=entry[8],
+            notes=entry[9],
+        )
+
 
 class Loan(NamedTuple):
     """We only support loans in poloniex at the moment"""
@@ -225,8 +333,8 @@ def deserialize_trade(data: Dict[str, Any]) -> Trade:
     """
     rate = deserialize_price(data['rate'])
     amount = deserialize_asset_amount(data['amount'])
-    trade_type = deserialize_trade_type(data['trade_type'])
-    location = deserialize_location(data['location'])
+    trade_type = TradeType.deserialize(data['trade_type'])
+    location = Location.deserialize(data['location'])
 
     trade_link = ''
     if 'link' in data:
@@ -281,3 +389,44 @@ def trades_from_dictlist(
             continue
 
     return returned_trades
+
+
+BINANCE_PAIR_DB_TUPLE = Tuple[str, str, str, str]
+
+
+class BinancePair(NamedTuple):
+    """A binance pair. Contains the symbol in the Binance mode e.g. "ETHBTC" and
+    the base and quote assets of that symbol as parsed from exchangeinfo endpoint
+    result"""
+    symbol: str
+    base_asset: Asset
+    quote_asset: Asset
+    location: Location  # Should only be binance or binanceus
+
+    def serialize_for_db(self) -> BINANCE_PAIR_DB_TUPLE:
+        """Create tuple to be inserted in the database containing:
+        - symbol for the pair. Example: ETHBTC
+        - identifier of the base asset
+        - identifier of the quote asset
+        - the location, this is to differentiate binance from binanceus
+        """
+        return (
+            self.symbol,
+            self.base_asset.identifier,
+            self.quote_asset.identifier,
+            self.location.serialize_for_db(),
+        )
+
+    @classmethod
+    def deserialize_from_db(cls, entry: BINANCE_PAIR_DB_TUPLE) -> 'BinancePair':
+        """Create a BinancePair from data in the database. May raise:
+        - DeserializationError
+        - UnsupportedAsset
+        - UnknownAsset
+        """
+        return BinancePair(
+            symbol=entry[0],
+            base_asset=asset_from_binance(entry[1]),
+            quote_asset=asset_from_binance(entry[2]),
+            location=Location.deserialize_from_db(entry[3]),
+        )

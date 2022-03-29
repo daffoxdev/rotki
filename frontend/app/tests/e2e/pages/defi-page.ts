@@ -1,3 +1,5 @@
+import { Module } from '@/types/modules';
+
 export class DefiPage {
   visit() {
     cy.get('.v-app-bar__nav-icon').click();
@@ -10,30 +12,27 @@ export class DefiPage {
   }
 
   selectModules() {
-    cy.get('#defi-module-makerdao_dsr').find('button').click();
-    cy.get('#defi-module-makerdao_vaults').find('button').click();
-    cy.get('#defi-module-compound').find('button').click();
-    cy.get('#defi-module-yearn_vaults').find('button').click();
-    cy.get('#defi-module-uniswap').find('button').click();
-    cy.get('#defi-module-adex').find('button').click();
-    cy.get('#defi-module-loopring').find('button').click();
-    cy.get('#defi-module-balancer').find('button').click();
-    cy.get('#defi-module-eth2').find('button').click();
-    cy.get('#defi-module-aave').should('be.visible');
-    cy.get('#defi-module-makerdao_dsr').should('not.be.visible');
-    cy.get('#defi-module-makerdao_vaults').should('not.be.visible');
-    cy.get('#defi-module-compound').should('not.be.visible');
-    cy.get('#defi-module-yearn_vaults').should('not.be.visible');
-    cy.get('#defi-module-uniswap').should('not.be.visible');
-    cy.get('#defi-module-adex').should('not.be.visible');
-    cy.get('#defi-module-loopring').should('not.be.visible');
-    cy.get('#defi-module-balancer').should('not.be.visible');
-    cy.get('#defi-module-eth2').should('not.be.visible');
+    const ignoredModules = [Module.YEARN, Module.ADEX, Module.MAKERDAO_DSR];
+    const values = Object.values(Module).filter(
+      module => !ignoredModules.includes(module)
+    );
+
+    for (let i = 0; i < values.length; i++) {
+      const module = values[i];
+      if (module === Module.AAVE) {
+        continue;
+      }
+
+      cy.get(`#defi-module-${module}`).scrollIntoView();
+      cy.get(`#defi-module-${module}`).find('button').click();
+      cy.get(`#defi-module-${module}`).should('not.exist');
+    }
+    cy.get(`#defi-module-${Module.AAVE}`).should('be.visible');
     cy.get('.defi-wizard__select-accounts').click();
   }
 
   selectAccounts() {
-    cy.get('.defi-address-selector')
+    cy.get('.module-address-selector')
       .find('.v-stepper__header')
       .children()
       .should('have.length', 1);

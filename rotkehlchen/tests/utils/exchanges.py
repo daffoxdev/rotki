@@ -5,23 +5,29 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.constants.assets import A_ETH
-from rotkehlchen.constants.misc import BINANCE_BASE_URL, BINANCE_US_BASE_URL, ZERO
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
+from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.db.dbhandler import DBHandler
-from rotkehlchen.exchanges.binance import Binance, create_binance_symbols_to_pair
+from rotkehlchen.db.filtering import TradesFilterQuery
+from rotkehlchen.exchanges.binance import BINANCE_BASE_URL, BINANCEUS_BASE_URL, Binance
 from rotkehlchen.exchanges.bitcoinde import Bitcoinde
 from rotkehlchen.exchanges.bitfinex import Bitfinex
 from rotkehlchen.exchanges.bitmex import Bitmex
+from rotkehlchen.exchanges.bitpanda import Bitpanda
 from rotkehlchen.exchanges.bitstamp import Bitstamp
 from rotkehlchen.exchanges.bittrex import Bittrex
 from rotkehlchen.exchanges.coinbase import Coinbase
 from rotkehlchen.exchanges.coinbasepro import Coinbasepro
-from rotkehlchen.exchanges.data_structures import AssetMovement
+from rotkehlchen.exchanges.data_structures import AssetMovement, Trade
+from rotkehlchen.exchanges.exchange import ExchangeInterface
 from rotkehlchen.exchanges.ftx import Ftx
 from rotkehlchen.exchanges.gemini import Gemini
 from rotkehlchen.exchanges.iconomi import Iconomi
+from rotkehlchen.exchanges.independentreserve import Independentreserve
 from rotkehlchen.exchanges.kucoin import Kucoin
+from rotkehlchen.exchanges.manager import ExchangeManager
 from rotkehlchen.exchanges.poloniex import Poloniex
+from rotkehlchen.exchanges.utils import create_binance_symbols_to_pair
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.constants import A_XMR
 from rotkehlchen.tests.utils.factories import (
@@ -31,7 +37,17 @@ from rotkehlchen.tests.utils.factories import (
 )
 from rotkehlchen.tests.utils.kraken import MockKraken
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import ApiKey, ApiSecret, AssetMovementCategory, Location
+from rotkehlchen.typing import (
+    ApiKey,
+    ApiSecret,
+    AssetAmount,
+    AssetMovementCategory,
+    Fee,
+    Location,
+    Price,
+    Timestamp,
+    TradeType,
+)
 from rotkehlchen.user_messages import MessagesAggregator
 
 POLONIEX_MOCK_DEPOSIT_WITHDRAWALS_RESPONSE = """{
@@ -267,6 +283,7 @@ BINANCE_LENDING_WALLET_RESPONSE = """{
     "totalFlexibleInUSDT": "77.13289230"
 }"""
 
+
 BINANCE_MYTRADES_RESPONSE = """
 [
     {
@@ -284,52 +301,131 @@ BINANCE_MYTRADES_RESPONSE = """
     "isBestMatch": true
     }]"""
 
-BINANCE_DEPOSITS_HISTORY_RESPONSE = """{
-    "depositList": [
-        {
-            "insertTime": 1508198532000,
-            "amount": 0.04670582,
-            "asset": "ETH",
-            "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
-            "txId": "0xef33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
-            "status": 1
-        },
-        {
-            "insertTime": 1508398632000,
-            "amount": 1000,
-            "asset": "XMR",
-            "address": "463tWEBn5XZJSxLU34r6g7h8jtxuNcDbjLSjkn3XAXHCbLrTTErJrBWYgHJQyrCwkNgYvV38",
-            "addressTag": "342341222",
-            "txId": "c3c6219639c8ae3f9cf010cdc24fw7f7yt8j1e063f9b4bd1a05cb44c4b6e2509",
-            "status": 1
-        }
-    ],
-    "success": true
+
+BINANCE_FIATBUY_RESPONSE = """{
+   "code": "000000",
+   "message": "success",
+   "data": [{
+      "orderNo": "353fca443f06466db0c4dc89f94f027a",
+      "sourceAmount": "20.0",
+      "fiatCurrency": "EUR",
+      "obtainAmount": "4.462",
+      "cryptoCurrency": "LUNA",
+      "totalFee": "0.2",
+      "price": "4.437472",
+      "status": "Completed",
+      "createTime": 1624529919000,
+      "updateTime": 1624529919000
+   }],
+   "total": 1,
+   "success": true
 }"""
 
-BINANCE_WITHDRAWALS_HISTORY_RESPONSE = """{
-    "withdrawList": [
+
+BINANCE_FIATSELL_RESPONSE = """{
+   "code": "000000",
+   "message": "success",
+   "data": [{
+      "orderNo": "463fca443f06466db0c4dc89f94f027a",
+      "sourceAmount": "20.0",
+      "fiatCurrency": "EUR",
+      "obtainAmount": "4.462",
+      "cryptoCurrency": "ETH",
+      "totalFee": "0.2",
+      "price": "4.437472",
+      "status": "Completed",
+      "createTime": 1628529919000,
+      "updateTime": 1628529919000
+   }],
+   "total": 1,
+   "success": true
+}"""
+
+
+BINANCE_DEPOSITS_HISTORY_RESPONSE = """[
+    {
+        "insertTime": 1508198532000,
+        "amount": 0.04670582,
+        "coin": "ETH",
+        "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
+        "txId": "0xef33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
+        "status": 1
+    }, {
+        "insertTime": 1508398632000,
+        "amount": 1000,
+        "coin": "XMR",
+        "address": "463tWEBn5XZJSxLU34r6g7h8jtxuNcDbjLSjkn3XAXHCbLrTTErJrBWYgHJQyrCwkNgYvV38",
+        "addressTag": "342341222",
+        "txId": "c3c6219639c8ae3f9cf010cdc24fw7f7yt8j1e063f9b4bd1a05cb44c4b6e2509",
+        "status": 1
+    }
+]"""
+
+BINANCE_WITHDRAWALS_HISTORY_RESPONSE = """[
         {
-            "id":"7213fea8e94b4a5593d507237e5a555b",
-            "amount": 1,
-            "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
-            "asset": "ETH",
-            "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
-            "applyTime": 1508488245000,
-            "status": 4
-        },
-        {
-            "id":"7213fea8e94b4a5534ggsd237e5a555b",
-            "amount": 850.1,
-            "address": "463tWEBn5XZJSxLU34r6g7h8jtxuNcDbjLSjkn3XAXHCbLrTTErJrBWYgHJQyrCwkNgYvyVz8",
-            "addressTag": "342341222",
-            "txId": "b3c6219639c8ae3f9cf010cdc24fw7f7yt8j1e063f9b4bd1a05cb44c4b6e2509",
-            "asset": "XMR",
-            "applyTime": 1508512521000,
-            "status": 4
-        }
-    ],
-    "success": true
+        "id":"7213fea8e94b4a5593d507237e5a555b",
+        "withdrawOrderId": null,
+        "amount": 0.99,
+        "transactionFee": 0.01,
+        "address": "0x6915f16f8791d0a1cc2bf47c13a6b2a92000504b",
+        "coin": "ETH",
+        "txId": "0xdf33b22bdb2b28b1f75ccd201a4a4m6e7g83jy5fc5d5a9d1340961598cfcb0a1",
+        "applyTime": "2017-10-17 00:02:12",
+        "status": 4
+    }, {
+        "id":"7213fea8e94b4a5534ggsd237e5a555b",
+        "withdrawOrderId": "withdrawtest",
+        "amount": 999.9999,
+        "transactionFee": 0.0001,
+        "address": "463tWEBn5XZJSxLU34r6g7h8jtxuNcDbjLSjkn3XAXHCbLrTTErJrBWYgHJQyrCwkNgYvyV3z8zctJLPCZy24jvb3NiTcTJ",
+        "addressTag": "342341222",
+        "txId": "b3c6219639c8ae3f9cf010cdc24fw7f7yt8j1e063f9b4bd1a05cb44c4b6e2509",
+        "coin": "XMR",
+        "applyTime": "2017-10-17 00:02:12",
+        "status": 4
+    }
+]"""  # noqa: E501
+
+
+BINANCE_FIATDEPOSITS_RESPONSE = """{
+   "code": "000000",
+   "message": "success",
+   "data": [
+   {
+      "orderNo":"7d76d611-0568-4f43-afb6-24cac7767365",
+      "fiatCurrency": "EUR",
+      "indicatedAmount": "10.00",
+      "amount": "10.00",
+      "totalFee": "0.00",
+      "method": "BankAccount",
+      "status": "Successful",
+      "createTime": 1626144956000,
+      "updateTime": 1626400907000
+   }
+   ],
+   "total": 1,
+   "success": true
+}"""
+
+
+BINANCE_FIATWITHDRAWS_RESPONSE = """{
+   "code": "000000",
+   "message": "success",
+   "data": [
+   {
+      "orderNo":"8e76d611-0568-4f43-afb6-24cac7767365",
+      "fiatCurrency": "EUR",
+      "indicatedAmount": "10.00",
+      "amount": "10.00",
+      "totalFee": "0.02",
+      "method": "BankAccount",
+      "status": "Finished",
+      "createTime": 1636144956000,
+      "updateTime": 1636400907000
+   }
+   ],
+   "total": 1,
+   "success": true
 }"""
 
 
@@ -340,8 +436,12 @@ def assert_binance_balances_result(balances: Dict[str, Any]) -> None:
     assert balances['ETH']['usd_value'] is not None
 
 
-def assert_binance_asset_movements_result(movements: List[AssetMovement], location: Location) -> None:  # noqa: E501
-    assert len(movements) == 4
+def assert_binance_asset_movements_result(
+        movements: List[AssetMovement],
+        location: Location,
+        got_fiat: bool,
+) -> None:
+    assert len(movements) == 6 if got_fiat else 4
     assert movements[0].location == location
     assert movements[0].category == AssetMovementCategory.DEPOSIT
     assert movements[0].timestamp == 1508198532
@@ -360,19 +460,36 @@ def assert_binance_asset_movements_result(movements: List[AssetMovement], locati
 
     assert movements[2].location == location
     assert movements[2].category == AssetMovementCategory.WITHDRAWAL
-    assert movements[2].timestamp == 1508488245
+    assert movements[2].timestamp == 1508198532
     assert isinstance(movements[2].asset, Asset)
     assert movements[2].asset == A_ETH
-    assert movements[2].amount == FVal('1')
-    assert movements[2].fee == ZERO
+    assert movements[2].amount == FVal('0.99')
+    assert movements[2].fee == FVal('0.01')
 
     assert movements[3].location == location
     assert movements[3].category == AssetMovementCategory.WITHDRAWAL
-    assert movements[3].timestamp == 1508512521
+    assert movements[3].timestamp == 1508198532
     assert isinstance(movements[3].asset, Asset)
     assert movements[3].asset == A_XMR
-    assert movements[3].amount == FVal('850.1')
-    assert movements[3].fee == ZERO
+    assert movements[3].amount == FVal('999.9999')
+    assert movements[3].fee == FVal('0.0001')
+
+    if got_fiat:
+        assert movements[4].location == location
+        assert movements[4].category == AssetMovementCategory.DEPOSIT
+        assert movements[4].timestamp == 1626144956
+        assert isinstance(movements[4].asset, Asset)
+        assert movements[4].asset == A_EUR
+        assert movements[4].amount == FVal('10')
+        assert movements[4].fee == FVal('0')
+
+        assert movements[5].location == location
+        assert movements[5].category == AssetMovementCategory.WITHDRAWAL
+        assert movements[5].timestamp == 1636144956
+        assert isinstance(movements[5].asset, Asset)
+        assert movements[5].asset == A_EUR
+        assert movements[5].amount == FVal('10')
+        assert movements[5].fee == FVal('0.02')
 
 
 def assert_poloniex_balances_result(balances: Dict[str, Any]) -> None:
@@ -382,7 +499,7 @@ def assert_poloniex_balances_result(balances: Dict[str, Any]) -> None:
     assert balances['ETH']['usd_value'] is not None
 
 
-def mock_binance_balance_response(url):
+def mock_binance_balance_response(url, **kwargs):  # pylint: disable=unused-argument
     if 'futures' in url:
         return MockResponse(200, BINANCE_FUTURES_WALLET_RESPONSE)
     if 'lending' in url:
@@ -399,7 +516,7 @@ def mock_binance_balance_response(url):
 
 
 def patch_binance_balances_query(binance: 'Binance'):
-    def mock_binance_asset_return(url, *args):  # pylint: disable=unused-argument
+    def mock_binance_asset_return(url, timeout, *args):  # pylint: disable=unused-argument
         if 'futures' in url:
             response = '{"crossCollaterals":[]}'
         elif 'lending' in url:
@@ -419,7 +536,7 @@ def patch_binance_balances_query(binance: 'Binance'):
 
 
 def patch_poloniex_balances_query(poloniex: 'Poloniex'):
-    def mock_poloniex_asset_return(url, *args):  # pylint: disable=unused-argument
+    def mock_poloniex_asset_return(url, *args, **kwargs):  # pylint: disable=unused-argument
         return MockResponse(200, POLONIEX_BALANCES_RESPONSE)
 
     poloniex_patch = patch.object(poloniex.session, 'post', side_effect=mock_poloniex_asset_return)
@@ -433,6 +550,7 @@ def create_test_coinbase(
         msg_aggregator: MessagesAggregator,
 ) -> Coinbase:
     mock = Coinbase(
+        name='coinbase',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -445,14 +563,16 @@ def create_test_binance(
         database: DBHandler,
         msg_aggregator: MessagesAggregator,
         location: Location = Location.BINANCE,
+        name: str = 'binance',
 ) -> Binance:
     if location == Location.BINANCE:
         uri = BINANCE_BASE_URL
-    elif location == Location.BINANCE_US:
-        uri = BINANCE_US_BASE_URL
+    elif location == Location.BINANCEUS:
+        uri = BINANCEUS_BASE_URL
     else:
         raise AssertionError(f'Tried to create binance exchange with location {location}')
     binance = Binance(
+        name=name,
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -464,7 +584,7 @@ def create_test_binance(
     with json_path.open('r') as f:
         json_data = json.loads(f.read())
 
-    binance._symbols_to_pair = create_binance_symbols_to_pair(json_data)
+    binance._symbols_to_pair = create_binance_symbols_to_pair(json_data, location)
     binance.first_connection_made = True
     return binance
 
@@ -481,6 +601,7 @@ def create_test_bitfinex(
         secret = make_api_secret()
 
     return Bitfinex(
+        name='bitfinex',
         api_key=api_key,
         secret=secret,
         database=database,
@@ -494,6 +615,7 @@ def create_test_bitmex(
 ) -> Bitmex:
     # API key/secret from tests cases here: https://www.bitmex.com/app/apiKeysUsage
     bitmex = Bitmex(
+        name='bitmex',
         api_key=ApiKey('LAqUlngMIQkIUjXMUreyu3qn'),
         secret=ApiSecret(b'chNOOS4KvNXR_Xq4k4c9qsfoKWvnDecLATCRlcBwyKDYnWgO'),
         database=database,
@@ -515,6 +637,7 @@ def create_test_bitstamp(
         secret = make_api_secret()
 
     return Bitstamp(
+        name='bitstamp',
         api_key=api_key,
         secret=secret,
         database=database,
@@ -527,6 +650,7 @@ def create_test_bittrex(
         msg_aggregator: MessagesAggregator,
 ) -> Bittrex:
     bittrex = Bittrex(
+        name='bittrex',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -541,6 +665,7 @@ def create_test_coinbasepro(
         passphrase: str,
 ) -> Coinbasepro:
     coinbasepro = Coinbasepro(
+        name='coinbasepro',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -555,10 +680,12 @@ def create_test_ftx(
         msg_aggregator: MessagesAggregator,
 ) -> Ftx:
     mock = Ftx(
+        name='ftx',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
         msg_aggregator=msg_aggregator,
+        ftx_subaccount=None,
     )
     return mock
 
@@ -571,6 +698,7 @@ def create_test_gemini(
         base_uri,
 ):
     return Gemini(
+        name='gemini',
         api_key=api_key,
         secret=api_secret,
         database=database,
@@ -584,6 +712,7 @@ def create_test_kraken(
         msg_aggregator: MessagesAggregator,
 ) -> MockKraken:
     return MockKraken(
+        name='mockkraken',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -606,6 +735,7 @@ def create_test_kucoin(
         passphrase = make_random_uppercasenumeric_string(size=6)
 
     return Kucoin(
+        name='kucoin',
         api_key=api_key,
         secret=secret,
         database=database,
@@ -619,6 +749,7 @@ def create_test_iconomi(
         msg_aggregator: MessagesAggregator,
 ) -> Iconomi:
     return Iconomi(
+        name='iconomi',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -631,6 +762,7 @@ def create_test_bitcoinde(
         msg_aggregator: MessagesAggregator,
 ) -> Bitcoinde:
     return Bitcoinde(
+        name='bitcoinde',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
@@ -643,8 +775,105 @@ def create_test_poloniex(
         msg_aggregator: MessagesAggregator,
 ) -> Poloniex:
     return Poloniex(
+        name='poloniex',
         api_key=make_api_key(),
         secret=make_api_secret(),
         database=database,
         msg_aggregator=msg_aggregator,
     )
+
+
+def create_test_independentreserve(
+        database: DBHandler,
+        msg_aggregator: MessagesAggregator,
+) -> Independentreserve:
+    return Independentreserve(
+        name='independentreserve',
+        api_key=make_api_key(),
+        secret=make_api_secret(),
+        database=database,
+        msg_aggregator=msg_aggregator,
+    )
+
+
+def create_test_bitpanda(
+        database: DBHandler,
+        msg_aggregator: MessagesAggregator,
+        api_key: Optional[ApiKey] = None,
+        secret: Optional[ApiSecret] = None,
+) -> Bitpanda:
+    if api_key is None:
+        api_key = make_api_key()
+    if secret is None:
+        secret = make_api_secret()
+    return Bitpanda(
+        name='bitpanda',
+        api_key=api_key,
+        secret=secret,
+        database=database,
+        msg_aggregator=msg_aggregator,
+    )
+
+
+def try_get_first_exchange(
+        exchange_manager: ExchangeManager,
+        location: Location,
+) -> Optional[ExchangeInterface]:
+    """Tries to get the first exchange of a given type from the exchange manager
+
+    If no such exchange exists returns None.
+
+    It's not part of exchange manager itself since it's not used in production but only in tests.
+    If this changes we should move this to the exchange manager
+    """
+    exchanges_list = exchange_manager.connected_exchanges.get(location)
+    if exchanges_list is None:
+        return None
+
+    return exchanges_list[0]
+
+
+def mock_exchange_data_in_db(exchange_locations, rotki) -> None:
+    db = rotki.data.db
+    for exchange_location in exchange_locations:
+        db.add_trades([Trade(
+            timestamp=Timestamp(1),
+            location=exchange_location,
+            base_asset=A_BTC,
+            quote_asset=A_ETH,
+            trade_type=TradeType.BUY,
+            amount=AssetAmount(FVal(1)),
+            rate=Price(FVal(1)),
+            fee=Fee(FVal('0.1')),
+            fee_currency=A_ETH,
+            link='foo',
+            notes='boo',
+        )])
+        db.update_used_query_range(name=f'{str(exchange_location)}_trades_{str(exchange_location)}', start_ts=0, end_ts=9999)  # noqa: E501
+        db.update_used_query_range(name=f'{str(exchange_location)}_margins_{str(exchange_location)}', start_ts=0, end_ts=9999)  # noqa: E501
+        db.update_used_query_range(name=f'{str(exchange_location)}_asset_movements_{str(exchange_location)}', start_ts=0, end_ts=9999)  # noqa: E501
+
+
+def check_saved_events_for_exchange(
+        exchange_location: Location,
+        db: DBHandler,
+        should_exist: bool,
+        queryrange_formatstr: str = '{exchange}_{type}_{exchange}',
+) -> None:
+    trades = db.get_trades(
+        filter_query=TradesFilterQuery.make(location=exchange_location),
+        has_premium=True,
+    )
+    trades_range = db.get_used_query_range(queryrange_formatstr.format(exchange=exchange_location, type='trades'))  # noqa: E501
+    margins_range = db.get_used_query_range(queryrange_formatstr.format(exchange=exchange_location, type='margins'))  # noqa: E501
+    movements_range = db.get_used_query_range(queryrange_formatstr.format(exchange=exchange_location, type='asset_movements'))  # noqa: E501
+    if should_exist:
+        assert trades_range is not None
+        assert margins_range is not None
+        assert movements_range is not None
+        assert len(trades) != 0
+    else:
+        assert trades_range is None
+        assert margins_range is None
+        assert movements_range is None
+        assert len(trades) == 0

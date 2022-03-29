@@ -2,9 +2,11 @@
   <fragment>
     <v-menu
       id="balances-saved-dropdown"
+      v-model="visible"
       transition="slide-y-transition"
       offset-y
-      bottom
+      :close-on-content-click="false"
+      :max-width="xsOnly ? '97%' : '350px'"
       z-index="215"
     >
       <template #activator="{ on }">
@@ -13,10 +15,19 @@
           class-name="secondary--text text--lighten-2"
           :on-menu="on"
         >
-          <v-icon> mdi-content-save </v-icon>
+          <v-badge v-if="xsOnly" color="transparent" bottom overlap>
+            <template #badge>
+              <v-icon v-if="nodeConnection" color="primary" x-small>
+                mdi-link
+              </v-icon>
+              <v-icon v-else color="primary" x-small>mdi-link-off</v-icon>
+            </template>
+            <v-icon> mdi-content-save </v-icon>
+          </v-badge>
+          <v-icon v-else> mdi-content-save </v-icon>
         </menu-tooltip-button>
       </template>
-      <v-container class="balance-saved-indicator__container">
+      <div :style="backgroundStyle">
         <div class="balance-saved-indicator__content">
           <v-row v-if="premium">
             <v-col>
@@ -71,6 +82,17 @@
                     <v-icon left>mdi-content-save</v-icon>
                     {{ $t('sync_indicator.force_save') }}
                   </v-btn>
+                  <v-tooltip right max-width="300px">
+                    <template #activator="{ on, attrs }">
+                      <div v-bind="attrs" v-on="on">
+                        <v-checkbox
+                          v-model="ignoreErrors"
+                          label="Ignore Errors"
+                        />
+                      </div>
+                    </template>
+                    <span>{{ $t('sync_indicator.ignore_errors') }}</span>
+                  </v-tooltip>
                 </v-col>
                 <v-col cols="auto">
                   <v-tooltip bottom max-width="300px">
@@ -86,7 +108,8 @@
             </v-col>
           </v-row>
         </div>
-      </v-container>
+        <node-status v-if="xsOnly" :connected="nodeConnection" />
+      </div>
     </v-menu>
     <confirm-dialog
       confirm-type="warning"
@@ -122,13 +145,17 @@ import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue';
 import DateDisplay from '@/components/display/DateDisplay.vue';
 import Fragment from '@/components/helper/Fragment';
 import MenuTooltipButton from '@/components/helper/MenuTooltipButton.vue';
+import NodeStatus from '@/components/status/NodeStatus.vue';
 import SyncButtons from '@/components/status/sync/SyncButtons.vue';
 import PremiumMixin from '@/mixins/premium-mixin';
+import ThemeMixin from '@/mixins/theme-mixin';
 import { SYNC_DOWNLOAD, SYNC_UPLOAD, SyncAction } from '@/services/types-api';
 import { AllBalancePayload } from '@/store/balances/types';
+import { Writeable } from '@/types';
 
 @Component({
   components: {
+    NodeStatus,
     Fragment,
     ConfirmDialog,
     SyncButtons,
@@ -136,22 +163,32 @@ import { AllBalancePayload } from '@/store/balances/types';
     MenuTooltipButton
   },
   computed: {
-    ...mapState('session', ['lastBalanceSave', 'lastDataUpload'])
+    ...mapState('session', [
+      'lastBalanceSave',
+      'lastDataUpload',
+      'nodeConnection'
+    ])
   },
   methods: {
     ...mapActions('balances', ['fetchBalances']),
     ...mapActions('session', ['forceSync'])
   }
 })
-export default class SyncIndicator extends Mixins(PremiumMixin) {
+export default class SyncIndicator extends Mixins(PremiumMixin, ThemeMixin) {
   pending: boolean = false;
   confirmChecked: boolean = false;
+  ignoreErrors: boolean = false;
+  visible: boolean = false;
   syncAction: SyncAction = SYNC_UPLOAD;
   lastBalanceSave!: number;
   lastDataUpload!: string;
   forceSync!: (action: SyncAction) => Promise<void>;
-  fetchBalances!: (payload: AllBalancePayload) => Promise<void>;
+  fetchBalances!: (payload: Partial<AllBalancePayload>) => Promise<void>;
   displayConfirmation: boolean = false;
+
+  get xsOnly(): boolean {
+    return this.$vuetify.breakpoint.xsOnly;
+  }
 
   get isDownload(): boolean {
     return this.syncAction === SYNC_DOWNLOAD;
@@ -168,13 +205,20 @@ export default class SyncIndicator extends Mixins(PremiumMixin) {
   }
 
   async refreshAllAndSave() {
-    await this.fetchBalances({
+    this.visible = false;
+    const payload: Writeable<Partial<AllBalancePayload>> = {
       ignoreCache: true,
       saveData: true
-    });
+    };
+
+    if (this.ignoreErrors) {
+      payload.ignoreErrors = true;
+    }
+    await this.fetchBalances(payload);
   }
 
   showConfirmation(action: SyncAction) {
+    this.visible = false;
     this.syncAction = action;
     this.displayConfirmation = true;
   }
@@ -195,10 +239,6 @@ export default class SyncIndicator extends Mixins(PremiumMixin) {
 
 <style lang="scss" scoped>
 .balance-saved-indicator {
-  &__container {
-    background: white;
-  }
-
   &__content {
     width: 280px;
     padding: 16px 16px;

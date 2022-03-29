@@ -1,33 +1,35 @@
-from unittest.mock import patch
-from typing import Optional, Set
 import warnings as test_warnings
+from typing import Optional, Set
+from unittest.mock import patch
 
 import pytest
 
-from rotkehlchen.assets.asset import Asset
-from rotkehlchen.assets.converters import asset_from_ftx, UNSUPPORTED_FTX_ASSETS
+from rotkehlchen.assets.asset import WORLD_TO_FTX, Asset
+from rotkehlchen.assets.converters import UNSUPPORTED_FTX_ASSETS, asset_from_ftx
 from rotkehlchen.constants import ZERO
-from rotkehlchen.constants.assets import A_ETH, A_USD, A_USDC, A_1INCH
+from rotkehlchen.constants.assets import A_1INCH, A_ETH, A_USD, A_USDC
 from rotkehlchen.errors import UnknownAsset, UnsupportedAsset
-from rotkehlchen.exchanges.ftx import Ftx
 from rotkehlchen.exchanges.data_structures import AssetMovement, Trade
+from rotkehlchen.exchanges.ftx import Ftx
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import AssetMovementCategory, Location, TradeType, Timestamp, Fee
-
+from rotkehlchen.typing import AssetMovementCategory, Fee, Location, Timestamp, TradeType
 
 TEST_END_TS = Timestamp(1617382780)
 
 
-def test_name():
-    exchange = Ftx('a', b'a', object(), object())
-    assert exchange.name == 'ftx'
+def test_name(database):
+    exchange = Ftx('ftx1', 'a', b'a', database, object(), None)
+    assert exchange.location == Location.FTX
+    assert exchange.name == 'ftx1'
 
 
 def test_ftx_exchange_assets_are_known(mock_ftx: Ftx):
 
     unknown_assets: Set[str] = set()
     unsupported_assets = set(UNSUPPORTED_FTX_ASSETS)
+    common_items = unsupported_assets.intersection(set(WORLD_TO_FTX.values()))
+    assert not common_items, f'FTX assets {common_items} should not be unsupported'
 
     def process_currency(currency: Optional[str]):
         """Check if a currency is known for the FTX exchange"""
@@ -211,7 +213,7 @@ DEPOSITS_RESPONSE = """
 """
 
 
-def mock_normal_ftx_query(url: str):  # pylint: disable=unused-argument
+def mock_normal_ftx_query(url: str, **kwargs):  # pylint: disable=unused-argument
     if 'fills' in url:
         return MockResponse(200, FILLS_RESPONSE)
     if 'deposits' in url:
@@ -235,7 +237,7 @@ def query_ftx_and_test(
         # Since this test only mocks as breaking only one of the two actions by default
         expected_actions_num: int = 1,
 ):
-    def mock_ftx_query(url):  # pylint: disable=unused-argument
+    def mock_ftx_query(url, **kwargs):  # pylint: disable=unused-argument
         if 'fills' in url:
             return MockResponse(200, fills_response)
         if 'deposits' in url:
@@ -247,10 +249,16 @@ def query_ftx_and_test(
 
     query_fn = getattr(ftx, query_fn_name)
     with patch.object(ftx.session, 'get', side_effect=mock_ftx_query):
-        actions = query_fn(
-            start_ts=Timestamp(0),
-            end_ts=TEST_END_TS,
-        )
+        if query_fn_name == 'query_online_trade_history':
+            actions, _ = query_fn(
+                start_ts=Timestamp(0),
+                end_ts=TEST_END_TS,
+            )
+        else:
+            actions = query_fn(
+                start_ts=Timestamp(0),
+                end_ts=TEST_END_TS,
+            )
 
     errors = ftx.msg_aggregator.consume_errors()
     warnings = ftx.msg_aggregator.consume_warnings()
@@ -262,7 +270,7 @@ def query_ftx_and_test(
 def test_ftx_trade_history(mock_ftx):
     """Test the happy path when querying trades"""
     with patch.object(mock_ftx.session, 'get', side_effect=mock_normal_ftx_query):
-        trades = mock_ftx.query_online_trade_history(
+        trades, _ = mock_ftx.query_online_trade_history(
             start_ts=0,
             end_ts=TEST_END_TS,
         )

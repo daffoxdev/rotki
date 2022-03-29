@@ -15,13 +15,14 @@ import gevent
 import requests
 from typing_extensions import Literal
 
+from rotkehlchen.accounting.ledger_actions import LedgerAction
 from rotkehlchen.accounting.structures import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_coinbasepro
 from rotkehlchen.assets.typing import AssetType
 from rotkehlchen.constants.assets import A_ETH
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.constants.timing import QUERY_RETRY_TIMES
+from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE, QUERY_RETRY_TIMES
 from rotkehlchen.errors import (
     DeserializationError,
     RemoteError,
@@ -40,11 +41,19 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_asset_movement_category,
     deserialize_fee,
     deserialize_timestamp_from_date,
-    deserialize_trade_type,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, AssetMovementCategory, Fee, Location, Timestamp
+from rotkehlchen.typing import (
+    ApiKey,
+    ApiSecret,
+    AssetMovementCategory,
+    Fee,
+    Location,
+    Timestamp,
+    TradeType,
+)
 from rotkehlchen.user_messages import MessagesAggregator
-from rotkehlchen.utils.mixins import cache_response_timewise, protect_with_lock
+from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
+from rotkehlchen.utils.mixins.lockable import protect_with_lock
 from rotkehlchen.utils.serialization import jsonloads_dict, jsonloads_list
 
 if TYPE_CHECKING:
@@ -61,7 +70,7 @@ def coinbasepro_to_worldpair(product: str) -> Tuple[Asset, Asset]:
     """Turns a coinbasepro product into our base/quote assets
 
     - Can raise UnprocessableTradePair if product is in unexpected format
-    - Case raise UnknownAsset if any of the pair assets are not known to Rotki
+    - Case raise UnknownAsset if any of the pair assets are not known to rotki
     """
     parts = product.split('-')
     if len(parts) != 2:
@@ -95,16 +104,24 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
     def __init__(
             self,
+            name: str,
             api_key: ApiKey,
             secret: ApiSecret,
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
             passphrase: str,
     ):
-        super().__init__('coinbasepro', api_key, secret, database)
+        super().__init__(
+            name=name,
+            location=Location.COINBASEPRO,
+            api_key=api_key,
+            secret=secret,
+            database=database,
+        )
         self.base_uri = 'https://api.pro.coinbase.com'
         self.msg_aggregator = msg_aggregator
         self.account_to_currency: Optional[Dict[str, Asset]] = None
+        self.available_products = {0}
 
         self.session.headers.update({
             'Content-Type': 'Application/JSON',
@@ -112,8 +129,25 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             'CB-ACCESS-PASSPHRASE': passphrase,
         })
 
+    def update_passphrase(self, new_passphrase: str) -> None:
+        self.session.headers.update({'CB-ACCESS-PASSPHRASE': new_passphrase})
+
+    def edit_exchange_credentials(
+            self,
+            api_key: Optional[ApiKey],
+            api_secret: Optional[ApiSecret],
+            passphrase: Optional[str],
+    ) -> bool:
+        changed = super().edit_exchange_credentials(api_key, api_secret, passphrase)
+        if api_key is not None:
+            self.session.headers.update({'CB-ACCESS-KEY': self.api_key})
+        if passphrase is not None:
+            self.update_passphrase(passphrase)
+
+        return changed
+
     def validate_api_key(self) -> Tuple[bool, str]:
-        """Validates that the Coinbase Pro API key is good for usage in Rotki
+        """Validates that the Coinbase Pro API key is good for usage in rotki
 
         Makes sure that the following permissions are given to the key:
         - View
@@ -139,6 +173,14 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             return False, error
 
         return True, ''
+
+    def first_connection(self) -> None:
+        if self.first_connection_made:
+            return
+
+        products_response, _ = self._api_query('products')
+        self.available_products = {x['id'] for x in products_response}
+        self.first_connection_made = True
 
     def _api_query(
             self,
@@ -170,12 +212,6 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             request_url += '?' + urlencode(query_options)
 
         message = timestamp + request_method + request_url + stringified_options
-        log.debug(
-            'Coinbase Pro API query',
-            request_method=request_method,
-            request_url=request_url,
-            options=options,
-        )
 
         if 'products' not in endpoint:
             try:
@@ -194,12 +230,19 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         retries_left = QUERY_RETRY_TIMES
         while retries_left > 0:
+            log.debug(
+                'Coinbase Pro API query',
+                request_method=request_method,
+                request_url=request_url,
+                options=options,
+            )
             full_url = self.base_uri + request_url
             try:
                 response = self.session.request(
                     request_method.lower(),
                     full_url,
                     data=stringified_options,
+                    timeout=DEFAULT_TIMEOUT_TUPLE,
                 )
             except requests.exceptions.RequestException as e:
                 raise RemoteError(
@@ -209,7 +252,9 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
             if response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
                 # Backoff a bit by sleeping. Sleep more, the more retries have been made
-                gevent.sleep(QUERY_RETRY_TIMES / retries_left)
+                backoff_secs = QUERY_RETRY_TIMES / retries_left
+                log.debug(f'Backing off coinbase pro api query for {backoff_secs} secs')
+                gevent.sleep(backoff_secs)
                 retries_left -= 1
             else:
                 # get out of the retry loop, we did not get 429 complaint
@@ -383,7 +428,7 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 if entry.get('completed_at', None) is None:
                     log.warning(
                         f'Skipping coinbase pro deposit/withdrawal '
-                        f'due not having been completed: {entry}',
+                        f'due to not having been completed: {entry}',
                     )
                     continue
 
@@ -395,8 +440,8 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 asset = account_to_currency.get(entry['account_id'], None)
                 if asset is None:
                     log.warning(
-                        f'Skipping coinbase pro asset_movement {entry} due to inability to '
-                        f'match account id to an asset',
+                        f'Skipping coinbase pro asset_movement {entry} due to '
+                        f'inability to match account id to an asset',
                     )
                     continue
 
@@ -459,9 +504,10 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             start_ts: Timestamp,
             end_ts: Timestamp,
-    ) -> List[Trade]:
+    ) -> Tuple[List[Trade], Tuple[Timestamp, Timestamp]]:
         """Queries coinbase pro for trades"""
         log.debug('Query coinbasepro trade history', start_ts=start_ts, end_ts=end_ts)
+        self.first_connection()
 
         trades = []
         # first get all orders, to see which product ids we need to query fills for
@@ -489,8 +535,8 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 )
                 continue
 
-            if product_id in queried_product_ids:
-                continue  # already queried this product id
+            if product_id in queried_product_ids or product_id not in self.available_products:
+                continue  # already queried this product id or delisted product id
 
             # Now let's get all fills for this product id
             queried_product_ids.add(product_id)
@@ -528,7 +574,7 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                         location=Location.COINBASEPRO,
                         base_asset=base_asset,
                         quote_asset=quote_asset,
-                        trade_type=deserialize_trade_type(fill_entry['side']),
+                        trade_type=TradeType.deserialize(fill_entry['side']),
                         amount=deserialize_asset_amount(fill_entry['size']),
                         rate=deserialize_price(fill_entry['price']),
                         fee=deserialize_fee(fill_entry['fee']),
@@ -562,11 +608,18 @@ class Coinbasepro(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     )
                     continue
 
-        return trades
+        return trades, (start_ts, end_ts)
 
     def query_online_margin_history(
             self,  # pylint: disable=no-self-use
             start_ts: Timestamp,  # pylint: disable=unused-argument
             end_ts: Timestamp,  # pylint: disable=unused-argument
     ) -> List[MarginPosition]:
+        return []  # noop for coinbasepro
+
+    def query_online_income_loss_expense(
+            self,  # pylint: disable=no-self-use
+            start_ts: Timestamp,  # pylint: disable=unused-argument
+            end_ts: Timestamp,  # pylint: disable=unused-argument
+    ) -> List[LedgerAction]:
         return []  # noop for coinbasepro

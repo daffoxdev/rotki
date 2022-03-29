@@ -19,12 +19,13 @@
       </v-row>
     </v-card-title>
     <v-card-text>
-      <v-row align="center">
+      <v-row align="center" class="mb-1">
         <v-col cols="12" sm="6">
           <v-tooltip top>
             <template #activator="{ on, attrs }">
               <span v-bind="attrs" v-on="on">
                 <v-btn
+                  data-cy="account-balances__delete-button"
                   color="primary"
                   text
                   outlined
@@ -43,12 +44,14 @@
             <span>{{ $t('account_balances.delete_tooltip') }}</span>
           </v-tooltip>
         </v-col>
-        <v-col cols="12" sm="6">
+        <v-col v-if="!isEth2" cols="12" sm="6">
           <tag-filter v-model="visibleTags" />
         </v-col>
       </v-row>
       <account-balance-table
         ref="balances"
+        data-cy="blockchain-balances"
+        :loopring="loopring"
         :blockchain="blockchain"
         :balances="balances"
         :visible-tags="visibleTags"
@@ -69,21 +72,24 @@
 </template>
 
 <script lang="ts">
+import { Blockchain } from '@rotki/common/lib/blockchain';
+import { Ref } from '@vue/composition-api';
+import { mapState } from 'pinia';
 import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
-import { mapActions, mapGetters } from 'vuex';
+import { mapActions } from 'vuex';
 import AccountBalanceTable from '@/components/accounts/AccountBalanceTable.vue';
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue';
 import RefreshButton from '@/components/helper/RefreshButton.vue';
 import TagFilter from '@/components/inputs/TagFilter.vue';
 import CardTitle from '@/components/typography/CardTitle.vue';
-import { TaskType } from '@/model/task-type';
 import {
   AccountWithBalance,
   BlockchainAccountWithBalance,
   BlockchainBalancePayload,
   XpubPayload
 } from '@/store/balances/types';
-import { Blockchain, ETH } from '@/typing/types';
+import { useTasks } from '@/store/tasks';
+import { TaskType } from '@/types/task-type';
 
 @Component({
   components: {
@@ -94,7 +100,7 @@ import { Blockchain, ETH } from '@/typing/types';
     ConfirmDialog
   },
   computed: {
-    ...mapGetters('tasks', ['isTaskRunning'])
+    ...mapState(useTasks, ['isTaskRunning'])
   },
   methods: {
     ...mapActions('balances', ['fetchLoopringBalances'])
@@ -107,6 +113,8 @@ export default class AccountBalances extends Vue {
   blockchain!: Blockchain;
   @Prop({ required: true })
   title!: string;
+  @Prop({ required: false, type: Boolean, default: false })
+  loopring!: boolean;
 
   selectedAddresses: string[] = [];
   visibleTags: string[] = [];
@@ -114,17 +122,21 @@ export default class AccountBalances extends Vue {
   confirmDelete: boolean = false;
   xpubToDelete: XpubPayload | null = null;
 
-  isTaskRunning!: (type: TaskType) => boolean;
+  isTaskRunning!: (type: TaskType) => Ref<boolean>;
   fetchLoopringBalances!: (refresh: true) => Promise<void>;
 
+  get isEth2() {
+    return this.blockchain === Blockchain.ETH2;
+  }
+
   get isLoading(): boolean {
-    return this.isTaskRunning(TaskType.QUERY_BLOCKCHAIN_BALANCES);
+    return this.isTaskRunning(TaskType.QUERY_BLOCKCHAIN_BALANCES).value;
   }
 
   get operationRunning(): boolean {
     return (
-      this.isTaskRunning(TaskType.ADD_ACCOUNT) ||
-      this.isTaskRunning(TaskType.REMOVE_ACCOUNT)
+      this.isTaskRunning(TaskType.ADD_ACCOUNT).value ||
+      this.isTaskRunning(TaskType.REMOVE_ACCOUNT).value
     );
   }
 
@@ -154,10 +166,18 @@ export default class AccountBalances extends Vue {
       const blockchain = this.blockchain;
       this.confirmDelete = false;
 
-      await this.$store.dispatch('balances/removeAccount', {
-        accounts: this.selectedAddresses,
-        blockchain
-      });
+      if (blockchain === Blockchain.ETH2) {
+        await this.$store.dispatch(
+          'balances/deleteEth2Validators',
+          this.selectedAddresses
+        );
+      } else {
+        await this.$store.dispatch('balances/removeAccount', {
+          accounts: this.selectedAddresses,
+          blockchain
+        });
+      }
+
       this.selectedAddresses = [];
     } else if (this.xpubToDelete) {
       const payload = { ...this.xpubToDelete };
@@ -177,7 +197,7 @@ export default class AccountBalances extends Vue {
       ignoreCache: true,
       blockchain: this.blockchain
     } as BlockchainBalancePayload);
-    if (this.blockchain === ETH) {
+    if (this.blockchain === Blockchain.ETH) {
       this.fetchLoopringBalances(true);
     }
   }

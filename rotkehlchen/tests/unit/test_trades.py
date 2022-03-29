@@ -1,11 +1,10 @@
 import pytest
 
 from rotkehlchen.assets.asset import Asset
-from rotkehlchen.constants.assets import A_BTC, A_ETH
+from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.errors import UnknownAsset
 from rotkehlchen.exchanges.data_structures import Trade, deserialize_trade, trades_from_dictlist
 from rotkehlchen.fval import FVal
-from rotkehlchen.tests.utils.constants import A_EUR
 from rotkehlchen.typing import Location, Timestamp, TradeType
 from rotkehlchen.utils.serialization import rlk_jsondumps
 
@@ -13,8 +12,8 @@ from rotkehlchen.utils.serialization import rlk_jsondumps
 def test_trade_type_to_string():
     assert str(TradeType.BUY) == 'buy'
     assert str(TradeType.SELL) == 'sell'
-    assert str(TradeType.SETTLEMENT_BUY) == 'settlement_buy'
-    assert str(TradeType.SETTLEMENT_SELL) == 'settlement_sell'
+    assert str(TradeType.SETTLEMENT_BUY) == 'settlement buy'
+    assert str(TradeType.SETTLEMENT_SELL) == 'settlement sell'
 
 
 raw_trade1 = {

@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any, Callable, Dict, NamedTuple, Optional
 
 from eth_utils.address import to_checksum_address
+from pysqlcipher3 import dbapi2 as sqlcipher
 
 from rotkehlchen.db.asset_rename import rename_assets_in_db
 from rotkehlchen.db.settings import ROTKEHLCHEN_DB_VERSION
@@ -27,6 +28,12 @@ from rotkehlchen.db.upgrades.v21_v22 import upgrade_v21_to_v22
 from rotkehlchen.db.upgrades.v22_v23 import upgrade_v22_to_v23
 from rotkehlchen.db.upgrades.v23_v24 import upgrade_v23_to_v24
 from rotkehlchen.db.upgrades.v24_v25 import upgrade_v24_to_v25
+from rotkehlchen.db.upgrades.v25_v26 import upgrade_v25_to_v26
+from rotkehlchen.db.upgrades.v26_v27 import upgrade_v26_to_v27
+from rotkehlchen.db.upgrades.v27_v28 import upgrade_v27_to_v28
+from rotkehlchen.db.upgrades.v28_v29 import upgrade_v28_to_v29
+from rotkehlchen.db.upgrades.v29_v30 import upgrade_v29_to_v30
+from rotkehlchen.db.upgrades.v30_v31 import upgrade_v30_to_v31
 from rotkehlchen.errors import DBUpgradeError
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.utils.misc import ts_now
@@ -179,6 +186,30 @@ UPGRADES_LIST = [
         from_version=24,
         function=upgrade_v24_to_v25,
     ),
+    UpgradeRecord(
+        from_version=25,
+        function=upgrade_v25_to_v26,
+    ),
+    UpgradeRecord(
+        from_version=26,
+        function=upgrade_v26_to_v27,
+    ),
+    UpgradeRecord(
+        from_version=27,
+        function=upgrade_v27_to_v28,
+    ),
+    UpgradeRecord(
+        from_version=28,
+        function=upgrade_v28_to_v29,
+    ),
+    UpgradeRecord(
+        from_version=29,
+        function=upgrade_v29_to_v30,
+    ),
+    UpgradeRecord(
+        from_version=30,
+        function=upgrade_v30_to_v31,
+    ),
 ]
 
 
@@ -188,20 +219,38 @@ class DBUpgradeManager():
     def __init__(self, db: 'DBHandler'):
         self.db = db
 
-    def run_upgrades(self) -> None:
+    def run_upgrades(self) -> bool:
         """Run all required database upgrades
+
+        Returns true for fresh database and false otherwise.
 
         May raise:
         - DBUpgradeError if the user uses a newer version than the one we
         upgrade to or if there is a problem during upgrade.
         """
-        our_version = self.db.get_version()
+        try:
+            our_version = self.db.get_version()
+        except sqlcipher.OperationalError:  # pylint: disable=no-member
+            return True  # fresh database. Nothing to upgrade.
+
         if our_version > ROTKEHLCHEN_DB_VERSION:
             raise DBUpgradeError(
                 'Your database version is newer than the version expected by the '
                 'executable. Did you perhaps try to revert to an older rotki version? '
                 'Please only use the latest version of the software.',
             )
+
+        cursor = self.db.conn.cursor()
+        version_query = cursor.execute(
+            'SELECT value FROM settings WHERE name=?;', ('version',),
+        )
+        if version_query.fetchone() is None:
+            # temporary due to https://github.com/rotki/rotki/issues/3744.
+            # Figure out if an upgrade needs to actually run.
+            cursor = self.db.conn.cursor()
+            result = cursor.execute('SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name="eth2_validators"')  # noqa: E501
+            if result.fetchone()[0] == 0:  # it's wrong and at least v30
+                self.db.set_version(30)
 
         for upgrade in UPGRADES_LIST:
             self._perform_single_upgrade(upgrade)
@@ -213,6 +262,7 @@ class DBUpgradeManager():
             ('version', str(ROTKEHLCHEN_DB_VERSION)),
         )
         self.db.conn.commit()
+        return False
 
     def _perform_single_upgrade(self, upgrade: UpgradeRecord) -> None:
         """
@@ -243,7 +293,7 @@ class DBUpgradeManager():
             try:
                 kwargs = upgrade.kwargs if upgrade.kwargs is not None else {}
                 upgrade.function(db=self.db, **kwargs)
-            except BaseException as e:
+            except BaseException as e:  # lgtm[py/catch-base-exception]
                 # Problem .. restore DB backup and bail out
                 error_message = (
                     f'Failed at database upgrade from version {upgrade.from_version} to '
@@ -257,7 +307,7 @@ class DBUpgradeManager():
                 raise DBUpgradeError(error_message) from e
 
             # for some upgrades even for success keep the backup of the previous db
-            if upgrade.from_version == 24:
+            if upgrade.from_version >= 24:
                 shutil.copyfile(
                     tmp_db_path,
                     os.path.join(self.db.user_data_dir, tmp_db_filename),

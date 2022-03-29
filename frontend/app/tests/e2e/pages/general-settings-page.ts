@@ -4,18 +4,13 @@ export class GeneralSettingsPage {
     cy.get('[data-cy=user-dropdown]').should('be.visible');
     cy.get('.user-dropdown__settings').click();
     cy.get('[data-cy=user-dropdown]').should('not.be.visible');
-    cy.get('a.settings__general').click();
+    cy.get('a.settings__general').click({ force: true });
   }
 
   setFloatingPrecision(value: string) {
     cy.get('.general-settings__fields__floating-precision input').clear();
     cy.get('.general-settings__fields__floating-precision input').type(value);
     cy.get('.general-settings__fields__floating-precision input').blur();
-  }
-
-  changeAnonymizedLogs() {
-    cy.get('.general-settings__fields__anonymized-logs').click();
-    this.confirmInlineSuccess('.general-settings__fields__anonymized-logs');
   }
 
   changeAnonymousUsageStatistics() {
@@ -142,7 +137,6 @@ export class GeneralSettingsPage {
   }
 
   verify(settings: {
-    anonymizedLogs: boolean;
     anonymousUsageStatistics: boolean;
     floatingPrecision: string;
     dateDisplayFormat: string;
@@ -157,9 +151,6 @@ export class GeneralSettingsPage {
       'have.value',
       settings.floatingPrecision
     );
-    cy.get('.general-settings__fields__anonymized-logs input')
-      .should('have.attr', 'aria-checked')
-      .and('include', `${settings.anonymizedLogs}`);
     cy.get('.general-settings__fields__anonymous-usage-statistics input')
       .should('have.attr', 'aria-checked')
       .and('include', `${settings.anonymousUsageStatistics}`);

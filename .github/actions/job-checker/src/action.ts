@@ -1,21 +1,29 @@
 import * as core from '@actions/core'
 import * as github from '@actions/github'
 
-export async function getPullRequestFiles(): Promise<string[] | null> {
+export async function checkForChanges(
+  check: (files: string[] | null) => void
+): Promise<void> {
   const token = core.getInput('token', {required: true})
   const client = github.getOctokit(token)
   const {context} = github
   if (!context.payload.pull_request) {
-    return null
+    // eslint-disable-next-line no-console
+    console.info(`This is not a PR`)
+    check(null)
+    return
   }
   const {number} = context.payload.pull_request
 
-  const {data} = await client.pulls.listFiles({
-    ...context.repo,
-    pull_number: number
-  })
-
-  return data.map(value => value.filename)
+  for await (const response of client.paginate.iterator(
+    client.rest.pulls.listFiles,
+    {
+      ...context.repo,
+      pull_number: number
+    }
+  )) {
+    check(response.data.map(value => value.filename))
+  }
 }
 
 async function tagInCommitMessage(tag: RegExp): Promise<boolean> {
@@ -29,7 +37,7 @@ async function tagInCommitMessage(tag: RegExp): Promise<boolean> {
   }
   const {sha} = context.payload.pull_request.head
 
-  const response = await client.git.getCommit({
+  const response = await client.rest.git.getCommit({
     ...context.repo,
     commit_sha: sha
   })
