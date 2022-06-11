@@ -1,5 +1,5 @@
 # To build image:
-# docker build -t rotki-custom-docker .
+# DOCKER_BUILDKIT=1 docker build -t rotki-custom-docker .
 #
 # To run container:
 # docker run -d --name rotki \
