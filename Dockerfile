@@ -6,6 +6,7 @@
 #     -p 8084:80 \
 #     -v $HOME/.rotki/data:/data \
 #     -v $HOME/.rotki/logs:/logs \
+#     -e TZ=Europe/Riga \
 # rotki-custom-docker:latest
 
 # build stage
