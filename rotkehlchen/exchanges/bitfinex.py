@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     NamedTuple,
     Optional,
     Set,
@@ -27,10 +28,9 @@ import gevent
 import requests
 from gevent.lock import Semaphore
 from requests.adapters import Response
-from typing_extensions import Literal
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import (
     BITFINEX_EXCHANGE_TEST_ASSETS,
@@ -38,14 +38,16 @@ from rotkehlchen.assets.converters import (
     asset_from_bitfinex,
 )
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade
 from rotkehlchen.exchanges.exchange import ExchangeInterface, ExchangeQueryBalances
 from rotkehlchen.history.deserialization import deserialize_price
 from rotkehlchen.inquirer import Inquirer
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.serialization.deserialize import deserialize_asset_amount, deserialize_fee
-from rotkehlchen.typing import (
+from rotkehlchen.types import (
     ApiKey,
     ApiSecret,
     AssetAmount,
@@ -248,7 +250,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             self,
             options: Dict[str, Any],
             case: Literal['trades', 'asset_movements'],
-    ) -> Union[List[Trade], List[AssetMovement]]:
+    ) -> Union[List[Trade], List[AssetMovement], List]:
         """Request a Bitfinex API v2 endpoint paginating via an options
         attribute.
 
@@ -275,7 +277,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         call_options = options.copy()
         limit = options['limit']
-        results: Union[List[Trade], List[AssetMovement]] = []  # type: ignore # bug list nothing
+        results: Union[List[Trade], List[AssetMovement], List] = []
         processed_result_ids: Set[int] = set()
         retries_left = API_REQUEST_RETRY_TIMES
         while retries_left >= 0:
@@ -292,7 +294,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     self.msg_aggregator.add_error(
                         f'Got remote error while querying {self.name} {case}: {msg}',
                     )
-                    return []  # type: ignore # bug list nothing
+                    return []
 
                 # Check if the rate limits have been hit (response JSON as dict)
                 if isinstance(error_response, dict):
@@ -305,7 +307,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                             self.msg_aggregator.add_error(
                                 f'Got remote error while querying {self.name} {case}: {msg}',
                             )
-                            return []  # type: ignore # bug list nothing
+                            return []
 
                         # Trigger retry
                         log.debug(
@@ -323,7 +325,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     self.msg_aggregator.add_error(
                         f'Got remote error while querying {self.name} {case}: {msg}',
                     )
-                    return []  # type: ignore # bug list nothing
+                    return []
 
                 return self._process_unsuccessful_response(
                     response=response,
@@ -338,7 +340,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 self.msg_aggregator.add_error(
                     f'Got remote error while querying {self.name} {case}: {msg}',
                 )
-                return []  # type: ignore # bug list nothing
+                return []
 
             results_ = self._deserialize_api_query_paginated_results(
                 case=case_,
@@ -389,7 +391,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             options: Dict[str, Any],
             raw_results: List[List[Any]],
             processed_result_ids: Set[int],
-    ) -> Union[List[Trade], List[AssetMovement]]:
+    ) -> Union[List[Trade], List[AssetMovement], List]:
         deserialization_method: DeserializationMethod
         if case == 'trades':
             deserialization_method = self._deserialize_trade
@@ -409,7 +411,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         if case == 'asset_movements':
             raw_results.sort(key=lambda raw_result: raw_result[id_index])
 
-        results: Union[List[Trade], List[AssetMovement]] = []  # type: ignore # bug list nothing
+        results: Union[List[Trade], List[AssetMovement], List] = []
         for raw_result in raw_results:
             if len(raw_result) < expected_raw_result_length:
                 log.error(
@@ -469,7 +471,7 @@ class Bitfinex(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 self.msg_aggregator.add_warning(f'{msg}. Ignoring {case}')
                 continue
 
-            results.append(result)  # type: ignore # type is known
+            results.append(result)  # type: ignore
 
         return results
 

@@ -5,11 +5,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 from rotkehlchen.chain.ethereum.contracts import EthereumContract
-from rotkehlchen.chain.ethereum.typing import string_to_ethereum_address
+from rotkehlchen.chain.ethereum.types import string_to_ethereum_address
 
 MAX_BLOCKTIME_CACHE = 250  # 55 mins with 13 secs avg block time
-ZERO_ADDRESS = string_to_ethereum_address('0x0000000000000000000000000000000000000000')
-AAVE_ETH_RESERVE_ADDRESS = string_to_ethereum_address('0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE')
+ETH_SPECIAL_ADDRESS = string_to_ethereum_address('0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE')
 
 
 class EthereumConstants():
@@ -130,6 +129,26 @@ YEARN_TUSD_VAULT = EthereumConstants().contract('YEARN_TUSD_VAULT')
 YEARN_GUSD_VAULT = EthereumConstants().contract('YEARN_GUSD_VAULT')
 YEARN_BCURVE_VAULT = EthereumConstants().contract('YEARN_BCURVE_VAULT')
 YEARN_SRENCURVE_VAULT = EthereumConstants().contract('YEARN_SRENCURVE_VAULT')
+YEARN_CDAI_CUSDC_VAULT = EthereumConstants().contract('YEARN_CDAI_CUSDC_VAULT')
+YEARN_MUSD_3CRV_VAULT = EthereumConstants().contract('YEARN_MUSD_3CRV_VAULT')
+YEARN_GUSD_3CRV_VAULT = EthereumConstants().contract('YEARN_GUSD_3CRV_VAULT')
+YEARN_EURS_VAULT = EthereumConstants().contract('YEARN_EURS_VAULT')
+YEARN_MUSD_VAULT = EthereumConstants().contract('YEARN_MUSD_VAULT')
+YEARN_RENBTC_WBTC_VAULT = EthereumConstants().contract('YEARN_RENBTC_WBTC_VAULT')
+YEARN_USDN_3CRV_VAULT = EthereumConstants().contract('YEARN_USDN_3CRV_VAULT')
+YEARN_UST_3CRV_VAULT = EthereumConstants().contract('YEARN_UST_3CRV_VAULT')
+YEARN_BBTC_SBTC_VAULT = EthereumConstants().contract('YEARN_BBTC_SBTC_VAULT')
+YEARN_TBTC_SBTC_VAULT = EthereumConstants().contract('YEARN_TBTC_SBTC_VAULT')
+YEARN_OBTC_SBTC_VAULT = EthereumConstants().contract('YEARN_OBTC_SBTC_VAULT')
+YEARN_HBTC_WBTC_VAULT = EthereumConstants().contract('YEARN_HBTC_WBTC_VAULT')
+YEARN_SUSD_3CRV_VAULT = EthereumConstants().contract('YEARN_SUSD_3CRV_VAULT')
+YEARN_HUSD_3CRV_VAULT = EthereumConstants().contract('YEARN_HUSD_3CRV_VAULT')
+YEARN_DUSD_3CRV_VAULT = EthereumConstants().contract('YEARN_DUSD_3CRV_VAULT')
+YEARN_A3CRV_VAULT = EthereumConstants().contract('YEARN_A3CRV_VAULT')
+YEARN_ETH_ANKER_VAULT = EthereumConstants().contract('YEARN_ETH_ANKER_VAULT')
+YEARN_ASUSD_VAULT = EthereumConstants().contract('YEARN_ASUSD_VAULT')
+YEARN_USDP_3CRV_VAULT = EthereumConstants().contract('YEARN_USDP_3CRV_VAULT')
+YEARN_PSLP_VAULT = EthereumConstants().contract('YEARN_PSLP_VAULT')
 
 ETH_SCAN = EthereumConstants().contract('ETH_SCAN')
 ETH_MULTICALL = EthereumConstants().contract('ETH_MULTICALL')
@@ -144,9 +163,11 @@ ATOKEN_V2_ABI = EthereumConstants.abi('ATOKEN_V2')
 ZERION_ABI = EthereumConstants.abi('ZERION_ADAPTER')
 CTOKEN_ABI = EthereumConstants.abi('CTOKEN')
 ERC20TOKEN_ABI = EthereumConstants.abi('ERC20_TOKEN')
+UNIV1_LP_ABI = EthereumConstants.abi('UNIV1_LP_ABI')
 FARM_ASSET_ABI = EthereumConstants.abi('FARM_ASSET')
 UNISWAP_V2_LP_ABI = EthereumConstants.abi('UNISWAP_V2_LP')
 CURVE_POOL_ABI = EthereumConstants.abi('CURVE_POOL')
+UNISWAP_V3_POOL_ABI = EthereumConstants.abi('UNISWAP_V3_POOL')
 YEARN_VAULT_V2_ABI = EthereumConstants.abi('YEARN_VAULT_V2')
 
 YEARN_VAULTS_PREFIX = 'yearn_vaults_events'
@@ -156,3 +177,10 @@ LIQUITY_TROVE_MANAGER = EthereumConstants().contract('TROVE_MANAGER')
 
 PICKLE_DILL_REWARDS = EthereumConstants().contract('DILL_REWARDS')
 PICKLE_DILL = EthereumConstants().contract('DILL')
+
+UNISWAP_V3_FACTORY = EthereumConstants().contract('UNISWAP_V3_FACTORY')
+UNISWAP_V2_FACTORY = EthereumConstants().contract('UNISWAP_V2_FACTORY')
+
+SADDLE_ALETH_POOL = EthereumConstants().contract('SADDLE_ALETH_POOL')
+
+RAY_DIGITS = 27

@@ -21,6 +21,10 @@ export class ElectronInterop {
     return this.isPackaged && !url;
   }
 
+  logToFile(message: string) {
+    return window.interop?.logToFile(message);
+  }
+
   navigate(url: string) {
     window.interop?.openUrl(url);
   }
@@ -42,7 +46,7 @@ export class ElectronInterop {
   }
 
   openUrl(url: string) {
-    window.interop?.openUrl(url);
+    this.isPackaged ? window.interop?.openUrl(url) : window.open(url, '_blank');
   }
 
   openPath(path: string) {
@@ -89,6 +93,15 @@ export class ElectronInterop {
     return window.interop?.version();
   }
 
+  async isMac(): Promise<boolean> {
+    const version = await this.version();
+
+    return (
+      (version as SystemVersion)?.os === 'darwin' ||
+      (version as WebVersion)?.platform?.startsWith?.('Mac')
+    );
+  }
+
   onAbout(cb: () => void) {
     window.interop?.onAbout(cb);
   }
@@ -99,6 +112,23 @@ export class ElectronInterop {
 
   updateTray(update: TrayUpdate) {
     window.interop?.updateTray(update);
+  }
+
+  async storePassword(
+    username: string,
+    password: string
+  ): Promise<boolean | undefined> {
+    assert(window.interop);
+    return await window.interop.storePassword(username, password);
+  }
+
+  async getPassword(username: string): Promise<string | undefined> {
+    assert(window.interop);
+    return await window.interop.getPassword(username);
+  }
+
+  async clearPassword() {
+    window.interop?.clearPassword();
   }
 }
 

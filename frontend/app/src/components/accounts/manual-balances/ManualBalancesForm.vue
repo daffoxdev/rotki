@@ -13,7 +13,7 @@
       :label="$t('manual_balances_form.fields.label')"
       :error-messages="errors['label']"
       :rules="labelRules"
-      :disabled="pending || !!edit"
+      :disabled="pending"
       @focus="delete errors['label']"
     />
 
@@ -73,6 +73,7 @@ import {
   toRefs,
   watch
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import { IVueI18n } from 'vue-i18n';
 import LocationSelector from '@/components/helper/LocationSelector.vue';
 import AssetSelect from '@/components/inputs/AssetSelect.vue';
@@ -124,18 +125,19 @@ const ManualBalancesForm = defineComponent({
 
     const errors: Ref<{ [key: string]: string[] }> = ref({});
 
-    const asset = ref('');
-    const label = ref('');
-    const amount = ref('');
+    const id = ref<number | null>(null);
+    const asset = ref<string>('');
+    const label = ref<string>('');
+    const amount = ref<string>('');
     const tags: Ref<string[]> = ref([]);
     const location: Ref<TradeLocation> = ref(TRADE_LOCATION_EXTERNAL);
     const balanceType: Ref<BalanceType> = ref(BalanceType.ASSET);
     const form = ref<any>(null);
 
     const reset = () => {
-      form.value?.reset();
-      balanceType.value = context.value;
-      errors.value = {};
+      get(form)?.reset();
+      set(balanceType, get(context));
+      set(errors, {});
     };
 
     const clear = () => {
@@ -147,13 +149,14 @@ const ManualBalancesForm = defineComponent({
       emit('input', balance);
     };
 
-    const set = (balance: ManualBalance) => {
-      asset.value = balance.asset;
-      label.value = balance.label;
-      amount.value = balance.amount.toString();
-      tags.value = balance.tags ?? [];
-      location.value = balance.location;
-      balanceType.value = balance.balanceType;
+    const setBalance = (balance: ManualBalance) => {
+      set(id, balance.id);
+      set(asset, balance.asset);
+      set(label, balance.label);
+      set(amount, balance.amount.toFixed());
+      set(tags, balance.tags ?? []);
+      set(location, balance.location);
+      set(balanceType, balance.balanceType);
     };
 
     watch(
@@ -162,7 +165,7 @@ const ManualBalancesForm = defineComponent({
         if (!balance) {
           reset();
         } else {
-          set(balance);
+          setBalance(balance);
         }
       },
       { immediate: true }
@@ -171,20 +174,23 @@ const ManualBalancesForm = defineComponent({
     const { editBalance, addBalance, manualLabels } = setupManualBalances();
 
     const save = async () => {
-      pending.value = true;
-      const balance: ManualBalance = {
-        asset: asset.value,
-        amount: bigNumberify(amount.value),
-        label: label.value,
-        tags: tags.value,
-        location: location.value,
-        balanceType: balanceType.value
+      set(pending, true);
+      const balance: Omit<ManualBalance, 'id'> = {
+        asset: get(asset),
+        amount: bigNumberify(get(amount)),
+        label: get(label),
+        tags: get(tags),
+        location: get(location),
+        balanceType: get(balanceType)
       };
-      const status = await (edit.value
-        ? editBalance(balance)
+
+      const idVal = get(id);
+
+      const status = await (get(edit) && idVal
+        ? editBalance({ ...balance, id: idVal })
         : addBalance(balance));
 
-      pending.value = false;
+      set(pending, false);
 
       if (status.success) {
         clear();
@@ -193,32 +199,32 @@ const ManualBalancesForm = defineComponent({
 
       if (status.message) {
         const errorMessages = deserializeApiErrorMessage(status.message);
-        errors.value = (errorMessages?.balances[0] as any) ?? {};
+        set(errors, (errorMessages?.balances[0] as any) ?? {});
       }
       return false;
     };
 
     watch(label, label => {
-      if (edit.value) {
+      if (get(edit)) {
         return;
       }
 
-      const validationErrors = errors.value['label'];
-      if (manualLabels.value.includes(label)) {
+      const validationErrors = get(errors)['label'];
+      if (get(manualLabels).includes(label)) {
         if (validationErrors && validationErrors.length > 0) {
           return;
         }
-        errors.value = {
-          ...errors.value,
+        set(errors, {
+          ...get(errors),
           label: [
             i18n
               .t('manual_balances_form.validation.label_exists', { label })
               .toString()
           ]
-        };
+        });
       } else {
-        const { label, ...data } = errors.value;
-        errors.value = data;
+        const { label, ...data } = get(errors);
+        set(errors, data);
       }
     });
 

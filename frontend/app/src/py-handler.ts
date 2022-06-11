@@ -4,13 +4,12 @@ import * as os from 'os';
 import * as path from 'path';
 import stream from 'stream';
 import { app, App, BrowserWindow, ipcMain } from 'electron';
-import tasklist from 'tasklist';
+import { Task, tasklist } from 'tasklist';
 import { BackendCode } from '@/electron-main/backend-code';
 import { BackendOptions } from '@/electron-main/ipc';
 import { DEFAULT_PORT, selectPort } from '@/electron-main/port-utils';
 import { assert } from '@/utils/assertions';
 import { wait } from '@/utils/backoff';
-import Task = tasklist.Task;
 
 async function streamToString(givenStream: stream.Readable): Promise<string> {
   const bufferChunks: Buffer[] = [];
@@ -82,7 +81,6 @@ export default class PyHandler {
     app.setAppLogsPath(path.join(app.getPath('appData'), 'rotki', 'logs'));
     this.defaultLogDirectory = app.getPath('logs');
     this._serverUrl = '';
-    this._websocketUrl = '';
     this.logToFile('\nStarting rotki\n');
   }
 
@@ -99,13 +97,10 @@ export default class PyHandler {
     return this._serverUrl;
   }
 
-  private _websocketUrl: string;
-
-  get websocketUrl(): string {
-    return this._websocketUrl;
-  }
-
   get logDir(): string {
+    if (import.meta.env.VITE_DEV_LOGS) {
+      return path.join('..', 'logs');
+    }
     return this.logDirectory ?? this.defaultLogDirectory;
   }
 
@@ -184,7 +179,7 @@ export default class PyHandler {
     }
 
     const port = await selectPort();
-    const backendUrl = process.env.VUE_APP_BACKEND_URL;
+    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined;
 
     assert(backendUrl);
     const regExp = /(.*):\/\/(.*):(.*)/;
@@ -203,14 +198,12 @@ export default class PyHandler {
     }
 
     this._port = port;
-    this._websocketPort = await selectPort(port + 1);
-    this._websocketUrl = `${host}:${this._websocketPort}`;
     const args: string[] = getBackendArguments(options);
 
     if (this.guessPackaged()) {
-      this.startProcessPackaged(port, this._websocketPort, args, window);
+      this.startProcessPackaged(port, args, window);
     } else {
-      this.startProcess(port, this._websocketPort, args);
+      this.startProcess(port, args);
     }
 
     const childProcess = this.childProcess;
@@ -330,14 +323,12 @@ export default class PyHandler {
     }, 2000);
   }
 
-  private startProcess(port: number, websocketPort: number, args: string[]) {
+  private startProcess(port: number, args: string[]) {
     const defaultArgs: string[] = [
       '-m',
       'rotkehlchen',
       '--rest-api-port',
-      port.toString(),
-      '--websockets-api-port',
-      websocketPort.toString()
+      port.toString()
     ];
 
     if (this._corsURL) {
@@ -353,19 +344,8 @@ export default class PyHandler {
       }
       defaultArgs.push('--data-dir', tempPath);
     }
-    // in some systems the virtualenv's python is not detected from inside electron and the
-    // system python is used. Electron/node seemed to add /usr/bin to the path before the
-    // virtualenv directory and as such system's python is used. Not sure why this happens only
-    // in some systems. Check again in the future if this happens in Lefteris laptop Archlinux.
-    // To mitigate this if a virtualenv is detected we add its bin directory to the start
-    // start of the path
-    if (process.env.VIRTUAL_ENV) {
-      process.env.PATH =
-        process.env.VIRTUAL_ENV +
-        path.sep +
-        (process.platform === 'win32' ? 'Scripts;' : 'bin:') +
-        process.env.PATH;
-    } else {
+
+    if (!process.env.VIRTUAL_ENV) {
       this.logAndQuit(
         'ERROR: Running in development mode and not inside a python virtual environment'
       );
@@ -382,9 +362,8 @@ export default class PyHandler {
 
   private startProcessPackaged(
     port: number,
-    websocketPort: number,
     args: string[],
-    window: BrowserWindow
+    window: Electron.CrossProcessExports.BrowserWindow
   ) {
     const distDir = PyHandler.packagedBackendPath();
     const files = fs.readdirSync(distDir);
@@ -417,12 +396,7 @@ export default class PyHandler {
       args.push('--api-cors', this._corsURL);
     }
     args.push('--logfile', this.backendLogFile);
-    args = [
-      '--rest-api-port',
-      port.toString(),
-      '--websockets-api-port',
-      websocketPort.toString()
-    ].concat(args);
+    args = ['--rest-api-port', port.toString()].concat(args);
     this.logToFile(
       `Starting packaged python subprocess: ${executable} ${args.join(' ')}`
     );
@@ -446,7 +420,7 @@ export default class PyHandler {
       return;
     }
 
-    const tasks: tasklist.Task[] = await tasklist();
+    const tasks: Task[] = await tasklist();
     this.logToFile(`Currently running: ${tasks.length} tasks`);
 
     const pids = tasks

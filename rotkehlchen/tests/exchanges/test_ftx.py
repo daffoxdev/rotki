@@ -6,14 +6,14 @@ import pytest
 
 from rotkehlchen.assets.asset import WORLD_TO_FTX, Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_FTX_ASSETS, asset_from_ftx
-from rotkehlchen.constants import ZERO
+from rotkehlchen.constants import ONE, ZERO
 from rotkehlchen.constants.assets import A_1INCH, A_ETH, A_USD, A_USDC
-from rotkehlchen.errors import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.data_structures import AssetMovement, Trade
 from rotkehlchen.exchanges.ftx import Ftx
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import AssetMovementCategory, Fee, Location, Timestamp, TradeType
+from rotkehlchen.types import AssetMovementCategory, Fee, Location, Timestamp, TradeType
 
 TEST_END_TS = Timestamp(1617382780)
 
@@ -418,7 +418,7 @@ def test_ftx_trade_history_unexpected_data(mock_ftx):
 
 
 @pytest.mark.parametrize('mocked_current_prices', [{
-    A_USDC: FVal(1),
+    A_USDC: ONE,
     "ETH": FVal(2000),
 }])
 def test_balances(mock_ftx: Ftx):

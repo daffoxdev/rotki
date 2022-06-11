@@ -6,14 +6,14 @@ from rotkehlchen.assets.converters import UNSUPPORTED_BITTREX_ASSETS, asset_from
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_LTC
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.db.filtering import AssetMovementsFilterQuery
-from rotkehlchen.errors import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.bittrex import Bittrex
 from rotkehlchen.exchanges.data_structures import Trade
 from rotkehlchen.fval import FVal
 from rotkehlchen.serialization.deserialize import deserialize_timestamp_from_date
 from rotkehlchen.tests.utils.history import TEST_END_TS
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import AssetMovementCategory, Location, TradeType
+from rotkehlchen.types import AssetMovementCategory, Location, TradeType
 
 
 def test_deserialize_timestamp_from_bittrex_date():

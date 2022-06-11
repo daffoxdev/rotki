@@ -28,6 +28,7 @@ import {
   validWithSessionAndExternalService,
   validWithSessionStatus
 } from '@/services/utils';
+import { EnsNames } from '@/store/balances/types';
 import { Eth2Validator } from '@/types/balances';
 import { SupportedExchange } from '@/types/exchanges';
 import { Module } from '@/types/modules';
@@ -110,10 +111,10 @@ export class BalancesApi {
       .then(handleResponse);
   }
 
-  async deleteManualBalances(labels: string[]): Promise<ManualBalances> {
+  async deleteManualBalances(ids: number[]): Promise<ManualBalances> {
     return this.axios
       .delete<ActionResult<ManualBalances>>('balances/manual', {
-        data: { labels },
+        data: { ids },
         transformResponse: balanceAxiosTransformer,
         validateStatus: validWithParamsSessionAndExternalService
       })
@@ -138,6 +139,36 @@ export class BalancesApi {
         transformResponse: basicAxiosTransformer
       })
       .then(handleResponse);
+  }
+
+  async internalEnsNames<T>(
+    ethereumAddresses: string[],
+    asyncQuery: boolean = false
+  ): Promise<T> {
+    return this.axios
+      .post<ActionResult<T>>(
+        '/ens/reverse',
+        axiosSnakeCaseTransformer({
+          ethereumAddresses,
+          asyncQuery,
+          ignoreCache: asyncQuery
+        }),
+        {
+          validateStatus: validWithSessionAndExternalService,
+          transformResponse: basicAxiosTransformer
+        }
+      )
+      .then(handleResponse);
+  }
+
+  async getEnsNamesTask(ethereumAddresses: string[]): Promise<PendingTask> {
+    return this.internalEnsNames<PendingTask>(ethereumAddresses, true);
+  }
+
+  async getEnsNames(ethereumAddresses: string[]): Promise<EnsNames> {
+    const response = await this.internalEnsNames<EnsNames>(ethereumAddresses);
+
+    return EnsNames.parse(response);
   }
 
   async prices(

@@ -5,19 +5,19 @@ from typing import TYPE_CHECKING, List, Optional
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.assets import A_KFEE, A_USD
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import NoPriceForGivenTimestamp, PriceQueryUnsupportedAsset, RemoteError
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.price import NoPriceForGivenTimestamp, PriceQueryUnsupportedAsset
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb.manual_price_oracle import ManualPriceOracle
 from rotkehlchen.inquirer import Inquirer
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import Price, Timestamp
+from rotkehlchen.types import Price, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
-from rotkehlchen.utils.misc import timestamp_to_date
 
-from .typing import HistoricalPriceOracle, HistoricalPriceOracleInstance
+from .types import HistoricalPriceOracle, HistoricalPriceOracleInstance
 
 if TYPE_CHECKING:
-    from rotkehlchen.accounting.structures import Balance
+    from rotkehlchen.accounting.structures.balance import Balance
     from rotkehlchen.externalapis.coingecko import Coingecko
     from rotkehlchen.externalapis.cryptocompare import Cryptocompare
 
@@ -220,7 +220,7 @@ class PriceHistorian():
         oracles = instance._oracles
         oracle_instances = instance._oracle_instances
         assert isinstance(oracles, list) and isinstance(oracle_instances, list), (
-            'PriceHistorian should never be called before the setting the oracles'
+            'PriceHistorian should never be called before setting the oracles'
         )
         for oracle, oracle_instance in zip(oracles, oracle_instances):
             can_query_history = oracle_instance.can_query_history(
@@ -239,18 +239,18 @@ class PriceHistorian():
                 )
             except (PriceQueryUnsupportedAsset, NoPriceForGivenTimestamp, RemoteError):
                 continue
-            if price != Price(ZERO):
-                log.debug(
-                    f'Historical price oracle {oracle} got price',
-                    price=price,
-                    from_asset=from_asset,
-                    to_asset=to_asset,
-                    timestamp=timestamp,
-                )
-                return price
+
+            log.debug(
+                f'Historical price oracle {oracle} got price',
+                price=price,
+                from_asset=from_asset,
+                to_asset=to_asset,
+                timestamp=timestamp,
+            )
+            return price
 
         raise NoPriceForGivenTimestamp(
             from_asset=from_asset,
             to_asset=to_asset,
-            date=timestamp_to_date(timestamp, formatstr='%d/%m/%Y, %H:%M:%S', treat_as_local=True),
+            time=timestamp,
         )

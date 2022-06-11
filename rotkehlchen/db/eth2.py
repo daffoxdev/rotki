@@ -1,18 +1,21 @@
 import logging
-from typing import TYPE_CHECKING, List, Optional, Sequence
+from typing import TYPE_CHECKING, List, Literal, Optional, Sequence
 
 from pysqlcipher3 import dbapi2 as sqlcipher
 
-from rotkehlchen.chain.ethereum.structures import Eth2Validator
-from rotkehlchen.chain.ethereum.typing import Eth2Deposit, ValidatorDailyStats
+from rotkehlchen.chain.ethereum.modules.eth2.structures import (
+    Eth2Deposit,
+    Eth2Validator,
+    ValidatorDailyStats,
+)
 from rotkehlchen.constants import ONE, ZERO
 from rotkehlchen.constants.timing import DAY_IN_SECONDS
 from rotkehlchen.db.filtering import Eth2DailyStatsFilterQuery
 from rotkehlchen.db.utils import form_query_to_filter_timestamps
-from rotkehlchen.errors import InputError
+from rotkehlchen.errors.misc import InputError
 from rotkehlchen.fval import FVal
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import ChecksumEthAddress, Timestamp, Tuple, Union
+from rotkehlchen.types import ChecksumEthAddress, Timestamp, Tuple, Union
 
 if TYPE_CHECKING:
     from rotkehlchen.db.dbhandler import DBHandler
@@ -199,7 +202,11 @@ class DBEth2():
                 daily_stat.pnl = daily_stat.pnl * owned_proportion
         return daily_stats
 
-    def validator_exists(self, field: str, arg: Union[int, str]) -> bool:
+    def validator_exists(
+            self,
+            field: Literal['validator_index', 'public_key'],
+            arg: Union[int, str],
+    ) -> bool:
         cursor = self.db.conn.cursor()
         result = cursor.execute(f'SELECT COUNT(*) from eth2_validators WHERE {field}=?', (arg,))
         return result.fetchone()[0] == 1

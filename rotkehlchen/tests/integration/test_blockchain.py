@@ -5,16 +5,16 @@ import gevent
 import pytest
 import requests
 
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.chain.ethereum.defi.structures import (
     DefiBalance,
     DefiProtocol,
     DefiProtocolBalances,
 )
+from rotkehlchen.constants import ONE
 from rotkehlchen.constants.assets import A_BTC, A_DAI, A_ETH
-from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.blockchain import mock_beaconchain, mock_etherscan_query
-from rotkehlchen.typing import SupportedBlockchain
+from rotkehlchen.types import SupportedBlockchain
 
 
 def test_query_btc_balances(blockchain):
@@ -63,13 +63,13 @@ def test_multiple_concurrent_ethereum_blockchain_queries(blockchain):
                     token_address=A_DAI.ethereum_address,
                     token_name='DAI',
                     token_symbol='DAI',
-                    balance=Balance(amount=FVal(1), usd_value=(1)),
+                    balance=Balance(amount=ONE, usd_value=ONE),
                 ),
                 underlying_balances=[DefiBalance(
                     token_address=A_DAI.ethereum_address,
                     token_name='DAI',
                     token_symbol='DAI',
-                    balance=Balance(amount=FVal(1), usd_value=(1)),
+                    balance=Balance(amount=ONE, usd_value=ONE),
                 )],
             )],
         }

@@ -196,61 +196,51 @@
           </v-card-actions>
         </v-stepper-content>
         <v-stepper-content step="3">
-          <v-card
-            light
-            max-width="500"
-            class="mx-auto create-account__analytics"
-          >
-            <v-card-text>
-              <v-alert
-                outlined
-                prominent
-                color="primary"
-                class="
-                  mx-auto
-                  text-justify text-body-2
-                  create-account__analytics__content
-                "
-              >
-                {{ $t('create_account.usage_analytics.description') }}
-              </v-alert>
-              <v-alert v-if="error" type="error" outlined>
-                {{ error }}
-              </v-alert>
-              <v-row no-gutters>
-                <v-col>
-                  <v-checkbox
-                    v-model="submitUsageAnalytics"
-                    :disabled="loading"
-                    :label="$t('create_account.usage_analytics.label_confirm')"
-                  />
-                </v-col>
-              </v-row>
-            </v-card-text>
-            <v-card-actions>
-              <v-spacer />
-              <v-btn
-                color="primary"
-                class="create-account__analytics__button__back"
-                depressed
-                :disabled="loading"
-                outlined
-                @click="back"
-              >
-                {{ $t('create_account.usage_analytics.button_back') }}
-              </v-btn>
-              <v-btn
-                color="primary"
-                depressed
-                :disabled="loading"
-                :loading="loading"
-                class="create-account__analytics__button__confirm"
-                @click="confirm()"
-              >
-                {{ $t('create_account.usage_analytics.button_create') }}
-              </v-btn>
-            </v-card-actions>
-          </v-card>
+          <v-card-text>
+            <v-alert
+              outlined
+              prominent
+              color="primary"
+              class="mx-auto text-justify text-body-2 create-account__analytics__content"
+            >
+              {{ $t('create_account.usage_analytics.description') }}
+            </v-alert>
+            <v-alert v-if="error" type="error" outlined>
+              {{ error }}
+            </v-alert>
+            <v-row no-gutters>
+              <v-col>
+                <v-checkbox
+                  v-model="submitUsageAnalytics"
+                  :disabled="loading"
+                  :label="$t('create_account.usage_analytics.label_confirm')"
+                />
+              </v-col>
+            </v-row>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn
+              color="primary"
+              class="create-account__analytics__button__back"
+              depressed
+              :disabled="loading"
+              outlined
+              @click="back"
+            >
+              {{ $t('create_account.usage_analytics.button_back') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              depressed
+              :disabled="loading"
+              :loading="loading"
+              class="create-account__analytics__button__confirm"
+              @click="confirm()"
+            >
+              {{ $t('create_account.usage_analytics.button_create') }}
+            </v-btn>
+          </v-card-actions>
         </v-stepper-content>
       </v-stepper-items>
     </v-stepper>
@@ -258,145 +248,166 @@
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue, Watch } from 'vue-property-decorator';
-import { mapState } from 'vuex';
+import { defineComponent, ref, Ref, toRefs, watch } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import PremiumCredentials from '@/components/account-management/PremiumCredentials.vue';
 import ExternalLink from '@/components/helper/ExternalLink.vue';
 import RevealableInput from '@/components/inputs/RevealableInput.vue';
+import { setupNewUser } from '@/composables/common';
+import i18n from '@/i18n';
 import { CreateAccountPayload } from '@/types/login';
 
-@Component({
-  components: { ExternalLink, RevealableInput, PremiumCredentials },
-  computed: {
-    ...mapState(['newUser'])
-  }
-})
-export default class CreateAccount extends Vue {
-  @Prop({ required: true })
-  displayed!: boolean;
+const usernameRules = [
+  (v: string) =>
+    !!v ||
+    i18n
+      .t('create_account.select_credentials.validation.non_empty_username')
+      .toString(),
+  (v: string) =>
+    (v && /^[0-9a-zA-Z_.-]+$/.test(v)) ||
+    i18n
+      .t('create_account.select_credentials.validation.valid_username')
+      .toString()
+];
 
-  @Prop({ required: true, type: Boolean, default: false })
-  loading!: boolean;
-
-  @Prop({ required: false, type: String, default: '' })
-  error!: string;
-
-  newUser!: boolean;
-  username: string = '';
-  password: string = '';
-  passwordConfirm: string = '';
-
-  premiumEnabled: boolean = false;
-  userPrompted: boolean = false;
-
-  submitUsageAnalytics: boolean = true;
-  apiKey: string = '';
-  apiSecret: string = '';
-  syncDatabase: boolean = false;
-
-  premiumFormValid: boolean = true;
-  credentialsFormValid: boolean = false;
-  errorMessages: string[] = [];
-  step = 1;
-
-  readonly usernameRules = [
-    (v: string) =>
-      !!v ||
-      this.$t(
-        'create_account.select_credentials.validation.non_empty_username'
-      ),
-    (v: string) =>
-      (v && /^[0-9a-zA-Z_.-]+$/.test(v)) ||
-      this.$t('create_account.select_credentials.validation.valid_username')
-  ];
-
-  readonly passwordRules = [
-    (v: string) =>
-      !!v ||
-      this.$t('create_account.select_credentials.validation.non_empty_password')
-  ];
-  readonly passwordConfirmRules = [
-    (v: string) =>
-      !!v ||
-      this.$t(
+const passwordRules = [
+  (v: string) =>
+    !!v ||
+    i18n
+      .t('create_account.select_credentials.validation.non_empty_password')
+      .toString()
+];
+const passwordConfirmRules = [
+  (v: string) =>
+    !!v ||
+    i18n
+      .t(
         'create_account.select_credentials.validation.non_empty_password_confirmation'
       )
-  ];
+      .toString()
+];
 
-  private updateConfirmationError() {
-    if (this.errorMessages.length > 0) {
-      return;
-    }
-    this.errorMessages.push(
-      this.$t(
-        'create_account.select_credentials.validation.password_confirmation_missmatch'
-      ).toString()
+export default defineComponent({
+  name: 'CreateAccount',
+  components: { ExternalLink, RevealableInput, PremiumCredentials },
+  props: {
+    displayed: { required: true, type: Boolean },
+    loading: { required: true, type: Boolean },
+    error: { required: false, type: String, default: '' }
+  },
+  emits: ['confirm', 'cancel', 'error:clear'],
+  setup(props, { emit }) {
+    const { displayed, error } = toRefs(props);
+
+    const { newUser } = setupNewUser();
+    const username: Ref<string> = ref('');
+    const password: Ref<string> = ref('');
+    const passwordConfirm: Ref<string> = ref('');
+
+    const premiumEnabled: Ref<boolean> = ref(false);
+    const userPrompted: Ref<boolean> = ref(false);
+
+    const submitUsageAnalytics: Ref<boolean> = ref(true);
+    const apiKey: Ref<string> = ref('');
+    const apiSecret: Ref<string> = ref('');
+    const syncDatabase: Ref<boolean> = ref(false);
+
+    const premiumFormValid: Ref<boolean> = ref(true);
+    const credentialsFormValid: Ref<boolean> = ref(false);
+    const errorMessages: Ref<string[]> = ref([]);
+    const step: Ref<number> = ref(1);
+
+    const form: Ref<any> = ref(null);
+
+    const updateConfirmationError = () => {
+      if (get(errorMessages).length > 0) {
+        return;
+      }
+
+      get(errorMessages).push(
+        i18n
+          .t(
+            'create_account.select_credentials.validation.password_confirmation_mismatch'
+          )
+          .toString()
+      );
+    };
+
+    watch(
+      [password, passwordConfirm],
+      ([passwordValue, passwordConfirmValue]) => {
+        if (passwordValue && passwordValue !== passwordConfirmValue) {
+          updateConfirmationError();
+        } else {
+          get(errorMessages).pop();
+        }
+      }
     );
-  }
 
-  @Watch('password')
-  onPasswordChange() {
-    if (this.password && this.password !== this.passwordConfirm) {
-      this.updateConfirmationError();
-    } else {
-      this.errorMessages.pop();
-    }
-  }
+    watch(displayed, () => {
+      set(username, '');
+      set(password, '');
+      set(passwordConfirm, '');
 
-  @Watch('passwordConfirm')
-  onPasswordConfirmationChange() {
-    if (this.passwordConfirm && this.passwordConfirm !== this.password) {
-      this.updateConfirmationError();
-    } else {
-      this.errorMessages.pop();
-    }
-  }
+      get(form)?.reset();
+    });
 
-  @Watch('displayed')
-  onDisplayChange() {
-    this.username = '';
-    this.password = '';
-    this.passwordConfirm = '';
+    const confirm = () => {
+      const payload: CreateAccountPayload = {
+        credentials: {
+          username: get(username),
+          password: get(password)
+        }
+      };
 
-    const form = this.$refs.form as any;
-    if (form) {
-      form.reset();
-    }
-  }
+      if (get(premiumEnabled)) {
+        payload.premiumSetup = {
+          apiKey: get(apiKey),
+          apiSecret: get(apiSecret),
+          submitUsageAnalytics: get(submitUsageAnalytics),
+          syncDatabase: get(syncDatabase)
+        };
+      }
 
-  confirm() {
-    const payload: CreateAccountPayload = {
-      credentials: {
-        username: this.username,
-        password: this.password
+      emit('confirm', payload);
+    };
+
+    const cancel = () => emit('cancel');
+
+    const errorClear = () => emit('error:clear');
+
+    const back = () => {
+      set(step, Math.max(get(step) - 1, 1));
+      if (get(error)) {
+        errorClear();
       }
     };
 
-    if (this.premiumEnabled) {
-      payload.premiumSetup = {
-        apiKey: this.apiKey,
-        apiSecret: this.apiSecret,
-        submitUsageAnalytics: this.submitUsageAnalytics,
-        syncDatabase: this.syncDatabase
-      };
-    }
-
-    this.$emit('confirm', payload);
+    return {
+      newUser,
+      username,
+      password,
+      passwordConfirm,
+      premiumEnabled,
+      userPrompted,
+      submitUsageAnalytics,
+      apiKey,
+      apiSecret,
+      syncDatabase,
+      premiumFormValid,
+      credentialsFormValid,
+      errorMessages,
+      step,
+      form,
+      usernameRules,
+      passwordRules,
+      passwordConfirmRules,
+      confirm,
+      cancel,
+      back
+    };
   }
-
-  @Emit()
-  cancel() {}
-
-  @Emit('error:clear')
-  errorClear() {}
-
-  back() {
-    this.step = Math.max(this.step - 1, 1);
-    if (this.error) {
-      this.errorClear();
-    }
-  }
-}
+});
 </script>
 
 <style scoped lang="scss">

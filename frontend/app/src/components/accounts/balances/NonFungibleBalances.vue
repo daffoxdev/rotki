@@ -71,19 +71,18 @@
         <v-icon v-if="item.manuallyInput" color="green">mdi-check</v-icon>
       </template>
       <template #body.append="{ isMobile }">
-        <tr>
-          <td :colspan="isMobile ? 1 : 2" class="font-weight-medium">
-            {{ $t('non_fungible_balances.row.total') }}
-          </td>
-          <td class="text-right">
-            <amount-display
-              :value="total"
-              show-currency="symbol"
-              fiat-currency="USD"
-            />
-          </td>
-          <td v-if="!isMobile" />
-        </tr>
+        <row-append
+          label-colspan="2"
+          :label="$t('non_fungible_balances.row.total')"
+          :right-patch-colspan="1"
+          :is-mobile="isMobile"
+        >
+          <amount-display
+            :value="total"
+            show-currency="symbol"
+            fiat-currency="USD"
+          />
+        </row-append>
       </template>
     </data-table>
 
@@ -115,13 +114,15 @@ import {
   Ref,
   ref
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import { DataTableHeader } from 'vuetify';
 import NonFungibleBalanceEdit from '@/components/accounts/balances/NonFungibleBalanceEdit.vue';
 import ActiveModules from '@/components/defi/ActiveModules.vue';
 import RefreshButton from '@/components/helper/RefreshButton.vue';
 import RowAction from '@/components/helper/RowActions.vue';
+import RowAppend from '@/components/helper/RowAppend.vue';
 import { isSectionLoading } from '@/composables/common';
-import { currency } from '@/composables/session';
+import { setupGeneralSettings } from '@/composables/session';
 import i18n from '@/i18n';
 import { api } from '@/services/rotkehlchen-api';
 import { BalanceActions } from '@/store/balances/action-types';
@@ -151,7 +152,7 @@ const tableHeaders = (currency: Ref<string>) => {
       },
       {
         text: i18n
-          .t('non_fungible_balance.column.price', { currency: currency.value })
+          .t('non_fungible_balance.column.price', { currency: get(currency) })
           .toString(),
         value: 'usdPrice',
         align: 'end',
@@ -164,9 +165,10 @@ const tableHeaders = (currency: Ref<string>) => {
       },
       {
         text: i18n.t('non_fungible_balance.column.actions').toString(),
-        align: 'center',
         value: 'actions',
-        class: 'text-no-wrap'
+        align: 'center',
+        sortable: false,
+        width: '50'
       }
     ];
   });
@@ -175,8 +177,8 @@ const tableHeaders = (currency: Ref<string>) => {
 const setupEdit = (refresh: () => Promise<void>) => {
   const edit = ref<NonFungibleBalance | null>(null);
   const setPrice = async (price: string, toAsset: string) => {
-    const nft = edit.value;
-    edit.value = null;
+    const nft = get(edit);
+    set(edit, null);
     assert(nft);
     try {
       await api.assets.setCurrentPrice(nft.id, toAsset, price);
@@ -200,9 +202,9 @@ const setupEdit = (refresh: () => Promise<void>) => {
 const setupConfirm = (refresh: () => Promise<void>) => {
   const confirmDelete = ref<NonFungibleBalance | null>(null);
   const deletePrice = async () => {
-    const price = confirmDelete.value;
+    const price = get(confirmDelete);
     assert(price);
-    confirmDelete.value = null;
+    set(confirmDelete, null);
     try {
       await api.assets.deleteCurrentPrice(price.id);
       await refresh();
@@ -228,6 +230,7 @@ const setupConfirm = (refresh: () => Promise<void>) => {
 export default defineComponent({
   name: 'NonFungibleBalances',
   components: {
+    RowAppend,
     ActiveModules,
     RefreshButton,
     NonFungibleBalanceEdit,
@@ -245,6 +248,8 @@ export default defineComponent({
       return store.getters['balances/nfBalances'];
     });
 
+    const { currencySymbol } = setupGeneralSettings();
+
     const setupRefresh = (ignoreCache: boolean = false) => {
       const payload = ignoreCache ? { ignoreCache: true } : undefined;
       return async () =>
@@ -258,18 +263,17 @@ export default defineComponent({
     const refreshBalances = setupRefresh();
 
     const total = computed(() => {
-      return balances.value.reduce(
+      return get(balances).reduce(
         (sum, value) => sum.plus(value.usdPrice),
         Zero
       );
     });
 
     const mappedBalances = computed(() => {
-      return balances.value.map(balance => {
+      return get(balances).map(balance => {
         return {
           ...balance,
-          imageUrl:
-            balance.imageUrl || require('@/assets/images/placeholder.svg'),
+          imageUrl: balance.imageUrl || '/assets/images/placeholder.svg',
           isVideo: isVideo(balance.imageUrl)
         };
       });
@@ -281,8 +285,8 @@ export default defineComponent({
       ...setupEdit(refreshBalances),
       refresh,
       mappedBalances,
-      currency,
-      tableHeaders: tableHeaders(currency),
+      currency: currencySymbol,
+      tableHeaders: tableHeaders(currencySymbol),
       total,
       getAsset: (price: NonFungibleBalance | null) => {
         if (!price) {

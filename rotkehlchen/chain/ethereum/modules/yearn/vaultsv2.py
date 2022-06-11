@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from gevent.lock import Semaphore
 
-from rotkehlchen.accounting.structures import Balance, BalanceSheet
+from rotkehlchen.accounting.structures.balance import Balance, BalanceSheet
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.chain.ethereum.graph import SUBGRAPH_REMOTE_ERROR_MSG
 from rotkehlchen.chain.ethereum.modules.yearn.graph import YearnVaultsV2Graph
@@ -13,22 +13,23 @@ from rotkehlchen.chain.ethereum.modules.yearn.vaults import (
     YearnVaultHistory,
     get_usd_price_zero_if_error,
 )
-from rotkehlchen.chain.ethereum.structures import YearnVaultEvent
 from rotkehlchen.constants.ethereum import (
     MAX_BLOCKTIME_CACHE,
     YEARN_VAULT_V2_ABI,
     YEARN_VAULTS_V2_PREFIX,
 )
-from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import ModuleInitializationFailure, RemoteError
+from rotkehlchen.constants.misc import EXP18, ZERO
+from rotkehlchen.errors.misc import ModuleInitializationFailure, RemoteError
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb.handler import GlobalDBHandler
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
-from rotkehlchen.typing import YEARN_VAULTS_V2_PROTOCOL, ChecksumEthAddress, EthAddress, Timestamp
+from rotkehlchen.types import YEARN_VAULTS_V2_PROTOCOL, ChecksumEthAddress, EthAddress, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.interfaces import EthereumModule
 from rotkehlchen.utils.misc import ts_now
+
+from .structures import YearnVaultEvent
 
 if TYPE_CHECKING:
     from rotkehlchen.chain.ethereum.defi.structures import GIVEN_ETH_BALANCES
@@ -92,7 +93,7 @@ class YearnVaultsV2(EthereumModule):
             abi=YEARN_VAULT_V2_ABI,  # Any vault ABI will do
             method_name='pricePerShare',
         )
-        nominator = price_per_full_share - (10**18)
+        nominator = price_per_full_share - EXP18
         try:
             denonimator = now_block_number - self.ethereum.etherscan.get_blocknumber_by_time(vault.started)  # noqa: E501
         except RemoteError as e:
@@ -101,7 +102,7 @@ class YearnVaultsV2(EthereumModule):
                 f'Etherscan error {str(e)}.',
             )
             return ZERO, price_per_full_share
-        return FVal(nominator) / FVal(denonimator) * BLOCKS_PER_YEAR / 10**18, price_per_full_share
+        return FVal(nominator) / FVal(denonimator) * BLOCKS_PER_YEAR / EXP18, price_per_full_share
 
     def _get_single_addr_balance(
             self,
@@ -348,9 +349,6 @@ class YearnVaultsV2(EthereumModule):
             )
 
     # -- Methods following the EthereumModule interface -- #
-    def on_startup(self) -> None:
-        pass
-
     def on_account_addition(self, address: ChecksumEthAddress) -> None:
         pass
 

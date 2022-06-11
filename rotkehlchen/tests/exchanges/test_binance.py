@@ -14,8 +14,8 @@ from rotkehlchen.assets.asset import WORLD_TO_BINANCE, Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_BINANCE_ASSETS, asset_from_binance
 from rotkehlchen.constants.assets import A_ADA, A_BNB, A_BTC, A_DOT, A_ETH, A_EUR, A_USDT, A_WBTC
 from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
-from rotkehlchen.db.dbhandler import DBHandler
-from rotkehlchen.errors import RemoteError, UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.misc import RemoteError
 from rotkehlchen.exchanges.binance import (
     API_TIME_INTERVAL_CONSTRAINT_TS,
     BINANCE_LAUNCH_TS,
@@ -38,8 +38,7 @@ from rotkehlchen.tests.utils.exchanges import (
     mock_binance_balance_response,
 )
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import ApiKey, ApiSecret, Timestamp
-from rotkehlchen.user_messages import MessagesAggregator
+from rotkehlchen.types import ApiKey, ApiSecret, Timestamp
 from rotkehlchen.utils.misc import ts_now_in_ms
 
 
@@ -179,7 +178,7 @@ def test_binance_assets_are_known(inquirer):  # pylint: disable=unused-argument
     common_items = unsupported_assets.intersection(set(WORLD_TO_BINANCE.values()))
     assert not common_items, f'Binance assets {common_items} should not be unsupported'
 
-    exchange_data = requests.get('https://binance.com/api/v3/exchangeInfo').json()
+    exchange_data = requests.get('https://api3.binance.com/api/v3/exchangeInfo').json()
     binance_assets = set()
     for pair_symbol in exchange_data['symbols']:
         binance_assets.add(pair_symbol['baseAsset'])
@@ -214,9 +213,8 @@ def test_binance_query_balances_include_features(function_scope_binance):
     assert balances[A_WBTC].amount == FVal('2.1')
 
     warnings = binance.msg_aggregator.consume_warnings()
-    assert len(warnings) == 2
+    assert len(warnings) == 1
     assert 'unknown binance asset IDONTEXIST' in warnings[0]
-    assert 'unsupported binance asset ETF' in warnings[1]
 
 
 TIMESTAMPS_RE = re.compile(r'.*&startTime\=(.*?)&endTime\=(.*?)&')
@@ -861,19 +859,25 @@ def test_api_query_retry_on_status_code_429(function_scope_binance):
     assert binance_mock_get.call_args_list == expected_calls
 
 
-def test_binance_query_trade_history_custom_markets(function_scope_binance, user_data_dir):
+def test_binance_query_trade_history_custom_markets(function_scope_binance):
     """Test that custom pairs are queried correctly"""
-    msg_aggregator = MessagesAggregator()
-    db = DBHandler(user_data_dir, '123', msg_aggregator, None)
-
     binance_api_key = ApiKey('binance_api_key')
     binance_api_secret = ApiSecret(b'binance_api_secret')
-    db.add_exchange('binance', Location.BINANCE, binance_api_key, binance_api_secret)
-
+    function_scope_binance.db.add_exchange(
+        name='binance',
+        location=Location.BINANCE,
+        api_key=binance_api_key,
+        api_secret=binance_api_secret,
+    )
     binance = function_scope_binance
 
     markets = ['ETHBTC', 'BNBBTC', 'BTCUSDC']
-    binance.edit_exchange(name=None, api_key=None, api_secret=None, PAIRS=markets)
+    binance.edit_exchange(
+        name=None,
+        api_key=None,
+        api_secret=None,
+        binance_selected_trade_pairs=markets,
+    )
     count = 0
     p = re.compile(r'symbol=[A-Z]*')
     seen = set()

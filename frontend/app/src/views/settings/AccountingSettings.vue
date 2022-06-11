@@ -37,7 +37,7 @@
           <v-text-field
             v-model="taxFreeAfterPeriod"
             outlined
-            class="accounting-settings__taxfree-period-days"
+            class="accounting-settings__taxfree-period-days pt-4"
             :success-messages="settingsMessages['taxFreePeriodAfter'].success"
             :error-messages="settingsMessages['taxFreePeriodAfter'].error"
             :disabled="!taxFreePeriod"
@@ -72,6 +72,15 @@
             color="primary"
             @change="onCalculatePastCostBasisChange($event)"
           />
+          <cost-basis-method-settings
+            v-model="costBasisMethod"
+            class="accounting-settings__cost-basis-method pt-4"
+            :success-messages="settingsMessages['costBasisMethod'].success"
+            :error-messages="settingsMessages['costBasisMethod'].error"
+            :label="$t('accounting_settings.labels.cost_basis_method')"
+            color="primary"
+            @change="onCostBasisMethodChange($event)"
+          />
         </card>
       </v-col>
     </v-row>
@@ -87,14 +96,14 @@
               <asset-select
                 v-model="assetToIgnore"
                 outlined
-                :label="$t('account_settings.asset_settings.labels.ignore')"
+                :label="$tc('account_settings.asset_settings.labels.ignore')"
                 :success-messages="settingsMessages['addIgnoreAsset'].success"
                 :error-messages="settingsMessages['addIgnoreAsset'].error"
-                :hint="$t('account_settings.asset_settings.ignore_tags_hint')"
+                :hint="$tc('account_settings.asset_settings.ignore_tags_hint')"
                 class="accounting-settings__asset-to-ignore"
               />
             </v-col>
-            <v-col cols="auto">
+            <v-col cols="auto" class="ml-4">
               <v-btn
                 class="accounting-settings__buttons__add mt-3"
                 text
@@ -112,18 +121,18 @@
               <asset-select
                 v-model="assetToRemove"
                 outlined
-                :label="$t('account_settings.asset_settings.labels.unignore')"
-                value="test"
+                show-ignored
+                :label="$tc('account_settings.asset_settings.labels.unignore')"
                 :items="ignoredAssets"
                 :success-messages="settingsMessages['remIgnoreAsset'].success"
                 :error-messages="settingsMessages['remIgnoreAsset'].error"
                 :hint="
-                  $t('account_settings.asset_settings.labels.unignore_hint')
+                  $tc('account_settings.asset_settings.labels.unignore_hint')
                 "
                 class="accounting-settings__ignored-assets"
               />
             </v-col>
-            <v-col cols="auto">
+            <v-col cols="auto" class="ml-4">
               <v-btn
                 width="110px"
                 class="accounting-settings__buttons__remove mt-3"
@@ -150,6 +159,16 @@
               </v-badge>
             </v-col>
           </v-row>
+          <div class="pt-6">
+            <v-btn
+              color="primary"
+              :loading="isUpdateIgnoredAssetsLoading"
+              :disabled="isUpdateIgnoredAssetsLoading"
+              @click="updateIgnoredAssets"
+            >
+              {{ $t('accounting_settings.fetch_from_cryptoscamdb') }}
+            </v-btn>
+          </div>
         </card>
       </v-col>
     </v-row>
@@ -192,14 +211,21 @@
 </template>
 
 <script lang="ts">
+import { Ref } from '@vue/composition-api';
+import { get } from '@vueuse/core';
+import { mapActions, mapState } from 'pinia';
 import { Component, Mixins } from 'vue-property-decorator';
-import { mapActions, mapState } from 'vuex';
 import AssetSelect from '@/components/inputs/AssetSelect.vue';
+import CostBasisMethodSettings from '@/components/settings/accounting/CostBasisMethodSettings.vue';
 import LedgerActionSettings from '@/components/settings/accounting/LedgerActionSettings.vue';
 import { settingsMessages } from '@/components/settings/utils';
 import AssetMixin from '@/mixins/asset-mixin';
 import SettingsMixin from '@/mixins/settings-mixin';
+import { useIgnoredAssetsStore } from '@/store/assets';
+import { useTasks } from '@/store/tasks';
 import { ActionStatus } from '@/store/types';
+import { TaskType } from '@/types/task-type';
+import { CostBasisMethod } from '@/types/user';
 
 const haveCSVSummary = 'haveCSVSummary';
 const exportCSVFormulas = 'exportCSVFormulas';
@@ -211,6 +237,7 @@ const addIgnoreAsset = 'addIgnoreAsset';
 const remIgnoreAsset = 'remIgnoreAsset';
 const accountForAssetsMovements = 'accountForAssetsMovements';
 const calculatePastCostBasis = 'calculatePastCostBasis';
+const costBasisMethod = 'costBasisMethod';
 
 const SETTINGS = [
   haveCSVSummary,
@@ -222,21 +249,28 @@ const SETTINGS = [
   addIgnoreAsset,
   remIgnoreAsset,
   accountForAssetsMovements,
-  calculatePastCostBasis
+  calculatePastCostBasis,
+  costBasisMethod
 ] as const;
 
 type SettingsEntries = typeof SETTINGS[number];
 
 @Component({
   components: {
+    CostBasisMethodSettings,
     LedgerActionSettings,
     AssetSelect
   },
   computed: {
-    ...mapState('session', ['ignoredAssets'])
+    ...mapState(useIgnoredAssetsStore, ['ignoredAssets']),
+    ...mapState(useTasks, ['isTaskRunning'])
   },
   methods: {
-    ...mapActions('session', ['ignoreAsset', 'unignoreAsset'])
+    ...mapActions(useIgnoredAssetsStore, [
+      'ignoreAsset',
+      'unignoreAsset',
+      'updateIgnoredAssets'
+    ])
   }
 })
 export default class Accounting extends Mixins<
@@ -245,6 +279,8 @@ export default class Accounting extends Mixins<
   ignoredAssets!: string[];
   ignoreAsset!: (asset: string) => Promise<ActionStatus>;
   unignoreAsset!: (asset: string) => Promise<ActionStatus>;
+  updateIgnoredAssets!: () => Promise<ActionStatus>;
+  isTaskRunning!: (type: TaskType) => Ref<boolean>;
 
   haveCSVSummary: boolean = false;
   exportCSVFormulas: boolean = false;
@@ -254,6 +290,7 @@ export default class Accounting extends Mixins<
   taxFreePeriod: boolean = false;
   accountForAssetsMovements: boolean = false;
   calculatePastCostBasis: boolean = false;
+  costBasisMethod: CostBasisMethod = CostBasisMethod.Fifo;
 
   assetToIgnore: string = '';
   assetToRemove: string = '';
@@ -288,6 +325,11 @@ export default class Accounting extends Mixins<
       this.accountingSettings.accountForAssetsMovements;
     this.calculatePastCostBasis =
       this.accountingSettings.calculatePastCostBasis;
+    this.costBasisMethod = this.accountingSettings.costBasisMethod;
+  }
+
+  get isUpdateIgnoredAssetsLoading(): boolean {
+    return get(this.isTaskRunning(TaskType.UPDATE_IGNORED_ASSETS));
   }
 
   onTaxFreeChange(enabled: boolean) {
@@ -493,63 +535,82 @@ export default class Accounting extends Mixins<
   }
 
   async onCalculatePastCostBasisChange(enabled: boolean) {
-    const { success, message } = await this.settingsUpdate({
+    const result = await this.settingsUpdate({
       calculatePastCostBasis: enabled
     });
     this.validateSettingChange(
       'calculatePastCostBasis',
-      success ? 'success' : 'error',
-      success
+      result.success ? 'success' : 'error',
+      result.success
         ? enabled
-          ? this.$t('account_settings.messages.cost_basics.enabled').toString()
-          : this.$t('account_settings.messages.cost_basics.disabled').toString()
-        : this.$t('account_settings.messages.cost_basics.error', {
-            message
+          ? this.$t('account_settings.messages.cost_basis.enabled').toString()
+          : this.$t('account_settings.messages.cost_basis.disabled').toString()
+        : this.$t('account_settings.messages.cost_basis.error', {
+            message: result.message
+          }).toString()
+    );
+  }
+
+  async onCostBasisMethodChange(costBasisMethod: CostBasisMethod) {
+    const result = await this.settingsUpdate({
+      costBasisMethod
+    });
+    const method = costBasisMethod.toUpperCase();
+    this.validateSettingChange(
+      'costBasisMethod',
+      result.success ? 'success' : 'error',
+      result.success
+        ? this.$t('account_settings.messages.cost_basis_method.success', {
+            method
+          }).toString()
+        : this.$t('account_settings.messages.cost_basis_method.error', {
+            method,
+            message: result.message
           }).toString()
     );
   }
 
   async addAsset() {
     const identifier = this.assetToIgnore;
-    const { message, success } = await this.ignoreAsset(identifier);
+    const result = await this.ignoreAsset(identifier);
     const asset = this.getSymbol(identifier);
 
-    const validationMessage = success
+    const validationMessage = result.success
       ? this.$tc('account_settings.messages.ignored_success', 0, { asset })
       : this.$tc('account_settings.messages.ignored_failure', 0, {
           asset,
-          message
+          message: result.message
         });
     this.validateSettingChange(
       'addIgnoreAsset',
-      success ? 'success' : 'error',
+      result.success ? 'success' : 'error',
       validationMessage
     );
 
-    if (success) {
+    if (result.success) {
       this.assetToIgnore = '';
     }
   }
 
   async removeAsset() {
     const identifier = this.assetToRemove;
-    const { message, success } = await this.unignoreAsset(identifier);
+    const result = await this.unignoreAsset(identifier);
     const asset = this.getSymbol(identifier);
 
-    const validationMessage = success
+    const validationMessage = result.success
       ? this.$tc('account_settings.messages.unignored_success', 0, { asset })
       : this.$tc('account_settings.messages.unignored_failure', 0, {
           asset,
-          message
+          message: result.message
         });
 
     this.validateSettingChange(
       'remIgnoreAsset',
-      success ? 'success' : 'error',
+      result.success ? 'success' : 'error',
       validationMessage
     );
 
-    if (success) {
+    if (result.success) {
       this.assetToRemove = '';
     }
   }

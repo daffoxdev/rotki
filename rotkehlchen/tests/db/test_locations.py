@@ -1,16 +1,15 @@
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import EthereumToken
 from rotkehlchen.assets.utils import symbol_to_asset_or_token
-from rotkehlchen.chain.ethereum.interfaces.ammswap.typing import EventType, LiquidityPoolEvent
-from rotkehlchen.chain.ethereum.modules.balancer.typing import BalancerBPTEventType, BalancerEvent
+from rotkehlchen.chain.ethereum.interfaces.ammswap.types import EventType, LiquidityPoolEvent
+from rotkehlchen.chain.ethereum.modules.balancer.types import BalancerBPTEventType, BalancerEvent
 from rotkehlchen.chain.ethereum.trades import AMMSwap
-from rotkehlchen.chain.ethereum.typing import string_to_ethereum_address
+from rotkehlchen.chain.ethereum.types import string_to_ethereum_address
 from rotkehlchen.constants.assets import A_ETH, A_EUR, A_USD
-from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.constants.misc import ONE, ZERO
 from rotkehlchen.exchanges.data_structures import Trade
 from rotkehlchen.fval import FVal
-
-from rotkehlchen.typing import (
+from rotkehlchen.types import (
     ApiKey,
     ApiSecret,
     AssetAmount,
@@ -194,7 +193,7 @@ def test_associated_locations(database):
             pool_address_token=EthereumToken('0x514910771AF9Ca656af840dff83E8264EcF986CA'),
             lp_balance=Balance(amount=FVal(2), usd_value=FVal(3)),
             amounts=[
-                AssetAmount(FVal(1)),
+                AssetAmount(ONE),
                 AssetAmount(FVal(2)),
             ],
         ),

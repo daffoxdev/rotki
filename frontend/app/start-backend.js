@@ -19,12 +19,14 @@ if (!fs.existsSync(tempPath)) {
 
     const currentPath = path.join(tempPath, name);
     if (fs.statSync(currentPath).isDirectory()) {
-      fs.rmdirSync(currentPath, { recursive: true });
+      fs.rmSync(currentPath, { recursive: true });
     }
   }
 }
 
 const logDir = path.join(os.homedir(), 'rotki-e2e-logs');
+
+process.stdout.write(`Using ${logDir} to output backend logs\n`);
 
 if (!fs.existsSync(logDir)) {
   fs.mkdirSync(logDir);

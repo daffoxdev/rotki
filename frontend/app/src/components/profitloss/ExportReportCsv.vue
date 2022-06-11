@@ -24,7 +24,7 @@
   </span>
   <v-btn
     v-else
-    class="profit_loss_report__export-csv mt-8"
+    class="profit_loss_report__export-csv"
     depressed
     color="primary"
     @click="exportCSV()"
@@ -43,8 +43,7 @@ import { useInterop } from '@/electron-interop';
 import i18n from '@/i18n';
 import { api } from '@/services/rotkehlchen-api';
 import { useReports } from '@/store/reports';
-import { Message } from '@/store/types';
-import { useStore } from '@/store/utils';
+import { useMainStore } from '@/store/store';
 
 export default defineComponent({
   name: 'ExportReportCsv',
@@ -57,13 +56,14 @@ export default defineComponent({
   },
   setup() {
     const { createCsv } = useReports();
-    const store = useStore();
+    const { setMessage } = useMainStore();
 
     const showMessage = (description: string) => {
-      store.commit('setMessage', {
+      setMessage({
         title: i18n.t('profit_loss_report.csv_export_error').toString(),
-        description: description
-      } as Message);
+        description: description,
+        success: false
+      });
     };
 
     const exportCSV = async () => {
@@ -77,10 +77,11 @@ export default defineComponent({
           }
           await createCsv(directory);
         } else {
-          const { success, message } = await api.downloadCSV();
-          if (!success) {
+          const result = await api.downloadCSV();
+          if (!result.success) {
             showMessage(
-              message ?? i18n.t('profit_loss_report.download_failed').toString()
+              result.message ??
+                i18n.t('profit_loss_report.download_failed').toString()
             );
           }
         }

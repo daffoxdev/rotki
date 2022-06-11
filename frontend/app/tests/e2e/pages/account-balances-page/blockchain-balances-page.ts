@@ -15,9 +15,7 @@ export class BlockchainBalancesPage extends AccountBalancesPage {
     cy.get('.accounts-balances__blockchain-balances')
       .scrollIntoView()
       .should('be.visible')
-      .click({
-        force: true
-      });
+      .click();
   }
 
   isGroupped(balance: FixtureBlockchainBalance) {
@@ -66,10 +64,11 @@ export class BlockchainBalancesPage extends AccountBalancesPage {
     );
 
     cy.get('@address-tooltip')
-      .find('span:nth-child(1)')
+      .find('div:nth-child(1)')
+      .find('span')
       .contains(balance.label);
     cy.get('@address-tooltip')
-      .find('span:nth-child(2)')
+      .find('div:nth-child(2)')
       .contains(balance.address);
 
     cy.get('@row')
@@ -111,7 +110,7 @@ export class BlockchainBalancesPage extends AccountBalancesPage {
     cy.get(`[data-cy="blockchain-balances-${balance.blockchain}"] tbody`)
       .find('tr')
       .eq(position + (this.isGroupped(balance) ? 0 : 1))
-      .find('button.account-balances-list__actions__edit')
+      .find('button.actions__edit')
       .click();
 
     cy.get('[data-cy="blockchain-balance-form"]').as('edit-form');
@@ -136,9 +135,9 @@ export class BlockchainBalancesPage extends AccountBalancesPage {
 
     this.confirmDelete();
 
-    cy.get(`[data-cy="blockchain-balances-${balance.blockchain}"]`).should(
-      'not.be.exist'
-    );
+    cy.get(`[data-cy="blockchain-balances-${balance.blockchain}"]`, {
+      timeout: 120000
+    }).should('not.be.exist');
   }
 
   confirmDelete() {

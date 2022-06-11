@@ -2,10 +2,10 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from rotkehlchen.errors import DeserializationError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.manager import SUPPORTED_EXCHANGES
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import Location
+from rotkehlchen.types import Location
 
 if TYPE_CHECKING:
     from rotkehlchen.rotkehlchen import Rotkehlchen

@@ -25,11 +25,7 @@
       </v-card-subtitle>
       <v-card-text class="font-weight-light error-screen__description">
         <pre
-          class="
-            font-weight-regular
-            text-caption text-wrap
-            error-screen__description__message
-          "
+          class="font-weight-regular text-caption text-wrap error-screen__description__message"
         >
           {{ message }}
           <v-divider v-if="error" class="mt-4 mb-2"/>
@@ -49,6 +45,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, toRefs } from '@vue/composition-api';
+import { get } from '@vueuse/core';
 import CopyButton from '@/components/helper/CopyButton.vue';
 
 export default defineComponent({
@@ -66,8 +63,8 @@ export default defineComponent({
     const { error, message } = toRefs(props);
 
     const errorText = computed(() => {
-      const errorText = error.value;
-      const errorMessage = message.value;
+      const errorText = get(error);
+      const errorMessage = get(message);
       return !errorText ? errorMessage : `${errorMessage}\n\n${errorText}`;
     });
 
@@ -79,8 +76,6 @@ export default defineComponent({
 </script>
 
 <style scoped lang="scss">
-@import '~@/scss/scroll';
-
 .error-screen {
   height: 100%;
   width: 100%;

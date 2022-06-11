@@ -2,6 +2,7 @@
   <list-item
     v-bind="$attrs"
     :class="opensDetails ? 'asset-details-base--link' : null"
+    :dense="dense"
     :title="symbol"
     :subtitle="name"
     @click="navigate"
@@ -25,10 +26,12 @@ import {
   PropType,
   toRefs
 } from '@vue/composition-api';
+import { get } from '@vueuse/core';
 import AssetIcon from '@/components/helper/display/icons/AssetIcon.vue';
 import ListItem from '@/components/helper/ListItem.vue';
 import { useRouter } from '@/composables/common';
 import { Routes } from '@/router/routes';
+import { useAssetInfoRetrieval } from '@/store/assets';
 
 const AssetDetailsBase = defineComponent({
   name: 'AssetDetailsBase',
@@ -40,27 +43,30 @@ const AssetDetailsBase = defineComponent({
     },
     opensDetails: { required: false, type: Boolean, default: false },
     changeable: { required: false, type: Boolean, default: false },
-    hideName: { required: false, type: Boolean, default: false }
+    hideName: { required: false, type: Boolean, default: false },
+    dense: { required: false, type: Boolean, default: false }
   },
   setup(props) {
     const { asset, opensDetails } = toRefs(props);
+    const { assetSymbol, assetName } = useAssetInfoRetrieval();
+
     const identifier = computed(() => {
-      const supportedAsset = asset.value;
+      const supportedAsset = get(asset);
       if ('ethereumAddress' in supportedAsset) {
         return `_ceth_${supportedAsset.ethereumAddress}`;
       }
       return supportedAsset.identifier;
     });
-    const symbol = computed(() => asset.value.symbol);
-    const name = computed(() => asset.value.name);
+    const symbol = computed(() => get(assetSymbol(get(identifier))));
+    const name = computed(() => get(assetName(get(identifier))));
     const router = useRouter();
     const navigate = () => {
-      if (!opensDetails.value) {
+      if (!get(opensDetails)) {
         return;
       }
-      const id = identifier.value ?? symbol.value;
+      const id = get(identifier) ?? get(symbol);
       router.push({
-        path: Routes.ASSETS.replace(':identifier', id)
+        path: Routes.ASSETS.route.replace(':identifier', id)
       });
     };
 

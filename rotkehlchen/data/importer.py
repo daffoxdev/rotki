@@ -4,18 +4,35 @@ import logging
 from collections import defaultdict
 from itertools import count
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import gevent
 from pysqlcipher3 import dbapi2 as sqlcipher
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction, LedgerActionType
-from rotkehlchen.assets.converters import asset_from_cryptocom, asset_from_nexo, asset_from_uphold
+from rotkehlchen.assets.converters import (
+    LOCATION_TO_ASSET_MAPPING,
+    asset_from_binance,
+    asset_from_cryptocom,
+    asset_from_nexo,
+    asset_from_uphold,
+)
 from rotkehlchen.assets.utils import symbol_to_asset_or_token
 from rotkehlchen.constants.assets import A_BSQ, A_BTC, A_DAI, A_SAI, A_USD
-from rotkehlchen.constants.misc import ZERO
+from rotkehlchen.constants.misc import ONE, ZERO
+from rotkehlchen.data.binance_import_utils import (
+    BinanceCsvRow,
+    BinanceDepositWithdrawEntry,
+    BinanceEntry,
+    BinancePOSEntry,
+    BinanceSingleEntry,
+    BinanceStakingRewardsEntry,
+    BinanceTradeEntry,
+)
 from rotkehlchen.db.dbhandler import DBHandler
 from rotkehlchen.db.ledger_actions import DBLedgerActions
-from rotkehlchen.errors import DeserializationError, UnknownAsset
+from rotkehlchen.errors.asset import UnknownAsset
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import AssetMovement, AssetMovementCategory, Trade
 from rotkehlchen.fval import FVal
 from rotkehlchen.logging import RotkehlchenLogsAdapter
@@ -26,12 +43,25 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_fee,
     deserialize_timestamp_from_date,
 )
-from rotkehlchen.typing import AssetAmount, Fee, Location, Price, Timestamp, TradeType
+from rotkehlchen.types import AssetAmount, Fee, Location, Price, Timestamp, TradeType
 
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
 
 SAI_TIMESTAMP = 1574035200
+ROWS_PER_CONTEXT_SWITCH = 500
+
+SINGLE_BINANCE_ENTRIES = [
+    BinanceDepositWithdrawEntry(),
+    BinanceStakingRewardsEntry(),
+    BinancePOSEntry(),
+]
+
+MULTIPLE_BINANCE_ENTRIES = [
+    BinanceTradeEntry(),
+]
+
+BINANCE_TRADE_OPERATIONS = {'Buy', 'Sell', 'Fee'}
 
 
 def remap_header(fieldnames: List[str]) -> List[str]:
@@ -109,6 +139,7 @@ class DataImporter():
             location='cointracking.info',
         )
         location = exchange_row_to_location(csv_row['Exchange'])
+        asset_resolver = LOCATION_TO_ASSET_MAPPING.get(location, symbol_to_asset_or_token)
         notes = csv_row['Comment']
         if location == Location.EXTERNAL:
             notes += f'. Data from -{csv_row["Exchange"]}- not known by rotki.'
@@ -117,11 +148,11 @@ class DataImporter():
         fee_currency = A_USD  # whatever (used only if there is no fee)
         if csv_row['Fee'] != '':
             fee = deserialize_fee(csv_row['Fee'])
-            fee_currency = asset_from_cryptocom(csv_row['Cur.Fee'])
+            fee_currency = asset_resolver(csv_row['Cur.Fee'])
 
         if row_type in ('Gift/Tip', 'Trade', 'Income'):
-            base_asset = asset_from_cryptocom(csv_row['Cur.Buy'])
-            quote_asset = None if csv_row['Cur.Sell'] == '' else asset_from_cryptocom(csv_row['Cur.Sell'])  # noqa: E501
+            base_asset = asset_resolver(csv_row['Cur.Buy'])
+            quote_asset = None if csv_row['Cur.Sell'] == '' else asset_resolver(csv_row['Cur.Sell'])  # noqa: E501
             if quote_asset is None and row_type not in ('Gift/Tip', 'Income'):
                 raise DeserializationError('Got a trade entry with an empty quote asset')
 
@@ -129,6 +160,9 @@ class DataImporter():
                 # Really makes no difference as this is just a gift and the amount is zero
                 quote_asset = A_USD
             base_amount_bought = deserialize_asset_amount(csv_row['Buy'])
+            if base_amount_bought == ZERO:
+                raise DeserializationError('Bought amount in trade is zero')
+
             if csv_row['Sell'] != '-':
                 quote_amount_sold = deserialize_asset_amount(csv_row['Sell'])
             else:
@@ -153,10 +187,10 @@ class DataImporter():
             category = deserialize_asset_movement_category(row_type.lower())
             if category == AssetMovementCategory.DEPOSIT:
                 amount = deserialize_asset_amount(csv_row['Buy'])
-                asset = asset_from_cryptocom(csv_row['Cur.Buy'])
+                asset = asset_resolver(csv_row['Cur.Buy'])
             else:
                 amount = deserialize_asset_amount_force_positive(csv_row['Sell'])
-                asset = asset_from_cryptocom(csv_row['Cur.Sell'])
+                asset = asset_resolver(csv_row['Cur.Sell'])
 
             asset_movement = AssetMovement(
                 location=location,
@@ -185,7 +219,9 @@ class DataImporter():
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.reader(csvfile, delimiter=',', quotechar='"')
             header = remap_header(next(data))
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_cointracking_entry(dict(zip(header, row)), **kwargs)
                 except UnknownAsset as e:
@@ -241,7 +277,6 @@ class DataImporter():
             'crypto_purchase',
             'crypto_exchange',
             'card_cashback_reverted',
-            'reimbursement',
             'viban_purchase',
             'crypto_viban_exchange',
             'recurring_buy_order',
@@ -338,7 +373,7 @@ class DataImporter():
             'referral_gift',
             'referral_bonus',
             'crypto_earn_interest_paid',
-
+            'reimbursement',
         ):
             asset = asset_from_cryptocom(csv_row['Currency'])
             amount = deserialize_asset_amount(csv_row['Amount'])
@@ -544,7 +579,9 @@ class DataImporter():
                 asset = row['Currency']
                 investments_withdrawals[asset].append(row)
 
-        for timestamp in multiple_rows:
+        for idx, timestamp in enumerate(multiple_rows):
+            if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                gevent.sleep(0.1)
             # When we convert multiple assets dust to CRO
             # in one time, it will create multiple debited rows with
             # the same timestamp
@@ -582,7 +619,7 @@ class DataImporter():
                     base_asset = asset_from_cryptocom(credited_row['Currency'])
                     quote_asset = asset_from_cryptocom(debited_row['Currency'])
                     part_of_total = (
-                        FVal(1)
+                        ONE
                         if len(debited_rows) == 1
                         else deserialize_asset_amount(
                             debited_row["Native Amount (in USD)"],
@@ -617,7 +654,9 @@ class DataImporter():
 
         # Compute investments profit
         if len(investments_withdrawals) != 0:
-            for asset in investments_withdrawals:
+            for idx, asset in enumerate(investments_withdrawals):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 asset_object = asset_from_cryptocom(asset)
                 if asset not in investments_deposits:
                     log.error(
@@ -721,7 +760,9 @@ class DataImporter():
                 )
                 # continue, since they already are in DB
 
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_cryptocom_entry(row, **kwargs)
                 except UnknownAsset as e:
@@ -773,7 +814,8 @@ class DataImporter():
             return
 
         asset = symbol_to_asset_or_token(csv_row['Cryptocurrency'])
-        amount = deserialize_asset_amount_force_positive(csv_row['Amount'])
+        raw_amount = deserialize_asset_amount(csv_row['Amount'])
+        abs_amount = AssetAmount(abs(raw_amount))
         entry_type = csv_row['Transaction Type']
         # BlockFI doesn't provide information about fees
         fee = Fee(ZERO)
@@ -787,7 +829,7 @@ class DataImporter():
                 transaction_id=None,
                 timestamp=timestamp,
                 asset=asset,
-                amount=amount,
+                amount=abs_amount,
                 fee=fee,
                 fee_asset=fee_asset,
                 link='',
@@ -801,7 +843,7 @@ class DataImporter():
                 transaction_id=None,
                 timestamp=timestamp,
                 asset=asset,
-                amount=amount,
+                amount=abs_amount,
                 fee=fee,
                 fee_asset=fee_asset,
                 link='',
@@ -813,7 +855,7 @@ class DataImporter():
                 timestamp=timestamp,
                 action_type=LedgerActionType.EXPENSE,
                 location=Location.BLOCKFI,
-                amount=amount,
+                amount=abs_amount,
                 asset=asset,
                 rate=None,
                 rate_asset=None,
@@ -827,7 +869,7 @@ class DataImporter():
                 timestamp=timestamp,
                 action_type=LedgerActionType.INCOME,
                 location=Location.BLOCKFI,
-                amount=amount,
+                amount=abs_amount,
                 asset=asset,
                 rate=None,
                 rate_asset=None,
@@ -835,6 +877,24 @@ class DataImporter():
                 notes=f'{entry_type} from BlockFi',
             )
             self.db_ledger.add_ledger_action(action)
+        elif entry_type == 'Crypto Transfer':
+            category = (
+                AssetMovementCategory.WITHDRAWAL if raw_amount < ZERO
+                else AssetMovementCategory.DEPOSIT
+            )
+            asset_movement = AssetMovement(
+                location=Location.BLOCKFI,
+                category=category,
+                address=None,
+                transaction_id=None,
+                timestamp=timestamp,
+                asset=asset,
+                amount=abs_amount,
+                fee=fee,
+                fee_asset=fee_asset,
+                link='',
+            )
+            self.db.add_asset_movements([asset_movement])
         elif entry_type == 'Trade':
             pass
         else:
@@ -847,7 +907,9 @@ class DataImporter():
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_blockfi_entry(row, **kwargs)
                 except UnknownAsset as e:
@@ -921,7 +983,9 @@ class DataImporter():
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_blockfi_trade(row, **kwargs)
                 except UnknownAsset as e:
@@ -1056,7 +1120,9 @@ class DataImporter():
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_nexo(row, **kwargs)
                 except UnknownAsset as e:
@@ -1152,7 +1218,9 @@ Trade from ShapeShift with ShapeShift Deposit Address:
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_shapeshift_trade(row, **kwargs)
                 except UnknownAsset as e:
@@ -1322,7 +1390,9 @@ Activity from uphold with uphold transaction id:
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_uphold_transaction(row, **kwargs)
                 except UnknownAsset as e:
@@ -1416,7 +1486,9 @@ Activity from uphold with uphold transaction id:
         """
         with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
             data = csv.DictReader(csvfile)
-            for row in data:
+            for idx, row in enumerate(data):
+                if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                    gevent.sleep(0.1)
                 try:
                     self._consume_bisq_trade(row, **kwargs)
                 except UnknownAsset as e:
@@ -1433,4 +1505,138 @@ Activity from uphold with uphold transaction id:
                     continue
                 except KeyError as e:
                     return False, str(e)
+        return True, ''
+
+    @staticmethod
+    def _group_binance_rows(
+        rows: List[BinanceCsvRow],
+        **kwargs: Dict[str, Any],
+    ) -> Tuple[int, Dict[Timestamp, List[BinanceCsvRow]]]:
+        """Groups Binance rows by timestamp and deletes unused columns"""
+        multirows: Dict[Timestamp, List[BinanceCsvRow]] = defaultdict(list)
+        skipped_count = 0
+        formatstr = kwargs.get('timestamp_format')
+        for csv_row in rows:
+            try:
+                timestamp = deserialize_timestamp_from_date(
+                    date=csv_row['UTC_Time'],
+                    formatstr=formatstr if formatstr is not None else '%Y-%m-%d %H:%M:%S',  # type: ignore  # noqa: E501
+                    location='binance',
+                )
+                csv_row['Coin'] = asset_from_binance(csv_row['Coin'])
+                csv_row['Change'] = deserialize_asset_amount(csv_row['Change'])
+                csv_row.pop('UTC_Time', None)
+                csv_row.pop('User_ID', None)
+                csv_row.pop('Account', None)
+                csv_row.pop('Remark', None)
+                multirows[timestamp].append(csv_row)
+            except (DeserializationError, UnknownAsset) as e:
+                log.warning(f'Skipped binance csv row {csv_row} because of {str(e)}')
+                skipped_count += 1
+            except KeyError as e:
+                log.error(f'Malformed binance csv columns! Broke on row {csv_row}. {str(e)}')
+                return len(rows), {}
+
+        return skipped_count, multirows
+
+    def _process_single_binance_entries(
+        self,
+        timestamp: Timestamp,
+        rows: List[BinanceCsvRow],
+    ) -> Tuple[Dict[BinanceSingleEntry, int], List[BinanceCsvRow]]:
+        """Processes binance entries that are represented with a single row in a csv file"""
+        processed: Dict[BinanceSingleEntry, int] = defaultdict(int)
+        ignored: List[BinanceCsvRow] = []
+        for row in rows:
+            for single_entry_class in SINGLE_BINANCE_ENTRIES:
+                if single_entry_class.is_entry(row['Operation']):
+                    single_entry_class.process_entry(
+                        db=self.db,
+                        db_ledger=self.db_ledger,
+                        timestamp=timestamp,
+                        data=row,
+                    )
+                    processed[single_entry_class] += 1
+                    break
+            else:
+                ignored.append(row)
+        return processed, ignored
+
+    def _process_multiple_binance_entries(
+        self,
+        timestamp: Timestamp,
+        rows: List[BinanceCsvRow],
+    ) -> Tuple[Optional[BinanceEntry], int]:
+        """Processes binance entries that are represented with 2+ rows in a csv file"""
+        for multiple_entry_class in MULTIPLE_BINANCE_ENTRIES:
+            if multiple_entry_class.are_entries([row['Operation'] for row in rows]):
+                processed_count = multiple_entry_class.process_entries(
+                    db=self.db,
+                    timestamp=timestamp,
+                    data=rows,
+                )
+                return multiple_entry_class, processed_count
+        return None, 0
+
+    def _process_binance_rows(self, multi: Dict[Timestamp, List[BinanceCsvRow]]) -> None:
+        stats: Dict[BinanceEntry, int] = defaultdict(int)
+        skipped_rows: List[Any] = []
+        for idx, (timestamp, rows) in enumerate(multi.items()):
+            if idx % ROWS_PER_CONTEXT_SWITCH == 0:
+                gevent.sleep(0.1)
+            single_processed, rows_without_single = self._process_single_binance_entries(
+                timestamp=timestamp,
+                rows=rows,
+            )
+            for entry_type, amount in single_processed.items():
+                stats[entry_type] += amount
+
+            multiple_type, multiple_count = self._process_multiple_binance_entries(
+                timestamp=timestamp,
+                rows=rows_without_single,
+            )
+            if multiple_type is not None and multiple_count > 0:
+                stats[multiple_type] += multiple_count
+                rows_without_multiple = []
+            else:
+                rows_without_multiple = rows_without_single
+
+            if len(rows_without_multiple) > 0:
+                skipped_rows.append([timestamp, rows_without_multiple])
+
+        skipped_nontrade_rows = []
+        skipped_trade_rows = []
+        for skipped_rows_group in skipped_rows:
+            cur_operations = {el['Operation'] for el in skipped_rows_group[1]}
+            if cur_operations.issubset(BINANCE_TRADE_OPERATIONS):
+                skipped_trade_rows.append(skipped_rows_group)
+            else:
+                skipped_nontrade_rows.append(skipped_trade_rows)
+        total_found = sum(stats.values())
+        skipped_count = 0
+        for _, rows in skipped_rows:
+            skipped_count += len(rows)
+        log.debug(f'Skipped Binance trade rows: {skipped_trade_rows}')
+        log.debug(f'Skipped Binance non-trade rows {skipped_nontrade_rows}')
+        log.debug(f'Total found Binance entries: {total_found}')
+        log.debug(f'Total skipped Binance csv rows: {skipped_count}')
+        log.debug('Binance import stats: {}'.format(
+            [{type(entry_class).__name__: amount} for entry_class, amount in stats.items()],
+        ))
+        if skipped_count > 0:
+            self.db.msg_aggregator.add_warning(
+                f'Skipped {skipped_count} rows during processing binance csv file. '
+                f'Check logs for details',
+            )
+
+    def import_binance_csv(self, filepath: Path, **kwargs: Any) -> Tuple[bool, str]:
+        with open(filepath, 'r', encoding='utf-8-sig') as csvfile:
+            input_rows = list(csv.DictReader(csvfile))
+            skipped_count, multirows = self._group_binance_rows(rows=input_rows, **kwargs)
+            if skipped_count > 0:
+                self.db.msg_aggregator.add_warning(
+                    f'{skipped_count} Binance rows have bad format. Check logs for details.',
+                )
+            self._process_binance_rows(multirows)
+
         return True, ''

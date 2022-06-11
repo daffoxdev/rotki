@@ -9,7 +9,6 @@ import { SettingsState } from '@/store/settings/state';
 import store from '@/store/store';
 import { CurrencyLocation } from '@/types/currency-location';
 import { DateFormat } from '@/types/date-format';
-import { TableColumn } from '@/types/table-column';
 import {
   AMOUNT_ROUNDING_MODE,
   CURRENCY_LOCATION,
@@ -18,6 +17,7 @@ import {
   DATE_INPUT_FORMAT,
   DECIMAL_SEPARATOR,
   DEFI_SETUP_DONE,
+  ENABLE_ENS,
   EXPLORERS,
   GRAPH_ZERO_BASED,
   ITEMS_PER_PAGE,
@@ -32,7 +32,8 @@ import {
   VALUE_ROUNDING_MODE,
   VERSION_UPDATE_CHECK_FREQUENCY,
   VISIBLE_TIMEFRAMES
-} from '../../../../src/types/frontend-settings';
+} from '@/types/frontend-settings';
+import { TableColumn } from '@/types/table-column';
 
 describe('settings:mutations', () => {
   test('restore', async () => {
@@ -88,7 +89,8 @@ describe('settings:mutations', () => {
         [DashboardTableType.NFT]: [TableColumn.PERCENTAGE_OF_TOTAL_NET_VALUE]
       },
       [DATE_INPUT_FORMAT]: DateFormat.DateMonthYearHourMinuteSecond,
-      [VERSION_UPDATE_CHECK_FREQUENCY]: 24
+      [VERSION_UPDATE_CHECK_FREQUENCY]: 24,
+      [ENABLE_ENS]: true
     };
     store.commit('settings/restore', state);
     const settings = store.state.settings!;
@@ -144,5 +146,6 @@ describe('settings:mutations', () => {
       DateFormat.DateMonthYearHourMinuteSecond
     );
     expect(settings[VERSION_UPDATE_CHECK_FREQUENCY]).toBe(24);
+    expect(settings[ENABLE_ENS]).toBe(true);
   });
 });

@@ -6,17 +6,21 @@ from rotkehlchen.assets.asset import Asset
 from rotkehlchen.constants.assets import A_USD
 from rotkehlchen.constants.timing import YEAR_IN_SECONDS
 from rotkehlchen.db.utils import str_to_bool
-from rotkehlchen.errors import DeserializationError
-from rotkehlchen.history.typing import (
-    DEFAULT_HISTORICAL_PRICE_ORACLES_ORDER,
-    HistoricalPriceOracle,
-)
+from rotkehlchen.errors.serialization import DeserializationError
+from rotkehlchen.history.types import DEFAULT_HISTORICAL_PRICE_ORACLES_ORDER, HistoricalPriceOracle
 from rotkehlchen.inquirer import DEFAULT_CURRENT_PRICE_ORACLES_ORDER, CurrentPriceOracle
-from rotkehlchen.typing import AVAILABLE_MODULES_MAP, DEFAULT_OFF_MODULES, ModuleName, Timestamp
+from rotkehlchen.types import (
+    AVAILABLE_MODULES_MAP,
+    DEFAULT_OFF_MODULES,
+    CostBasisMethod,
+    ExchangeLocationID,
+    ModuleName,
+    Timestamp,
+)
 from rotkehlchen.user_messages import MessagesAggregator
 
-ROTKEHLCHEN_DB_VERSION = 31
-LAST_DATA_MIGRATION = 1
+ROTKEHLCHEN_DB_VERSION = 33
+ROTKEHLCHEN_TRANSIENT_DB_VERSION = 1
 DEFAULT_TAXFREE_AFTER_PERIOD = YEAR_IN_SECONDS
 DEFAULT_INCLUDE_CRYPTO2CRYPTO = True
 DEFAULT_INCLUDE_GAS_COSTS = True
@@ -45,8 +49,15 @@ DEFAULT_PNL_CSV_WITH_FORMULAS = True
 DEFAULT_PNL_CSV_HAVE_SUMMARY = False
 DEFAULT_SSF_0GRAPH_MULTIPLIER = 0
 DEFAULT_LAST_DATA_MIGRATION = 0
+DEFAULT_COST_BASIS_METHOD = CostBasisMethod.FIFO
 
-JSON_KEYS = ('current_price_oracles', 'historical_price_oracles', 'taxable_ledger_actions')
+
+JSON_KEYS = (
+    'current_price_oracles',
+    'historical_price_oracles',
+    'taxable_ledger_actions',
+    'non_syncing_exchanges',
+)
 BOOLEAN_KEYS = (
     'have_premium',
     'include_crypto2crypto',
@@ -108,6 +119,8 @@ class DBSettings(NamedTuple):
     pnl_csv_have_summary: bool = DEFAULT_PNL_CSV_HAVE_SUMMARY
     ssf_0graph_multiplier: int = DEFAULT_SSF_0GRAPH_MULTIPLIER
     last_data_migration: int = DEFAULT_LAST_DATA_MIGRATION
+    non_syncing_exchanges: List[ExchangeLocationID] = []
+    cost_basis_method: CostBasisMethod = DEFAULT_COST_BASIS_METHOD
 
 
 class ModifiableDBSettings(NamedTuple):
@@ -135,6 +148,8 @@ class ModifiableDBSettings(NamedTuple):
     pnl_csv_with_formulas: Optional[bool] = None
     pnl_csv_have_summary: Optional[bool] = None
     ssf_0graph_multiplier: Optional[int] = None
+    non_syncing_exchanges: Optional[List[ExchangeLocationID]] = None
+    cost_basis_method: Optional[CostBasisMethod] = None
 
     def serialize(self) -> Dict[str, Any]:
         settings_dict = {}
@@ -152,6 +167,8 @@ class ModifiableDBSettings(NamedTuple):
                     value = None
                 elif setting == 'active_modules':
                     value = json.dumps(value)
+                elif setting == 'cost_basis_method':
+                    value = value.serialize()  # pylint: disable=no-member
                 elif setting in JSON_KEYS:
                     value = json.dumps([x.serialize() for x in value])
 
@@ -216,6 +233,11 @@ def db_settings_from_dict(
         elif key == 'taxable_ledger_actions':
             values = json.loads(value)
             specified_args[key] = [LedgerActionType.deserialize(x) for x in values]
+        elif key == 'non_syncing_exchanges':
+            values = json.loads(value)
+            specified_args[key] = [ExchangeLocationID.deserialize(x) for x in values]
+        elif key == 'cost_basis_method':
+            specified_args[key] = CostBasisMethod.deserialize(value)
         else:
             msg_aggregator.add_warning(
                 f'Unknown DB setting {key} given. Ignoring it. Should not '

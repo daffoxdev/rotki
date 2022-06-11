@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from rotkehlchen.assets.asset import WORLD_TO_KRAKEN
 from rotkehlchen.assets.converters import KRAKEN_TO_WORLD
 from rotkehlchen.db.dbhandler import DBHandler
-from rotkehlchen.errors import RemoteError
+from rotkehlchen.errors.misc import RemoteError
 from rotkehlchen.exchanges.data_structures import TradeType
 from rotkehlchen.exchanges.kraken import KRAKEN_DELISTED, Kraken
 from rotkehlchen.fval import FVal
@@ -15,7 +15,7 @@ from rotkehlchen.tests.utils.factories import (
     make_random_timestamp,
     make_random_uppercasenumeric_string,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, Timestamp
+from rotkehlchen.types import ApiKey, ApiSecret, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now
 from rotkehlchen.utils.serialization import jsonloads_dict
@@ -484,7 +484,7 @@ class MockKraken(Kraken):
 
         self.random_trade_data = True
         self.random_balance_data = True
-        self.random_ledgers_data = True
+        self.random_ledgers_data = False
         self.remote_errors = False
         self.use_original_kraken = False
 

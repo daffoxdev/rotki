@@ -7,9 +7,6 @@ on:
     branches:
       - build
 
-env:
-  PYINSTALLER_VERSION: 3.5 # If editing this, make sure to also change rotki_packaging.yaml
-
 jobs:
 
   build-linux:
@@ -19,8 +16,8 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-18.04 ]
-        python-version: [ 3.7 ]
-        node-version: [ 14.x ]
+        python-version: [ 3.9 ]
+        node-version: [ 16.x ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
@@ -29,11 +26,11 @@ jobs:
       - name: Set up python
         uses: actions/setup-python@v1
         with:
-          python-version: '3.7'
+          python-version: '3.9'
       - name: Setup node
         uses: actions/setup-node@v1
         with:
-          node-version: '14.x'
+          node-version: '16.x'
       - name: pip cache persistence
         uses: actions/cache@v2
         with:
@@ -55,7 +52,7 @@ jobs:
       - name: Package
         id: packaging
         run: |
-          npm install -g npm@7
+          npm install -g npm@8
           pip3 install --upgrade pip
           ./package.sh
       - name: Upload artifact
@@ -84,8 +81,8 @@ jobs:
     strategy:
       matrix:
         os: [ macos-10.15 ]
-        python-version: [ 3.7 ]
-        node-version: [ 14.x ]
+        python-version: [ 3.9 ]
+        node-version: [ 16.x ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
@@ -96,7 +93,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v1
         with:
-          node-version: '14.x'
+          node-version: '16.x'
       - name: pip cache persistence
         uses: actions/cache@v2
         with:
@@ -112,7 +109,7 @@ jobs:
       - name: Setup SQLCipher
         run: |
           cd "$(brew --repo homebrew/core)"
-          git checkout 31f4d9cef46b1c39cdbe2f72ab682b5d0b02cf67 Formula/sqlcipher.rb #This formula installs 4.4.3 of sqlcipher
+          git checkout 9ad779deb6076d0fc251fddc579ee2eb72acbb99 Formula/sqlcipher.rb #This formula installs 4.5.0 of sqlcipher
           brew install sqlcipher
       - name: Package
         id: packaging
@@ -121,7 +118,7 @@ jobs:
           pip3 install virtualenv
           python3 -m virtualenv ~/venv
           source ~/venv/bin/activate
-          npm install -g npm@7
+          npm install -g npm@8
           ./package.sh
         env:
           CERTIFICATE_OSX_APPLICATION: ${{ secrets.CERTIFICATE_OSX_APPLICATION }}
@@ -150,14 +147,14 @@ jobs:
     env:
       CI: true
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      SQLCIPHER_VERSION: 'v4.4.3'
-      PYSQLCIPHER3_VERSION: 'c01b3bda144073eb34412ae64702fa2362a778e7'
+      SQLCIPHER_VERSION: 'v4.5.0'
+      PYSQLCIPHER3_VERSION: '1f1b703b9e35205946c820e735f58799e1b72d2d'
       BUILD_DEPENDENCIES: "build-dependencies"
     strategy:
       matrix:
         os: [ windows-latest ]
-        python-version: [ 3.7 ]
-        node-version: [ 14.x ]
+        python-version: [ 3.9 ]
+        node-version: [ 16.x ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
@@ -166,11 +163,11 @@ jobs:
       - name: Set up python
         uses: actions/setup-python@v1
         with:
-          python-version: '3.7'
+          python-version: '3.9'
       - name: Setup node
         uses: actions/setup-node@v1
         with:
-          node-version: '14.x'
+          node-version: '16.x'
       - name: pip cache persistence
         uses: actions/cache@v2
         with:
@@ -197,7 +194,7 @@ jobs:
       - name: Build rotki
         id: packaging
         run: |
-          npm install -g npm@7
+          npm install -g npm@8
           pip3 install --upgrade pip
           .\package.ps1
         shell: powershell
@@ -223,6 +220,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - name: Set up Docker Buildx

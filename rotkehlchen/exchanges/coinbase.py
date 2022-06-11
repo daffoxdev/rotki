@@ -10,12 +10,14 @@ from urllib.parse import urlencode
 import requests
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction, LedgerActionType
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_coinbase
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
-from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade
 from rotkehlchen.exchanges.exchange import ExchangeInterface, ExchangeQueryBalances
 from rotkehlchen.exchanges.utils import deserialize_asset_movement_address, get_key_if_has_val
@@ -28,7 +30,7 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_fee,
     deserialize_timestamp_from_date,
 )
-from rotkehlchen.typing import (
+from rotkehlchen.types import (
     ApiKey,
     ApiSecret,
     AssetAmount,
@@ -60,7 +62,7 @@ def trade_from_coinbase(raw_trade: Dict[str, Any]) -> Optional[Trade]:
     Mary raise:
         - UnknownAsset due to Asset instantiation
         - DeserializationError due to unexpected format of dict entries
-        - KeyError due to dict entires missing an expected entry
+        - KeyError due to dict entries missing an expected entry
     """
 
     if raw_trade['status'] != 'completed':
@@ -108,7 +110,7 @@ def trade_from_conversion(trade_a: Dict[str, Any], trade_b: Dict[str, Any]) -> O
     Mary raise:
     - UnknownAsset due to Asset instantiation
     - DeserializationError due to unexpected format of dict entries
-    - KeyError due to dict entires missing an expected entry
+    - KeyError due to dict entries missing an expected entry
     """
     # Check that the status is complete
     if trade_a['status'] != 'completed':

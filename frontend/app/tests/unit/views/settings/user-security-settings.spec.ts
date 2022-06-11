@@ -1,5 +1,5 @@
 import { mount, Wrapper } from '@vue/test-utils';
-import { createPinia, PiniaVuePlugin } from 'pinia';
+import { createPinia, setActivePinia } from 'pinia';
 import Vue from 'vue';
 import Vuetify from 'vuetify';
 import { BackupApi } from '@/services/backup/backup-api';
@@ -9,14 +9,13 @@ import UserSecuritySettings from '@/views/settings/UserSecuritySettings.vue';
 import { stub } from '../../../common/utils';
 import '../../i18n';
 
-jest.spyOn(api, 'backups', 'get').mockReturnValue(
+vi.spyOn(api, 'backups', 'get').mockReturnValue(
   stub<BackupApi>({
-    info: jest.fn()
+    info: vi.fn()
   })
 );
 
 Vue.use(Vuetify);
-Vue.use(PiniaVuePlugin);
 
 describe('UserSecuritySettings.vue', () => {
   let wrapper: Wrapper<any>;
@@ -24,9 +23,13 @@ describe('UserSecuritySettings.vue', () => {
   function createWrapper() {
     const vuetify = new Vuetify();
     const pinia = createPinia();
+    setActivePinia(pinia);
     return mount(UserSecuritySettings, {
       store,
       pinia,
+      provide: {
+        'vuex-store': store
+      },
       vuetify,
       stubs: [
         'v-tooltip',
@@ -58,12 +61,12 @@ describe('UserSecuritySettings.vue', () => {
   });
 
   test('displays no warning by default', async () => {
-    expect(wrapper.find('.v-alert').exists()).toBe(false);
+    expect(wrapper.find('[data-cy=premium-warning]').exists()).toBe(false);
   });
 
   test('displays warning if premium sync enabled', async () => {
     store.commit('session/premiumSync', true);
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('.v-alert').exists()).toBe(true);
+    expect(wrapper.find('[data-cy=premium-warning]').exists()).toBe(true);
   });
 });

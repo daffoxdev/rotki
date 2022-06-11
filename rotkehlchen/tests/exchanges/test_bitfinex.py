@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import WORLD_TO_BITFINEX
 from rotkehlchen.assets.converters import (
     BITFINEX_EXCHANGE_TEST_ASSETS,
@@ -14,7 +14,7 @@ from rotkehlchen.assets.converters import (
     asset_from_bitfinex,
 )
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR, A_LINK, A_USD, A_USDT, A_WBTC
-from rotkehlchen.errors import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
 from rotkehlchen.exchanges.bitfinex import (
     API_ERR_AUTH_NONCE_CODE,
     API_ERR_AUTH_NONCE_MESSAGE,
@@ -27,7 +27,7 @@ from rotkehlchen.exchanges.data_structures import AssetMovement, Trade, TradeTyp
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.constants import A_GLM, A_NEO
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import AssetAmount, AssetMovementCategory, Fee, Location, Price, Timestamp
+from rotkehlchen.types import AssetAmount, AssetMovementCategory, Fee, Location, Price, Timestamp
 
 
 def test_name():

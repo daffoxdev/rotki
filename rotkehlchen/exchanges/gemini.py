@@ -13,6 +13,7 @@ from typing import (
     DefaultDict,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
@@ -21,21 +22,16 @@ from typing import (
 
 import gevent
 import requests
-from typing_extensions import Literal
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_gemini
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.constants.timing import GLOBAL_REQUESTS_TIMEOUT, QUERY_RETRY_TIMES
-from rotkehlchen.errors import (
-    DeserializationError,
-    RemoteError,
-    UnknownAsset,
-    UnprocessableTradePair,
-    UnsupportedAsset,
-)
+from rotkehlchen.errors.asset import UnknownAsset, UnprocessableTradePair, UnsupportedAsset
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade
 from rotkehlchen.exchanges.exchange import ExchangeInterface, ExchangeQueryBalances
 from rotkehlchen.exchanges.utils import deserialize_asset_movement_address, get_key_if_has_val
@@ -49,7 +45,7 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_fee,
     deserialize_timestamp,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, Fee, Location, Timestamp, TradeType
+from rotkehlchen.types import ApiKey, ApiSecret, Fee, Location, Timestamp, TradeType
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
 from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
@@ -74,7 +70,7 @@ def gemini_symbol_to_base_quote(symbol: str) -> Tuple[Asset, Asset]:
     - Can raise UnprocessableTradePair if symbol is in unexpected format
     - Case raise UnknownAsset if any of the pair assets are not known to rotki
     """
-    five_letter_assets = ('sushi', '1inch', 'storj', 'matic', 'audio')
+    five_letter_assets = ('sushi', '1inch', 'storj', 'matic', 'audio', 'index')
     if len(symbol) == 5:
         base_asset = asset_from_gemini(symbol[:2].upper())
         quote_asset = asset_from_gemini(symbol[2:].upper())
@@ -292,7 +288,7 @@ class Gemini(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 f'API key does not have permission for {endpoint}',
             )
         if response.status_code == HTTPStatus.BAD_REQUEST:
-            if 'InvalidSignature' in response.text:
+            if 'InvalidSignature' in response.text or 'Invalid API key' in response.text:
                 raise GeminiPermissionError('Invalid API Key or API secret')
             # else let it be handled by the generic non-200 code error below
 

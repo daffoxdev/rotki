@@ -8,19 +8,18 @@ from web3.exceptions import BadFunctionCallOutput
 from rotkehlchen.chain.constants import DEFAULT_EVM_RPC_TIMEOUT
 from rotkehlchen.chain.ethereum.graph import Graph
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import BlockchainQueryError, DeserializationError, RemoteError
+from rotkehlchen.errors.misc import BlockchainQueryError, RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.externalapis.covalent import Covalent
 from rotkehlchen.fval import FVal
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import ChecksumEthAddress
+from rotkehlchen.types import ChecksumEthAddress
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import from_wei, hex_or_bytes_to_str
 
 logger = logging.getLogger(__name__)
 log = RotkehlchenLogsAdapter(logger)
 
-AVAX_ADDRESS = '0x9debca6ea3af87bf422cea9ac955618ceb56efb4'
-COVALENT_AVAX_ADDRESS = '0xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 WEB3_LOGQUERY_BLOCK_RANGE = 250000
 
 

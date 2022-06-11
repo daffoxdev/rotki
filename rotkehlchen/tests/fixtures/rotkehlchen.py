@@ -7,8 +7,8 @@ import pytest
 
 import rotkehlchen.tests.utils.exchanges as exchange_tests
 from rotkehlchen.args import DEFAULT_MAX_LOG_BACKUP_FILES, DEFAULT_MAX_LOG_SIZE_IN_MB
-from rotkehlchen.data_migrations.manager import DataMigrationManager
-from rotkehlchen.db.settings import LAST_DATA_MIGRATION, DBSettings
+from rotkehlchen.data_migrations.manager import LAST_DATA_MIGRATION, DataMigrationManager
+from rotkehlchen.db.settings import DBSettings
 from rotkehlchen.db.upgrade_manager import DBUpgradeManager
 from rotkehlchen.exchanges.manager import EXCHANGES_WITH_PASSPHRASE
 from rotkehlchen.history.price import PriceHistorian
@@ -28,7 +28,7 @@ from rotkehlchen.tests.utils.ethereum import wait_until_all_nodes_connected
 from rotkehlchen.tests.utils.factories import make_random_b64bytes
 from rotkehlchen.tests.utils.history import maybe_mock_historical_price_queries
 from rotkehlchen.tests.utils.substrate import wait_until_all_substrate_nodes_connected
-from rotkehlchen.typing import AVAILABLE_MODULES_MAP, Location
+from rotkehlchen.types import AVAILABLE_MODULES_MAP, Location
 
 
 @pytest.fixture(name='max_tasks_num')
@@ -79,7 +79,6 @@ def fixture_cli_args(data_dir, ethrpc_endpoint):
     args = namedtuple('args', [
         'sleep_secs',
         'data_dir',
-        'zerorpc_port',
         'ethrpc_endpoint',
         'logfile',
         'logtarget',
@@ -101,7 +100,7 @@ def fixture_cli_args(data_dir, ethrpc_endpoint):
 @pytest.fixture(name='perform_migrations_at_unlock')
 def fixture_perform_migrations_at_unlock():
     """Perform data migrations as normal during user unlock"""
-    return True
+    return False
 
 
 @pytest.fixture(name='perform_upgrades_at_unlock')
@@ -132,7 +131,6 @@ def initialize_mock_rotkehlchen_instance(
         kusama_manager_connect_at_start,
         eth_rpc_endpoint,
         ksm_rpc_endpoint,
-        aave_use_graph,
         max_tasks_num,
         legacy_messages_via_websockets,
         data_migration_version,
@@ -250,10 +248,6 @@ def initialize_mock_rotkehlchen_instance(
         substrate_manager=rotki.chain_manager.kusama,
     )
 
-    aave = rotki.chain_manager.get_module('aave')
-    if aave:
-        aave.use_graph = aave_use_graph
-
 
 @pytest.fixture(name='uninitialized_rotkehlchen')
 def fixture_uninitialized_rotkehlchen(cli_args, inquirer, asset_resolver, globaldb):  # pylint: disable=unused-argument  # noqa: E501
@@ -275,7 +269,6 @@ def fixture_uninitialized_rotkehlchen(cli_args, inquirer, asset_resolver, global
 def fixture_rotkehlchen_api_server(
         uninitialized_rotkehlchen,
         rest_api_port,
-        websockets_api_port,
         start_with_logged_in_user,
         start_with_valid_premium,
         db_password,
@@ -296,7 +289,6 @@ def fixture_rotkehlchen_api_server(
         kusama_manager_connect_at_start,
         ethrpc_endpoint,
         ksm_rpc_endpoint,
-        aave_use_graph,
         max_tasks_num,
         legacy_messages_via_websockets,
         data_migration_version,
@@ -310,7 +302,6 @@ def fixture_rotkehlchen_api_server(
     api_server = create_api_server(
         rotki=uninitialized_rotkehlchen,
         rest_port_number=rest_api_port,
-        websockets_port_number=websockets_api_port,
     )
 
     initialize_mock_rotkehlchen_instance(
@@ -335,7 +326,6 @@ def fixture_rotkehlchen_api_server(
         kusama_manager_connect_at_start=kusama_manager_connect_at_start,
         eth_rpc_endpoint=ethrpc_endpoint,
         ksm_rpc_endpoint=ksm_rpc_endpoint,
-        aave_use_graph=aave_use_graph,
         max_tasks_num=max_tasks_num,
         legacy_messages_via_websockets=legacy_messages_via_websockets,
         data_migration_version=data_migration_version,
@@ -371,7 +361,6 @@ def rotkehlchen_instance(
         kusama_manager_connect_at_start,
         ethrpc_endpoint,
         ksm_rpc_endpoint,
-        aave_use_graph,
         max_tasks_num,
         legacy_messages_via_websockets,
         data_migration_version,
@@ -404,7 +393,6 @@ def rotkehlchen_instance(
         kusama_manager_connect_at_start=kusama_manager_connect_at_start,
         eth_rpc_endpoint=ethrpc_endpoint,
         ksm_rpc_endpoint=ksm_rpc_endpoint,
-        aave_use_graph=aave_use_graph,
         max_tasks_num=max_tasks_num,
         legacy_messages_via_websockets=legacy_messages_via_websockets,
         data_migration_version=data_migration_version,
@@ -431,6 +419,8 @@ def rotkehlchen_api_server_with_exchanges(
         name = str(exchange_location)
         if exchange_location == Location.BINANCEUS:
             name = 'binance'
+        if exchange_location == Location.FTXUS:
+            name = 'ftx'
         create_fn = getattr(exchange_tests, f'create_test_{name}')
         passphrase = None
         kwargs = {}

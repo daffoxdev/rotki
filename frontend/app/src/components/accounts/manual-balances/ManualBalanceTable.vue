@@ -65,44 +65,34 @@
         />
       </template>
       <template #item.actions="{ item }">
-        <span>
-          <v-icon
-            small
-            class="mr-2 manual-balances-list__actions__edit"
-            @click="edit(item)"
-          >
-            mdi-pencil
-          </v-icon>
-          <v-icon
-            small
-            class="manual-balances-list__actions__delete"
-            @click="pendingDeletion = item.label"
-          >
-            mdi-delete
-          </v-icon>
-        </span>
+        <row-actions
+          :edit-tooltip="$t('manual_balances_table.edit_tooltip')"
+          :delete-tooltip="$t('manual_balances_table.delete_tooltip')"
+          @edit-click="edit(item)"
+          @delete-click="pendingDeletion = item.id"
+        />
       </template>
       <template v-if="visibleBalances.length > 0" #body.append="{ isMobile }">
-        <tr :class="$style.total">
-          <td :colspan="isMobile ? 1 : 3">
-            {{ $t('manual_balances_table.rows.total') }}
-          </td>
-          <td class="text-end">
-            <amount-display
-              show-currency="symbol"
-              class="manual-balances-list__amount"
-              :fiat-currency="currency"
-              :value="total"
-            />
-          </td>
-        </tr>
+        <row-append
+          label-colspan="4"
+          :label="$t('manual_balances_table.rows.total')"
+          :is-mobile="isMobile"
+          :right-patch-colspan="1"
+        >
+          <amount-display
+            show-currency="symbol"
+            class="manual-balances-list__amount"
+            :fiat-currency="currency"
+            :value="total"
+          />
+        </row-append>
       </template>
     </data-table>
     <confirm-dialog
       v-if="pendingDeletion !== null"
       display
-      :title="$t('manual_balances_table.delete_dialog.title')"
-      :message="$t('manual_balances_table.delete_dialog.message')"
+      :title="$tc('manual_balances_table.delete_dialog.title')"
+      :message="$tc('manual_balances_table.delete_dialog.message')"
       @cancel="pendingDeletion = null"
       @confirm="deleteBalance()"
     />
@@ -119,16 +109,20 @@ import {
   ref,
   toRefs
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import { IVueI18n } from 'vue-i18n';
 import { DataTableHeader } from 'vuetify';
 import RefreshButton from '@/components/helper/RefreshButton.vue';
+import RowActions from '@/components/helper/RowActions.vue';
+import RowAppend from '@/components/helper/RowAppend.vue';
 import TagFilter from '@/components/inputs/TagFilter.vue';
 import TagDisplay from '@/components/tags/TagDisplay.vue';
+
 import {
   setupExchangeRateGetter,
   setupManualBalances
 } from '@/composables/balances';
-import { currency } from '@/composables/session';
+import { setupGeneralSettings } from '@/composables/session';
 import { aggregateTotal } from '@/filters';
 import i18n from '@/i18n';
 import { ManualBalance } from '@/services/balances/types';
@@ -162,7 +156,7 @@ const setupHeaders: (
     {
       text: i18n
         .t('manual_balances_table.columns.value', {
-          symbol: currency.value
+          symbol: get(currency)
         })
         .toString(),
       value: 'usdValue',
@@ -171,6 +165,7 @@ const setupHeaders: (
     {
       text: i18n.t('manual_balances_table.columns.actions').toString(),
       value: 'actions',
+      align: 'center',
       sortable: false,
       width: '50'
     }
@@ -178,7 +173,13 @@ const setupHeaders: (
 
 const ManualBalanceTable = defineComponent({
   name: 'ManualBalanceTable',
-  components: { TagFilter, RefreshButton, TagDisplay },
+  components: {
+    RowAppend,
+    RowActions,
+    TagFilter,
+    RefreshButton,
+    TagDisplay
+  },
   props: {
     title: { required: true, type: String },
     loading: { required: false, type: Boolean, default: false },
@@ -187,7 +188,7 @@ const ManualBalanceTable = defineComponent({
   emits: ['refresh', 'edit'],
   setup(props, { emit }) {
     const { balances } = toRefs(props);
-    const pendingDeletion = ref<string | null>(null);
+    const pendingDeletion = ref<number | null>(null);
     const onlyTags = ref<string[]>([]);
     const refresh = () => {
       emit('refresh');
@@ -196,22 +197,23 @@ const ManualBalanceTable = defineComponent({
       emit('edit', balance);
     };
 
+    const { currencySymbol } = setupGeneralSettings();
     const { deleteManualBalance } = setupManualBalances();
 
     const deleteBalance = async () => {
-      const label = pendingDeletion.value;
-      assert(label);
-      pendingDeletion.value = null;
-      await deleteManualBalance(label);
+      const id = get(pendingDeletion);
+      assert(id);
+      set(pendingDeletion, null);
+      await deleteManualBalance(id);
     };
 
     const visibleBalances = computed<ManualBalance[]>(() => {
-      const selectedTags = onlyTags.value;
+      const selectedTags = get(onlyTags);
       if (selectedTags.length === 0) {
-        return balances.value;
+        return get(balances);
       }
 
-      return balances.value.filter(balance => {
+      return get(balances).filter(balance => {
         if (balance.tags) {
           return selectedTags.every(tag => balance.tags.includes(tag));
         }
@@ -222,9 +224,9 @@ const ManualBalanceTable = defineComponent({
 
     const total = computed(() => {
       return aggregateTotal(
-        visibleBalances.value,
-        currency.value,
-        exchangeRate(currency.value) ?? new BigNumber(1)
+        get(visibleBalances),
+        get(currencySymbol),
+        exchangeRate(get(currencySymbol)) ?? new BigNumber(1)
       );
     });
 
@@ -236,10 +238,10 @@ const ManualBalanceTable = defineComponent({
       refresh,
       edit,
       deleteBalance,
-      headers: setupHeaders(i18n, currency),
+      headers: setupHeaders(i18n, currencySymbol),
       onlyTags,
       total,
-      currency,
+      currency: currencySymbol,
       visibleBalances,
       getRowClass,
       pendingDeletion
@@ -250,10 +252,6 @@ export default ManualBalanceTable;
 </script>
 
 <style module lang="scss">
-.total {
-  font-weight: 500;
-}
-
 .label {
   padding-bottom: 0 !important;
 }

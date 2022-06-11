@@ -90,6 +90,8 @@ INSERT OR IGNORE INTO location(location, seq) VALUES ('a', 33);
 INSERT OR IGNORE INTO location(location, seq) VALUES ('b', 34);
 /* Bisq */
 INSERT OR IGNORE INTO location(location, seq) VALUES ('c', 35);
+/* FTX US */
+INSERT OR IGNORE INTO location(location, seq) VALUES ('d', 36);
 """
 
 # Custom enum table for AssetMovement categories (deposit/withdrawal)
@@ -298,9 +300,13 @@ CREATE TABLE IF NOT EXISTS xpub_mappings (
     derivation_path TEXT NOT NULL,
     account_index INTEGER,
     derived_index INTEGER,
-    blockchain TEXT GENERATED ALWAYS AS ("BTC") VIRTUAL,
-    FOREIGN KEY(blockchain, address) REFERENCES blockchain_accounts(blockchain, account) ON DELETE CASCADE
-    FOREIGN KEY(xpub, derivation_path) REFERENCES xpubs(xpub, derivation_path) ON DELETE CASCADE
+    blockchain TEXT NOT NULL,
+    FOREIGN KEY(blockchain, address)
+    REFERENCES blockchain_accounts(blockchain, account) ON DELETE CASCADE
+    FOREIGN KEY(xpub, derivation_path) REFERENCES xpubs(
+        xpub,
+        derivation_path
+    ) ON DELETE CASCADE
     PRIMARY KEY (address, xpub, derivation_path)
 );
 """  # noqa: E501
@@ -315,8 +321,9 @@ CREATE TABLE IF NOT EXISTS ethereum_accounts_details (
 
 DB_CREATE_MANUALLY_TRACKED_BALANCES = """
 CREATE TABLE IF NOT EXISTS manually_tracked_balances (
+    id INTEGER PRIMARY KEY,
     asset TEXT NOT NULL,
-    label TEXT NOT NULL PRIMARY KEY,
+    label TEXT NOT NULL,
     amount TEXT,
     location CHAR(1) NOT NULL DEFAULT('A') REFERENCES location(location),
     category CHAR(1) NOT NULL DEFAULT('A') REFERENCES balance_category(category),
@@ -415,39 +422,6 @@ CREATE TABLE IF NOT EXISTS ledger_actions (
 );
 """
 
-# Custom enum table for gicoin transaction types
-DB_CREATE_GITCOIN_TX_TYPE = """
-CREATE TABLE IF NOT EXISTS gitcoin_tx_type (
-  type    CHAR(1)       PRIMARY KEY NOT NULL,
-  seq     INTEGER UNIQUE
-);
-/* Ethereum Transaction */
-INSERT OR IGNORE INTO gitcoin_tx_type(type, seq) VALUES ('A', 1);
-/* ZKSync Transaction */
-INSERT OR IGNORE INTO gitcoin_tx_type(type, seq) VALUES ('B', 2);
-"""
-
-
-DB_CREATE_LEDGER_ACTIONS_GITCOIN_DATA = """
-CREATE TABLE IF NOT EXISTS ledger_actions_gitcoin_data (
-    parent_id INTEGER NOT NULL,
-    tx_id TEXT NOT NULL UNIQUE,
-    grant_id INTEGER NOT NULL,
-    clr_round INTEGER,
-    tx_type NOT NULL DEFAULT('A') REFERENCES gitcoin_tx_type(type),
-    FOREIGN KEY(parent_id) REFERENCES ledger_actions(identifier) ON DELETE CASCADE ON UPDATE CASCADE,
-    PRIMARY KEY(parent_id, tx_id, grant_id)
-);
-"""  # noqa: E501
-
-DB_CREATE_GITCOIN_GRANT_METADATA = """
-CREATE TABLE IF NOT EXISTS gitcoin_grant_metadata (
-    grant_id INTEGER NOT NULL PRIMARY KEY,
-    grant_name TEXT NOT NULL,
-    created_on INTEGER NOT NULL
-);
-"""
-
 DB_CREATE_ETHEREUM_TRANSACTIONS = """
 CREATE TABLE IF NOT EXISTS ethereum_transactions (
     tx_hash BLOB NOT NULL PRIMARY KEY,
@@ -463,6 +437,20 @@ CREATE TABLE IF NOT EXISTS ethereum_transactions (
     nonce INTEGER NOT NULL
 );
 """
+
+DB_CREATE_ETHEREUM_INTERNAL_TRANSACTIONS = """
+CREATE TABLE IF NOT EXISTS ethereum_internal_transactions (
+    parent_tx_hash BLOB NOT NULL,
+    trace_id INTEGER NOT NULL,
+    timestamp INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    from_address TEXT NOT NULL,
+    to_address TEXT,
+    value TEXT NOT NULL,
+    FOREIGN KEY(parent_tx_hash) REFERENCES ethereum_transactions(tx_hash) ON DELETE CASCADE ON UPDATE CASCADE,
+    PRIMARY KEY(parent_tx_hash, trace_id)
+);
+"""  # noqa: E501
 
 DB_CREATE_ETHTX_RECEIPTS = """
 CREATE TABLE IF NOT EXISTS ethtx_receipts (
@@ -497,6 +485,17 @@ CREATE TABLE IF NOT EXISTS ethtx_receipt_log_topics (
 );
 """  # noqa: E501
 
+DB_CREATE_ETHTX_ADDRESS_MAPPINGS = """
+CREATE TABLE IF NOT EXISTS ethtx_address_mappings (
+    address TEXT NOT NULL,
+    tx_hash BLOB NOT NULL,
+    blockchain TEXT NOT NULL,
+    FOREIGN KEY(blockchain, address) REFERENCES blockchain_accounts(blockchain, account) ON DELETE CASCADE,
+    FOREIGN KEY(tx_hash) references ethereum_transactions(tx_hash) ON UPDATE CASCADE ON DELETE CASCADE,
+    PRIMARY KEY (address, tx_hash, blockchain)
+);
+"""  # noqa: E501
+
 DB_CREATE_USED_QUERY_RANGES = """
 CREATE TABLE IF NOT EXISTS used_query_ranges (
     name VARCHAR[24] NOT NULL PRIMARY KEY,
@@ -504,6 +503,16 @@ CREATE TABLE IF NOT EXISTS used_query_ranges (
     end_ts INTEGER
 );
 """
+
+DB_CREATE_EVM_TX_MAPPINGS = """
+CREATE TABLE IF NOT EXISTS evm_tx_mappings (
+    tx_hash BLOB NOT NULL,
+    blockchain TEXT NOT NULL,
+    value TEXT NOT NULL,
+    FOREIGN KEY(tx_hash) references ethereum_transactions(tx_hash) ON UPDATE CASCADE ON DELETE CASCADE,
+    PRIMARY KEY (tx_hash, value)
+);
+"""  # noqa: E501
 
 DB_CREATE_SETTINGS = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -601,7 +610,7 @@ CREATE TABLE IF NOT EXISTS eth2_daily_staking_details (
 
 DB_CREATE_HISTORY_EVENTS = """
 CREATE TABLE IF NOT EXISTS history_events (
-    identifier TEXT NOT NULL PRIMARY KEY,
+    identifier INTEGER NOT NULL PRIMARY KEY,
     event_identifier TEXT NOT NULL,
     sequence_index INTEGER NOT NULL,
     timestamp INTEGER NOT NULL,
@@ -612,9 +621,21 @@ CREATE TABLE IF NOT EXISTS history_events (
     usd_value TEXT NOT NULL,
     notes TEXT,
     type TEXT NOT NULL,
-    subtype TEXT
+    subtype TEXT,
+    counterparty TEXT,
+    extra_data TEXT,
+    UNIQUE(event_identifier, sequence_index)
 );
 """
+
+DB_CREATE_HISTORY_EVENTS_MAPPINGS = """
+CREATE TABLE IF NOT EXISTS history_events_mappings (
+    parent_identifier INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    FOREIGN KEY(parent_identifier) references history_events(identifier) ON UPDATE CASCADE ON DELETE CASCADE,
+    PRIMARY KEY (parent_identifier, value)
+);
+"""  # noqa: E501
 
 DB_CREATE_ADEX_EVENTS = """
 CREATE TABLE IF NOT EXISTS adex_events (
@@ -776,6 +797,14 @@ CREATE VIEW IF NOT EXISTS combined_trades_view AS
 ;
 """  # noqa: E501
 
+DB_CREATE_ENS_MAPPINGS = """
+CREATE TABLE IF NOT EXISTS ens_mappings (
+    address TEXT NOT NULL PRIMARY KEY,
+    ens_name TEXT UNIQUE,
+    last_update INTEGER NOT NULL
+);
+"""
+
 DB_SCRIPT_CREATE_TABLES = f"""
 PRAGMA foreign_keys=off;
 BEGIN TRANSACTION;
@@ -795,12 +824,15 @@ BEGIN TRANSACTION;
 {DB_CREATE_MANUALLY_TRACKED_BALANCES}
 {DB_CREATE_TRADES}
 {DB_CREATE_ETHEREUM_TRANSACTIONS}
+{DB_CREATE_ETHEREUM_INTERNAL_TRANSACTIONS}
 {DB_CREATE_ETHTX_RECEIPTS}
 {DB_CREATE_ETHTX_RECEIPT_LOGS}
 {DB_CREATE_ETHTX_RECEIPT_LOG_TOPICS}
+{DB_CREATE_ETHTX_ADDRESS_MAPPINGS}
 {DB_CREATE_MARGIN}
 {DB_CREATE_ASSET_MOVEMENTS}
 {DB_CREATE_USED_QUERY_RANGES}
+{DB_CREATE_EVM_TX_MAPPINGS}
 {DB_CREATE_SETTINGS}
 {DB_CREATE_TAGS_TABLE}
 {DB_CREATE_TAG_MAPPINGS}
@@ -814,17 +846,16 @@ BEGIN TRANSACTION;
 {DB_CREATE_ETH2_DEPOSITS}
 {DB_CREATE_ETH2_DAILY_STAKING_DETAILS}
 {DB_CREATE_HISTORY_EVENTS}
+{DB_CREATE_HISTORY_EVENTS_MAPPINGS}
 {DB_CREATE_ADEX_EVENTS}
 {DB_CREATE_LEDGER_ACTION_TYPE}
 {DB_CREATE_LEDGER_ACTIONS}
 {DB_CREATE_ACTION_TYPE}
 {DB_CREATE_IGNORED_ACTIONS}
 {DB_CREATE_BALANCER_EVENTS}
-{DB_CREATE_LEDGER_ACTIONS_GITCOIN_DATA}
-{DB_CREATE_GITCOIN_TX_TYPE}
-{DB_CREATE_GITCOIN_GRANT_METADATA}
 {DB_CREATE_NFTS}
 {DB_CREATE_COMBINED_TRADES_VIEW}
+{DB_CREATE_ENS_MAPPINGS}
 COMMIT;
 PRAGMA foreign_keys=on;
 """

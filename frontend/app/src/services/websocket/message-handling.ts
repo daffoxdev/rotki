@@ -1,11 +1,14 @@
+import { Severity } from '@rotki/common/lib/messages';
+import { setPremium } from '@/composables/session';
 import i18n from '@/i18n';
 import {
   BalanceSnapshotError,
+  EthereumTransactionQueryData,
   SocketMessageType,
   WebsocketMessage
 } from '@/services/websocket/messages';
+import { useTxQueryStatus } from '@/store/history/query-status';
 import { useNotifications } from '@/store/notifications';
-import { Severity } from '@/store/notifications/consts';
 
 export async function handleSnapshotError(
   message: WebsocketMessage<SocketMessageType>
@@ -21,6 +24,14 @@ export async function handleSnapshotError(
   });
 }
 
+export async function handleEthereumTransactionStatus(
+  message: WebsocketMessage<SocketMessageType>
+) {
+  const data = EthereumTransactionQueryData.parse(message.data);
+  const { setQueryStatus } = useTxQueryStatus();
+  setQueryStatus(data);
+}
+
 export async function handleLegacyMessage(message: string, isWarning: boolean) {
   const { notify } = useNotifications();
   notify({
@@ -29,4 +40,8 @@ export async function handleLegacyMessage(message: string, isWarning: boolean) {
     display: !isWarning,
     severity: isWarning ? Severity.WARNING : Severity.ERROR
   });
+}
+
+export async function handlePremiumStatusUpdate(active: boolean) {
+  setPremium(active);
 }

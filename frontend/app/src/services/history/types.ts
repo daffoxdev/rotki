@@ -1,12 +1,44 @@
-import { NumericString } from '@rotki/common';
+import { Balance, NumericString } from '@rotki/common';
 import { z, ZodTypeAny } from 'zod';
 import { SUPPORTED_TRADE_LOCATIONS } from '@/data/defaults';
 import { SUPPORTED_EXCHANGES } from '@/types/exchanges';
 import { LedgerActionEnum } from '@/types/ledger-actions';
 
-// Common wrapper function
+export const EthTransactionEvent = z.object({
+  eventIdentifier: z.string(),
+  sequenceIndex: z.number().or(z.string()),
+  timestamp: z.number(),
+  location: z.string(),
+  locationLabel: z.string().nullish(),
+  eventType: z.string().nullish(),
+  eventSubtype: z.string().nullish(),
+  asset: z.string(),
+  balance: Balance,
+  notes: z.string().nullish(),
+  counterparty: z.string().nullish(),
+  identifier: z.number().nullish()
+});
+
+export type EthTransactionEvent = z.infer<typeof EthTransactionEvent>;
+
+export type NewEthTransactionEvent = Omit<
+  EthTransactionEvent,
+  'identifier' | 'ignoredInAccounting' | 'customized'
+>;
+
+export const EthTransactionEventWithMeta = z.object({
+  customized: z.boolean(),
+  entry: EthTransactionEvent
+});
+
+export type EthTransactionEventWithMeta = z.infer<
+  typeof EthTransactionEventWithMeta
+>;
+
 const EntryMeta = z.object({
-  ignoredInAccounting: z.boolean()
+  ignoredInAccounting: z.boolean().nullish(),
+  customized: z.boolean().nullish(),
+  decodedEvents: z.array(EthTransactionEventWithMeta).nullish()
 });
 
 export type EntryMeta = z.infer<typeof EntryMeta>;
@@ -15,6 +47,7 @@ export type EntryWithMeta<T> = {
   readonly entry: T;
 } & EntryMeta;
 
+// Common wrapper function
 function getEntryWithMeta(obj: ZodTypeAny) {
   return z
     .object({
@@ -59,10 +92,10 @@ export const Trade = z.object({
   tradeType: TradeType,
   amount: NumericString,
   rate: NumericString,
-  fee: NumericString.nullable().optional(),
-  feeCurrency: z.string().nullable().optional(),
-  link: z.string().nullable().optional(),
-  notes: z.string().nullable().optional()
+  fee: NumericString.nullish(),
+  feeCurrency: z.string().nullish(),
+  link: z.string().nullish(),
+  notes: z.string().nullish()
 });
 
 export type Trade = z.infer<typeof Trade>;
@@ -73,19 +106,22 @@ export const TradeCollectionResponse = getCollectionResponseType(
 
 export type NewTrade = Omit<Trade, 'tradeId' | 'ignoredInAccounting'>;
 
-export type TradeRequestPayload = {
+export type HistoryRequestPayload = {
   readonly limit: number;
   readonly offset: number;
   readonly orderByAttribute?: string;
   readonly ascending: boolean;
+  readonly onlyCache?: boolean;
+};
+
+export type TradeRequestPayload = {
   readonly fromTimestamp?: string | number;
   readonly toTimestamp?: string | number;
   readonly location?: string;
   readonly baseAsset?: string;
   readonly quoteAsset?: string;
   readonly tradeType?: string;
-  readonly onlyCache?: boolean;
-};
+} & HistoryRequestPayload;
 
 // Asset Movements
 export const MovementCategory = z.enum(['deposit', 'withdrawal']);
@@ -112,17 +148,12 @@ export const AssetMovementCollectionResponse = getCollectionResponseType(
 );
 
 export type AssetMovementRequestPayload = {
-  readonly limit: number;
-  readonly offset: number;
-  readonly orderByAttribute?: string;
-  readonly ascending: boolean;
   readonly fromTimestamp?: string | number;
   readonly toTimestamp?: string | number;
   readonly location?: string;
   readonly asset?: string;
   readonly action?: string;
-  readonly onlyCache?: boolean;
-};
+} & HistoryRequestPayload;
 
 // ETH Transactions
 export const EthTransaction = z.object({
@@ -130,14 +161,13 @@ export const EthTransaction = z.object({
   timestamp: z.number(),
   blockNumber: z.number(),
   fromAddress: z.string(),
-  toAddress: z.string().nullable().optional(),
+  toAddress: z.string().nullish(),
   value: NumericString,
   gas: NumericString,
   gasPrice: NumericString,
   gasUsed: NumericString,
   inputData: z.string(),
-  nonce: z.number(),
-  identifier: z.string()
+  nonce: z.number()
 });
 
 export type EthTransaction = z.infer<typeof EthTransaction>;
@@ -147,14 +177,16 @@ export const EthTransactionCollectionResponse = getCollectionResponseType(
 );
 
 export type TransactionRequestPayload = {
-  readonly limit: number;
-  readonly offset: number;
-  readonly orderByAttribute: keyof EthTransaction;
-  readonly ascending: boolean;
-  readonly fromTimestamp?: number;
-  readonly toTimestamp?: number;
-  readonly onlyCache?: boolean;
+  readonly fromTimestamp?: string | number;
+  readonly toTimestamp?: string | number;
   readonly address?: string;
+  readonly asset?: string;
+  readonly protocols?: string | string[];
+} & HistoryRequestPayload;
+
+export type TransactionEventRequestPayload = {
+  readonly txHashes?: string[] | null;
+  readonly ignoreCache: boolean;
 };
 
 // Ledger Actions
@@ -165,10 +197,10 @@ export const LedgerAction = z.object({
   location: TradeLocation,
   amount: NumericString,
   asset: z.string(),
-  rate: NumericString.nullable().optional(),
-  rateAsset: z.string().nullable().optional(),
-  link: z.string().nullable().optional(),
-  notes: z.string().nullable().optional()
+  rate: NumericString.nullish(),
+  rateAsset: z.string().nullish(),
+  link: z.string().nullish(),
+  notes: z.string().nullish()
 });
 
 export type LedgerAction = z.infer<typeof LedgerAction>;
@@ -178,16 +210,11 @@ export const LedgerActionCollectionResponse = getCollectionResponseType(
 );
 
 export type LedgerActionRequestPayload = {
-  readonly limit: number;
-  readonly offset: number;
-  readonly orderByAttribute?: string;
-  readonly ascending: boolean;
   readonly fromTimestamp?: string | number;
   readonly toTimestamp?: string | number;
   readonly location?: string;
   readonly asset?: string;
   readonly action?: string;
-  readonly onlyCache?: boolean;
-};
+} & HistoryRequestPayload;
 
 export type NewLedgerAction = Omit<LedgerAction, 'identifier'>;

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import pathlib
+from os import environ
 
 from pkg_resources import parse_requirements
 from setuptools import find_packages, setup
@@ -13,7 +14,7 @@ directory = pathlib.Path(__file__).parent
 requirements = directory.joinpath('requirements.txt').read_text()
 requirements = [str(r) for r in parse_requirements(requirements)]
 
-version = '1.23.4'  # Do not edit: this is maintained by bumpversion (see .bumpversion.cfg)
+version = '1.24.1'  # Do not edit: this is maintained by bumpversion (see .bumpversion.cfg)
 
 setup(
     name='rotkehlchen',
@@ -25,12 +26,26 @@ setup(
     url='https://github.com/rotki/rotki',
     packages=find_packages('.'),
     package_data={
-        # TODO: Investigate if it's needed. rotkehlchen.spec is where files seem to be copied
-        'rotkehlchen': ['data/*.json', 'data/*.meta', 'data/*.db'],
+        # Data files to package in the Rotki python package wheel. While
+        # pyinstaller does not use this list, changes here should be kept in
+        # sync with rotkehlchen.spec
+        'rotkehlchen': [
+            'data/eth_abi.json',
+            'data/eth_contracts.json',
+            'data/all_assets.json',
+            'data/all_assets.meta',
+            'data/uniswapv2_lp_tokens.json',
+            'data/uniswapv2_lp_tokens.meta',
+            'data/global.db',
+            'data/curve_pools.json',
+            'chain/ethereum/modules/dxdaomesa/data/contracts.json',
+        ],
     },
-    python_requires='>=3.6',
+    python_requires='>=3.9',
     install_requires=requirements,
-    use_scm_version=True,
+    use_scm_version={
+        'fallback_version': environ.get('PACKAGE_FALLBACK_VERSION') or version,
+    },
     setup_requires=['setuptools_scm'],
     long_description=directory.joinpath('README.md').read_text(),
     long_description_content_type='text/markdown',

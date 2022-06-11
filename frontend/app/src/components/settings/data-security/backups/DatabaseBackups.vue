@@ -1,10 +1,15 @@
 <template>
   <fragment>
     <data-table
+      :value="selected"
       :items="items"
       sort-by="time"
+      show-select
+      item-key="time"
+      :single-select="false"
       :headers="headers"
       :loading="loading"
+      @input="onSelectedChange"
     >
       <template #item.time="{ item }">
         <date-display :timestamp="item.time" />
@@ -16,7 +21,6 @@
         <v-tooltip top>
           <template #activator="{ on, attrs }">
             <v-btn
-              small
               v-bind="attrs"
               icon
               class="mx-1"
@@ -32,7 +36,6 @@
           <template #activator="{ on, attrs }">
             <v-btn
               icon
-              small
               :href="getLink(item)"
               v-bind="attrs"
               class="mx-1"
@@ -46,15 +49,14 @@
         </v-tooltip>
       </template>
       <template #body.append="{ isMobile }">
-        <tr>
-          <td :colspan="isMobile ? 1 : 2" class="font-weight-medium">
-            {{ $t('database_backups.row.total') }}
-          </td>
-          <td class="text-right">
-            {{ totalSize }}
-          </td>
-          <td v-if="!isMobile" />
-        </tr>
+        <row-append
+          label-colspan="3"
+          :label="$t('database_backups.row.total')"
+          :right-patch-colspan="1"
+          :is-mobile="isMobile"
+        >
+          {{ totalSize }}
+        </row-append>
       </template>
     </data-table>
     <confirm-dialog
@@ -75,10 +77,12 @@ import {
   ref,
   toRefs
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import { DataTableHeader } from 'vuetify';
 import Fragment from '@/components/helper/Fragment';
+import RowAppend from '@/components/helper/RowAppend.vue';
 import { getFilepath } from '@/components/settings/data-security/backups/utils';
-import { dateDisplayFormat } from '@/composables/session';
+import { setupGeneralSettings } from '@/composables/session';
 import { displayDateFormatter } from '@/data/date_formatter';
 import i18n from '@/i18n';
 import { UserDbBackup } from '@/services/backup/types';
@@ -104,25 +108,31 @@ const tableHeaders: DataTableHeader[] = [
 
 export default defineComponent({
   name: 'DatabaseBackups',
-  components: { Fragment },
+  components: {
+    RowAppend,
+    Fragment
+  },
   props: {
     items: { required: true, type: Array as PropType<UserDbBackup[]> },
+    selected: { required: true, type: Array as PropType<UserDbBackup[]> },
     loading: { required: false, type: Boolean, default: false },
     directory: { required: true, type: String }
   },
-  emits: ['remove'],
+  emits: ['change', 'remove'],
   setup(props, { emit }) {
     const { items, directory } = toRefs(props);
     const pendingDeletion = ref<UserDbBackup | null>(null);
 
+    const { dateDisplayFormat } = setupGeneralSettings();
+
     const messageInfo = computed(() => {
-      const db = pendingDeletion.value;
+      const db = get(pendingDeletion);
       if (db) {
         return {
           size: size(db.size),
           date: displayDateFormatter.format(
             new Date(db.time * 1000),
-            dateDisplayFormat.value
+            get(dateDisplayFormat)
           )
         };
       }
@@ -134,21 +144,26 @@ export default defineComponent({
     });
 
     const remove = () => {
-      const value = pendingDeletion.value;
-      pendingDeletion.value = null;
+      const value = get(pendingDeletion);
+      set(pendingDeletion, null);
       emit('remove', value);
     };
 
     const totalSize = computed(() =>
-      size(items.value.reduce((sum, db) => sum + db.size, 0))
+      size(get(items).reduce((sum, db) => sum + db.size, 0))
     );
 
     const getLink = (db: UserDbBackup) =>
       api.backups.fileUrl(getFilepath(db, directory));
 
+    const onSelectedChange = (selected: UserDbBackup[]) => {
+      emit('change', selected);
+    };
+
     return {
       remove,
       getLink,
+      onSelectedChange,
       messageInfo,
       pendingDeletion,
       size,

@@ -3,17 +3,18 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from rotkehlchen.chain.ethereum.utils import multicall
 from rotkehlchen.constants.ethereum import DS_PROXY_REGISTRY
-from rotkehlchen.errors import DeserializationError, RemoteError
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
 from rotkehlchen.serialization.deserialize import deserialize_ethereum_address
-from rotkehlchen.typing import ChecksumEthAddress
+from rotkehlchen.types import ChecksumEthAddress
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.interfaces import EthereumModule
 from rotkehlchen.utils.misc import ts_now
 
 if TYPE_CHECKING:
-    from rotkehlchen.accounting.structures import AssetBalance
+    from rotkehlchen.accounting.structures.balance import AssetBalance
     from rotkehlchen.chain.ethereum.manager import EthereumManager
     from rotkehlchen.db.dbhandler import DBHandler
 
@@ -40,7 +41,8 @@ class HasDSProxy(EthereumModule):
         self.ethereum = ethereum_manager
         self.database = database
         self.msg_aggregator = msg_aggregator
-        self.proxy_mappings: Dict[ChecksumEthAddress, ChecksumEthAddress] = {}
+        self.address_to_proxy: Dict[ChecksumEthAddress, ChecksumEthAddress] = {}
+        self.proxy_to_address: Dict[ChecksumEthAddress, ChecksumEthAddress] = {}
         self.reset_last_query_ts()
 
     def reset_last_query_ts(self) -> None:
@@ -116,20 +118,18 @@ class HasDSProxy(EthereumModule):
         """
         now = ts_now()
         if now - self.last_proxy_mapping_query_ts < DS_REQUERY_PERIOD:
-            return self.proxy_mappings
+            return self.address_to_proxy
 
         accounts = self.database.get_blockchain_accounts()
         eth_accounts = accounts.eth
         mapping = self._get_accounts_proxy(eth_accounts)
 
         self.last_proxy_mapping_query_ts = ts_now()
-        self.proxy_mappings = mapping
+        self.address_to_proxy = mapping
+        self.proxy_to_address = {v: k for k, v in mapping.items()}
         return mapping
 
     # -- Methods following the EthereumModule interface -- #
-    def on_startup(self) -> None:
-        pass
-
     def on_account_addition(self, address: ChecksumEthAddress) -> Optional[List['AssetBalance']]:
         self.reset_last_query_ts()
         # Get the proxy of the account
@@ -138,7 +138,7 @@ class HasDSProxy(EthereumModule):
             return None
 
         # add it to the mapping
-        self.proxy_mappings[address] = proxy_result
+        self.address_to_proxy[address] = proxy_result
         return None
 
     def on_account_removal(self, address: ChecksumEthAddress) -> None:

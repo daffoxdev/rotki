@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from rotkehlchen.accounting.structures import BalanceType
+from rotkehlchen.accounting.structures.balance import BalanceType
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.fval import FVal
@@ -21,7 +21,7 @@ from rotkehlchen.tests.utils.constants import A_RDN
 from rotkehlchen.tests.utils.factories import UNIT_BTC_ADDRESS1, UNIT_BTC_ADDRESS2
 from rotkehlchen.tests.utils.mock import MockResponse
 from rotkehlchen.tests.utils.rotkehlchen import setup_balances
-from rotkehlchen.typing import Location
+from rotkehlchen.types import Location
 from rotkehlchen.utils.misc import ts_now
 
 
@@ -236,6 +236,7 @@ def test_query_statistics_value_distribution(
         btc_accounts=btc_accounts,
         token_balances=token_balances,
         manually_tracked_balances=[ManuallyTrackedBalance(
+            id=-1,
             asset=A_EUR,
             label='My EUR bank',
             amount=FVal('1550'),

@@ -7,10 +7,11 @@ from unittest.mock import patch
 import pytest
 
 from rotkehlchen.accounting.ledger_actions import LedgerActionType
-from rotkehlchen.accounting.structures import ActionType, BalanceType
+from rotkehlchen.accounting.structures.balance import BalanceType
+from rotkehlchen.accounting.structures.base import ActionType
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
-from rotkehlchen.constants import YEAR_IN_SECONDS
+from rotkehlchen.constants import ONE, YEAR_IN_SECONDS
 from rotkehlchen.constants.assets import A_1INCH, A_BTC, A_DAI, A_ETH, A_USD
 from rotkehlchen.data_handler import DataHandler
 from rotkehlchen.db.dbhandler import DBHandler, detect_sqlcipher_version
@@ -40,7 +41,8 @@ from rotkehlchen.db.settings import (
     ModifiableDBSettings,
 )
 from rotkehlchen.db.utils import BlockchainAccounts, DBAssetBalance, LocationData
-from rotkehlchen.errors import AuthenticationError, InputError
+from rotkehlchen.errors.api import AuthenticationError
+from rotkehlchen.errors.misc import InputError
 from rotkehlchen.exchanges.data_structures import AssetMovement, MarginPosition, Trade
 from rotkehlchen.fval import FVal
 from rotkehlchen.premium.premium import PremiumCredentials
@@ -57,12 +59,13 @@ from rotkehlchen.tests.utils.constants import (
     DEFAULT_TESTS_MAIN_CURRENCY,
 )
 from rotkehlchen.tests.utils.rotkehlchen import add_starting_balances, add_starting_nfts
-from rotkehlchen.typing import (
+from rotkehlchen.types import (
     ApiKey,
     ApiSecret,
     AssetAmount,
     AssetMovementCategory,
     BlockchainAccountData,
+    CostBasisMethod,
     ExternalService,
     ExternalServiceApiCredentials,
     Fee,
@@ -91,9 +94,12 @@ TABLES_AT_INIT = [
     'multisettings',
     'trades',
     'ethereum_transactions',
+    'ethereum_internal_transactions',
     'ethtx_receipts',
     'ethtx_receipt_logs',
     'ethtx_receipt_log_topics',
+    'ethtx_address_mappings',
+    'evm_tx_mappings',
     'manually_tracked_balances',
     'trade_type',
     'location',
@@ -116,11 +122,10 @@ TABLES_AT_INIT = [
     'ignored_actions',
     'action_type',
     'balancer_events',
-    'ledger_actions_gitcoin_data',
-    'gitcoin_tx_type',
-    'gitcoin_grant_metadata',
     'nfts',
     'history_events',
+    'history_events_mappings',
+    'ens_mappings',
 ]
 
 
@@ -232,6 +237,7 @@ def test_export_import_db(data_dir, username):
     data = DataHandler(data_dir, msg_aggregator)
     data.unlock(username, '123', create_new=True)
     starting_balance = ManuallyTrackedBalance(
+        id=-1,
         asset=A_EUR,
         label='foo',
         amount=FVal(10),
@@ -298,7 +304,7 @@ def test_writing_fetching_data(data_dir, username):
     result, _ = data.add_ignored_assets([A_DOGE])
     assert result
     result, _ = data.add_ignored_assets([A_DOGE])
-    assert not result
+    assert result is None
 
     ignored_assets = data.db.get_ignored_assets()
     assert all(isinstance(asset, Asset) for asset in ignored_assets)
@@ -306,7 +312,7 @@ def test_writing_fetching_data(data_dir, username):
     # Test removing asset that is not in the list
     result, msg = data.remove_ignored_assets([A_RDN])
     assert 'not in ignored assets' in msg
-    assert not result
+    assert result is None
     result, _ = data.remove_ignored_assets([A_DOGE])
     assert result
     assert data.db.get_ignored_assets() == [A_DAO]
@@ -347,6 +353,8 @@ def test_writing_fetching_data(data_dir, username):
         'pnl_csv_have_summary': DEFAULT_PNL_CSV_HAVE_SUMMARY,
         'ssf_0graph_multiplier': DEFAULT_SSF_0GRAPH_MULTIPLIER,
         'last_data_migration': DEFAULT_LAST_DATA_MIGRATION,
+        'non_syncing_exchanges': [],
+        'cost_basis_method': CostBasisMethod.FIFO,
     }
     assert len(expected_dict) == len(DBSettings()), 'One or more settings are missing'
 
@@ -414,9 +422,9 @@ def test_balance_save_frequency_check(data_dir, username):
         time=data_save_ts, location=Location.KRAKEN.serialize_for_db(), usd_value='1500',  # pylint: disable=no-member  # noqa: E501
     )])
 
-    assert not data.should_save_balances()
+    assert not data.db.should_save_balances()
     data.db.set_settings(ModifiableDBSettings(balance_save_frequency=5))
-    assert data.should_save_balances()
+    assert data.db.should_save_balances()
 
     last_save_ts = data.db.get_last_balance_save_time()
     assert last_save_ts == data_save_ts
@@ -592,8 +600,8 @@ def test_query_owned_assets(data_dir, username):
             base_asset=A_ETH,
             quote_asset=A_BTC,
             trade_type=TradeType.BUY,
-            amount=AssetAmount(FVal(1)),
-            rate=Price(FVal(1)),
+            amount=AssetAmount(ONE),
+            rate=Price(ONE),
             fee=Fee(FVal('0.1')),
             fee_currency=A_BTC,
             link='',
@@ -605,7 +613,7 @@ def test_query_owned_assets(data_dir, username):
             quote_asset=A_BTC,
             trade_type=TradeType.BUY,
             amount=AssetAmount(FVal(2)),
-            rate=Price(FVal(1)),
+            rate=Price(ONE),
             fee=Fee(FVal('0.1')),
             fee_currency=A_BTC,
             link='',
@@ -616,8 +624,8 @@ def test_query_owned_assets(data_dir, username):
             base_asset=A_SDC,
             quote_asset=A_SDT2,
             trade_type=TradeType.BUY,
-            amount=AssetAmount(FVal(1)),
-            rate=Price(FVal(1)),
+            amount=AssetAmount(ONE),
+            rate=Price(ONE),
             fee=Fee(FVal('0.1')),
             fee_currency=A_BTC,
             link='',
@@ -628,8 +636,8 @@ def test_query_owned_assets(data_dir, username):
             base_asset=A_SUSHI,
             quote_asset=A_1INCH,
             trade_type=TradeType.BUY,
-            amount=AssetAmount(FVal(1)),
-            rate=Price(FVal(1)),
+            amount=AssetAmount(ONE),
+            rate=Price(ONE),
             fee=Fee(FVal('0.1')),
             fee_currency=A_BTC,
             link='',
@@ -641,7 +649,7 @@ def test_query_owned_assets(data_dir, username):
             quote_asset=A_1INCH,
             trade_type=TradeType.BUY,
             amount=AssetAmount(FVal(2)),
-            rate=Price(FVal(1)),
+            rate=Price(ONE),
             fee=Fee(FVal('0.1')),
             fee_currency=A_BTC,
             link='',
@@ -1012,6 +1020,10 @@ def test_can_unlock_db_with_disabled_taxfree_after_period(data_dir, username):
 
 
 def test_timed_balances_primary_key_works(user_data_dir):
+    """
+    Test that adding two timed_balances with the same primary key
+    i.e (time, currency, category) fails.
+    """
     msg_aggregator = MessagesAggregator()
     db = DBHandler(user_data_dir, '123', msg_aggregator, None)
     balances = [
@@ -1029,13 +1041,13 @@ def test_timed_balances_primary_key_works(user_data_dir):
             usd_value='9100',
         ),
     ]
-    db.add_multiple_balances(balances)
-    warnings = msg_aggregator.consume_warnings()
-    errors = msg_aggregator.consume_errors()
-    assert len(warnings) == 1
-    assert len(errors) == 0
+    with pytest.raises(InputError) as exc_info:
+        db.add_multiple_balances(balances)
+    assert exc_info.errisinstance(InputError)
+    assert 'Adding timed_balance failed' in str(exc_info.value)
+
     balances = db.query_timed_balances(asset=A_BTC)
-    assert len(balances) == 1
+    assert len(balances) == 0
 
     balances = [
         DBAssetBalance(
@@ -1053,17 +1065,13 @@ def test_timed_balances_primary_key_works(user_data_dir):
         ),
     ]
     db.add_multiple_balances(balances)
-    warnings = msg_aggregator.consume_warnings()
-    errors = msg_aggregator.consume_errors()
-    assert len(warnings) == 0
-    assert len(errors) == 0
-    balances = db.query_timed_balances(asset=A_ETH)
     assert len(balances) == 2
 
 
 def test_multiple_location_data_and_balances_same_timestamp(user_data_dir):
-    """Test that adding location and balance data with same timestamp does not crash.
-
+    """
+    Test that adding location and balance data with same timestamp raises an error
+    and no balance/location is added.
     Regression test for https://github.com/rotki/rotki/issues/1043
     """
     msg_aggregator = MessagesAggregator()
@@ -1084,9 +1092,13 @@ def test_multiple_location_data_and_balances_same_timestamp(user_data_dir):
             usd_value='9100',
         ),
     ]
-    db.add_multiple_balances(balances)
+    with pytest.raises(InputError) as exc_info:
+        db.add_multiple_balances(balances)
+    assert 'Adding timed_balance failed.' in str(exc_info.value)
+    assert exc_info.errisinstance(InputError)
+
     balances = db.query_timed_balances(from_ts=0, to_ts=1590676728, asset=A_BTC)
-    assert len(balances) == 1
+    assert len(balances) == 0
 
     locations = [
         LocationData(
@@ -1099,10 +1111,13 @@ def test_multiple_location_data_and_balances_same_timestamp(user_data_dir):
             usd_value='56',
         ),
     ]
-    db.add_multiple_location_data(locations)
+    with pytest.raises(InputError) as exc_info:
+        db.add_multiple_location_data(locations)
+    assert 'Tried to add a timed_location_data for' in str(exc_info.value)
+    assert exc_info.errisinstance(InputError)
+
     locations = db.get_latest_location_value_distribution()
-    assert len(locations) == 1
-    assert locations[0].usd_value == '55'
+    assert len(locations) == 0
 
 
 def test_set_get_rotkehlchen_premium_credentials(data_dir, username):
@@ -1219,7 +1234,7 @@ def test_int_overflow_at_tuple_insertion(database, caplog):
         address='0xfoo',
         transaction_id=99999999999999999999999999999999999999999,
         asset=A_BTC,
-        amount=FVal(1),
+        amount=ONE,
         fee_asset=A_BTC,
         fee=Fee(FVal('0.0001')),
         link='a link',

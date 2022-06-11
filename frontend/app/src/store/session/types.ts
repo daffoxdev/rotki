@@ -14,8 +14,6 @@ export enum PrivacyMode {
   PRIVATE = 2
 }
 
-export const PrivacyModeEnum = z.nativeEnum(PrivacyMode);
-
 export interface SessionState {
   newAccount: boolean;
   logged: boolean;
@@ -32,11 +30,11 @@ export interface SessionState {
   tags: Tags;
   watchers: Watcher<WatcherTypes>[];
   queriedAddresses: QueriedAddresses;
-  ignoredAssets: string[];
   lastBalanceSave: number;
   lastDataUpload: number;
   timeframe: TimeFramePeriod;
   showUpdatePopup: boolean;
+  animationsEnabled: boolean;
 }
 
 export const SyncConflictPayload = z.object({

@@ -10,61 +10,75 @@
 </template>
 
 <script lang="ts">
-import { Component, Vue, Watch } from 'vue-property-decorator';
-import { mapActions, mapGetters, mapState } from 'vuex';
-import { Version } from '@/store/types';
+import {
+  computed,
+  defineComponent,
+  onMounted,
+  toRefs,
+  watch
+} from '@vue/composition-api';
+import { get, useIntervalFn } from '@vueuse/core';
+import { useInterop } from '@/electron-interop';
+import { useMainStore } from '@/store/store';
+import { useStore } from '@/store/utils';
 
-@Component({
-  computed: {
-    ...mapState(['version']),
-    ...mapGetters('settings', ['versionUpdateCheckFrequency']),
-    ...mapGetters(['updateNeeded'])
-  },
-  methods: {
-    ...mapActions('session', ['openUpdatePopup'])
+export default defineComponent({
+  name: 'AppUpdateIndicator',
+  setup() {
+    const mainStore = useMainStore();
+    const store = useStore();
+    const { version, updateNeeded } = toRefs(mainStore);
+    const { getVersion } = mainStore;
+    const { isPackaged, openUrl } = useInterop();
+
+    const versionUpdateCheckFrequency = computed(
+      () => store.state.settings!.versionUpdateCheckFrequency
+    );
+    const appVersion = computed(() => get(version).latestVersion);
+
+    const openLink = () => openUrl(get(version).downloadUrl);
+    const openUpdatePopup = async () => {
+      await store.dispatch('session/openUpdatePopup');
+    };
+
+    const update = () => {
+      if (isPackaged) {
+        openUpdatePopup();
+      } else {
+        openLink();
+      }
+    };
+
+    const period = get(versionUpdateCheckFrequency) * 60 * 60 * 1000;
+
+    const { pause, resume, isActive } = useIntervalFn(
+      () => {
+        getVersion();
+      },
+      period,
+      { immediate: false }
+    );
+
+    const setVersionUpdateCheckInterval = () => {
+      if (isActive) pause();
+      if (period > 0) {
+        resume();
+      }
+    };
+
+    onMounted(() => {
+      setVersionUpdateCheckInterval();
+    });
+
+    watch(versionUpdateCheckFrequency, () => setVersionUpdateCheckInterval());
+
+    return {
+      appVersion,
+      updateNeeded,
+      openUpdatePopup,
+      update,
+      openLink
+    };
   }
-})
-export default class AppUpdateIndicator extends Vue {
-  updateNeeded!: boolean;
-  version!: Version;
-  versionUpdateCheckFrequency!: number;
-  refreshInterval: any;
-
-  openUpdatePopup!: () => void;
-
-  @Watch('versionUpdateCheckFrequency')
-  async setVersionUpdateCheckInterval() {
-    clearInterval(this.refreshInterval);
-    const period = this.versionUpdateCheckFrequency * 60 * 60 * 1000;
-    if (period > 0) {
-      this.refreshInterval = setInterval(async () => {
-        await this.$store.dispatch('version');
-      }, period);
-    }
-  }
-
-  created() {
-    this.setVersionUpdateCheckInterval();
-  }
-
-  openAutomaticUpdatePopup() {
-    this.openUpdatePopup();
-  }
-
-  get appVersion(): string {
-    return this.version.latestVersion;
-  }
-
-  openLink() {
-    this.$interop.openUrl(this.version.downloadUrl);
-  }
-
-  update() {
-    if (this.$interop.isPackaged) {
-      this.openUpdatePopup();
-    } else {
-      this.openLink();
-    }
-  }
-}
+});
 </script>

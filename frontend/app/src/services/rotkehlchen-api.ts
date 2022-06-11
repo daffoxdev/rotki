@@ -4,6 +4,12 @@ import {
   Eth2DailyStats,
   Eth2DailyStatsPayload
 } from '@rotki/common/lib/staking/eth2';
+import {
+  LocationData,
+  NetValue,
+  TimedAssetBalances,
+  TimedBalances
+} from '@rotki/common/lib/statistics';
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { SupportedCurrency } from '@/data/currencies';
 import { AssetApi } from '@/services/assets/asset-api';
@@ -22,23 +28,19 @@ import { HistoryApi } from '@/services/history/history-api';
 import { ReportsApi } from '@/services/reports/reports-api';
 import { SessionApi } from '@/services/session/session-api';
 import {
-  AsyncQuery,
   BackendInfo,
   BtcAccountData,
-  DBAssetBalance,
   GeneralAccountData,
-  LocationData,
   Messages,
-  NetValue,
   PendingTask,
   PeriodicClientQueryResult,
-  SingleAssetBalance,
   SyncAction,
   TaskNotFoundError,
   TaskStatus
 } from '@/services/types-api';
 import {
   handleResponse,
+  paramsSerializer,
   validAccountOperationStatus,
   validAuthorizedStatus,
   validStatus,
@@ -65,6 +67,11 @@ import {
   LoginCredentials,
   SyncConflictError
 } from '@/types/login';
+import {
+  emptyPagination,
+  KrakenStakingEvents,
+  KrakenStakingPagination
+} from '@/types/staking';
 import { TaskResultResponse } from '@/types/task';
 import {
   ExternalServiceKey,
@@ -78,6 +85,7 @@ import {
 } from '@/types/user';
 import { assert } from '@/utils/assertions';
 import { nonNullProperties } from '@/utils/data';
+import { downloadFileByUrl } from '@/utils/download';
 
 export class RotkehlchenApi {
   private axios: AxiosInstance;
@@ -89,14 +97,34 @@ export class RotkehlchenApi {
   private _assets: AssetApi;
   private _backups: BackupApi;
   private _serverUrl: string;
+  private signal = axios.CancelToken.source();
   private readonly baseTransformer = setupTransformer([]);
+  private readonly pathname: string;
+
+  get defaultServerUrl(): string {
+    if (import.meta.env.VITE_BACKEND_URL) {
+      return import.meta.env.VITE_BACKEND_URL as string;
+    }
+
+    if (import.meta.env.VITE_PUBLIC_PATH) {
+      const pathname = this.pathname;
+      return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+    }
+
+    return '';
+  }
 
   get serverUrl(): string {
     return this._serverUrl;
   }
 
   get defaultBackend(): boolean {
-    return this._serverUrl === process.env.VUE_APP_BACKEND_URL;
+    return this._serverUrl === this.defaultServerUrl;
+  }
+
+  private cancel() {
+    this.signal.cancel('cancelling all pending requests');
+    this.signal = axios.CancelToken.source();
   }
 
   private setupApis = (axios: AxiosInstance) => ({
@@ -110,11 +138,13 @@ export class RotkehlchenApi {
   });
 
   constructor() {
-    this._serverUrl = process.env.VUE_APP_BACKEND_URL!;
+    this.pathname = window.location.pathname;
+    this._serverUrl = this.defaultServerUrl;
     this.axios = axios.create({
       baseURL: `${this.serverUrl}/api/1/`,
       timeout: 30000
     });
+    this.setupCancellation();
     this.baseTransformer = setupTransformer();
     ({
       defi: this._defi,
@@ -161,6 +191,7 @@ export class RotkehlchenApi {
       baseURL: `${serverUrl}/api/1/`,
       timeout: 30000
     });
+    this.setupCancellation();
     ({
       defi: this._defi,
       session: this._session,
@@ -170,6 +201,21 @@ export class RotkehlchenApi {
       assets: this._assets,
       backups: this._backups
     } = this.setupApis(this.axios));
+  }
+
+  private setupCancellation() {
+    this.axios.interceptors.request.use(
+      request => {
+        request.cancelToken = this.signal.token;
+        return request;
+      },
+      error => {
+        if (error.response) {
+          return Promise.reject(error.response.data);
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   checkIfLogged(username: string): Promise<boolean> {
@@ -203,21 +249,18 @@ export class RotkehlchenApi {
     return Object.keys(data);
   }
 
-  logout(username: string): Promise<boolean> {
-    return this.axios
-      .patch<ActionResult<boolean>>(
-        `/users/${username}`,
-        {
-          action: 'logout'
-        },
-        { validateStatus: validAccountOperationStatus }
-      )
-      .then(value => {
-        if (value.status === 409) {
-          return true;
-        }
-        return handleResponse(value);
-      });
+  async logout(username: string): Promise<boolean> {
+    const response = await this.axios.patch<ActionResult<boolean>>(
+      `/users/${username}`,
+      {
+        action: 'logout'
+      },
+      { validateStatus: validAccountOperationStatus }
+    );
+
+    const success = response.status === 409 ? true : handleResponse(response);
+    this.cancel();
+    return success;
   }
 
   queryPeriodicData(): Promise<PeriodicClientQueryResult> {
@@ -233,9 +276,9 @@ export class RotkehlchenApi {
     username: string,
     apiKey: string,
     apiSecret: string
-  ): Promise<boolean> {
+  ): Promise<true> {
     return this.axios
-      .patch<ActionResult<boolean>>(
+      .patch<ActionResult<true>>(
         `/users/${username}`,
         {
           premium_api_key: apiKey,
@@ -246,9 +289,9 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  deletePremiumCredentials(): Promise<boolean> {
+  deletePremiumCredentials(): Promise<true> {
     return this.axios
-      .delete<ActionResult<boolean>>('/premium', {
+      .delete<ActionResult<true>>('/premium', {
         validateStatus: validStatus
       })
       .then(handleResponse);
@@ -258,9 +301,9 @@ export class RotkehlchenApi {
     username: string,
     currentPassword: string,
     newPassword: string
-  ): Promise<boolean> {
+  ): Promise<true> {
     return this.axios
-      .patch<ActionResult<boolean>>(
+      .patch<ActionResult<true>>(
         `/users/${username}/password`,
         {
           name: username,
@@ -274,18 +317,21 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  async ping(): Promise<AsyncQuery> {
-    return this.axios
-      .get<ActionResult<AsyncQuery>>('/ping') // no validate status here since defaults work
-      .then(handleResponse);
+  async ping(): Promise<PendingTask> {
+    const ping = await this.axios.get<ActionResult<PendingTask>>('/ping', {
+      transformResponse: basicAxiosTransformer
+    }); // no validate status here since defaults work
+    return handleResponse(ping);
   }
 
-  info(): Promise<BackendInfo> {
-    return this.axios
-      .get<ActionResult<BackendInfo>>('/info', {
-        transformResponse: basicAxiosTransformer
-      })
-      .then(handleResponse);
+  async info(checkForUpdates: boolean = false): Promise<BackendInfo> {
+    const response = await this.axios.get<ActionResult<BackendInfo>>('/info', {
+      params: axiosSnakeCaseTransformer({
+        checkForUpdates
+      }),
+      transformResponse: basicAxiosTransformer
+    });
+    return BackendInfo.parse(handleResponse(response));
   }
 
   async setSettings(settings: SettingsUpdate): Promise<UserSettingsModel> {
@@ -319,16 +365,21 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  queryBalancesAsync(payload: Partial<AllBalancePayload>): Promise<AsyncQuery> {
-    return this.axios
-      .get<ActionResult<AsyncQuery>>('/balances/', {
+  async queryBalancesAsync(
+    payload: Partial<AllBalancePayload>
+  ): Promise<PendingTask> {
+    const response = await this.axios.get<ActionResult<PendingTask>>(
+      '/balances/',
+      {
         params: axiosSnakeCaseTransformer({
           asyncQuery: true,
           ...payload
         }),
-        validateStatus: validStatus
-      })
-      .then(handleResponse);
+        validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+    return handleResponse(response);
   }
 
   queryTasks(): Promise<TaskStatus> {
@@ -380,38 +431,48 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  queryTimedBalancesData(
+  async queryTimedBalancesData(
     asset: string,
-    startTs: number,
-    endTs: number
-  ): Promise<SingleAssetBalance[]> {
-    return this.axios
-      .get<ActionResult<SingleAssetBalance[]>>(`/statistics/balance/${asset}`, {
-        params: {
-          from_timestamp: startTs,
-          to_timestamp: endTs
-        },
-        validateStatus: validStatus
-      })
-      .then(handleResponse);
+    fromTimestamp: number,
+    toTimestamp: number
+  ): Promise<TimedBalances> {
+    const balances = await this.axios.get<ActionResult<TimedBalances>>(
+      `/statistics/balance/${asset}`,
+      {
+        params: axiosSnakeCaseTransformer({
+          fromTimestamp,
+          toTimestamp
+        }),
+        validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+
+    return TimedBalances.parse(handleResponse(balances));
   }
 
-  queryLatestLocationValueDistribution(): Promise<LocationData[]> {
-    return this.axios
-      .get<ActionResult<LocationData[]>>('/statistics/value_distribution', {
-        params: { distribution_by: 'location' },
-        validateStatus: validStatus
-      })
-      .then(handleResponse);
+  async queryLatestLocationValueDistribution(): Promise<LocationData> {
+    const statistics = await this.axios.get<ActionResult<LocationData>>(
+      '/statistics/value_distribution',
+      {
+        params: axiosSnakeCaseTransformer({ distributionBy: 'location' }),
+        validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+    return LocationData.parse(handleResponse(statistics));
   }
 
-  queryLatestAssetValueDistribution(): Promise<DBAssetBalance[]> {
-    return this.axios
-      .get<ActionResult<DBAssetBalance[]>>('/statistics/value_distribution', {
-        params: { distribution_by: 'asset' },
-        validateStatus: validStatus
-      })
-      .then(handleResponse);
+  async queryLatestAssetValueDistribution(): Promise<TimedAssetBalances> {
+    const statistics = await this.axios.get<ActionResult<TimedAssetBalances>>(
+      '/statistics/value_distribution',
+      {
+        params: axiosSnakeCaseTransformer({ distributionBy: 'asset' }),
+        validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+    return TimedAssetBalances.parse(handleResponse(statistics));
   }
 
   queryStatisticsRenderer(): Promise<string> {
@@ -427,8 +488,9 @@ export class RotkehlchenApi {
       .get<ActionResult<PendingTask>>('/exchange_rates', {
         params: {
           async_query: true,
-          currencies: currencies.join(',')
+          currencies
         },
+        paramsSerializer,
         validateStatus: validWithoutSessionStatus,
         transformResponse: basicAxiosTransformer
       })
@@ -462,12 +524,11 @@ export class RotkehlchenApi {
 
   async login(credentials: LoginCredentials): Promise<UserAccount> {
     const { password, syncApproval, username } = credentials;
-    const response = await this.axios.patch<
+    const response = await this.axios.post<
       ActionResult<UserAccount | SyncConflictPayload>
     >(
       `/users/${username}`,
       axiosSnakeCaseTransformer({
-        action: 'login',
         password,
         syncApproval
       }),
@@ -498,24 +559,26 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  importDataFrom(
+  async importDataFrom(
     source: string,
     file: string,
     timestampFormat: string | null
-  ): Promise<boolean> {
-    return this.axios
-      .put<ActionResult<boolean>>(
-        '/import',
-        axiosSnakeCaseTransformer({
-          source,
-          file,
-          timestampFormat
-        }),
-        {
-          validateStatus: validStatus
-        }
-      )
-      .then(handleResponse);
+  ): Promise<PendingTask> {
+    const response = await this.axios.put<ActionResult<PendingTask>>(
+      '/import',
+      axiosSnakeCaseTransformer({
+        source,
+        file,
+        timestampFormat,
+        asyncQuery: true
+      }),
+      {
+        validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+
+    return handleResponse(response);
   }
 
   removeBlockchainAccount(
@@ -871,6 +934,44 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
+  async importBalancesSnapshot(
+    balancesSnapshotFile: string,
+    locationDataSnapshotFile: string
+  ): Promise<boolean> {
+    const response = await this.axios.put<ActionResult<boolean>>(
+      '/snapshot/import',
+      axiosSnakeCaseTransformer({
+        balancesSnapshotFile,
+        locationDataSnapshotFile
+      }),
+      {
+        validateStatus: validWithSessionAndExternalService,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+    return handleResponse(response);
+  }
+
+  async uploadBalancesSnapshot(
+    balancesSnapshotFile: File,
+    locationDataSnapshotFile: File
+  ): Promise<boolean> {
+    const data = new FormData();
+    data.append('balances_snapshot_file', balancesSnapshotFile);
+    data.append('location_data_snapshot_file', locationDataSnapshotFile);
+    const response = await this.axios.post<ActionResult<boolean>>(
+      '/snapshot/import',
+      data,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      }
+    );
+
+    return handleResponse(response);
+  }
+
   async eth2StakingDetails(): Promise<PendingTask> {
     const response = await this.axios.get<ActionResult<PendingTask>>(
       '/blockchains/ETH2/stake/details',
@@ -954,15 +1055,53 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  importFile(data: FormData) {
-    return this.axios
-      .post<ActionResult<boolean>>('/import', data, {
+  private async interalKrakenStaking<T>(
+    pagination: KrakenStakingPagination,
+    asyncQuery: boolean = false
+  ): Promise<T> {
+    const response = await this.axios.post<ActionResult<T>>(
+      '/staking/kraken',
+      axiosSnakeCaseTransformer({
+        asyncQuery,
+        ...pagination,
+        orderByAttribute: getUpdatedKey(pagination.orderByAttribute, false)
+      }),
+      {
+        validateStatus: validWithSessionAndExternalService,
+        transformResponse: basicAxiosTransformer
+      }
+    );
+    return handleResponse(response);
+  }
+
+  async refreshKrakenStaking(): Promise<PendingTask> {
+    return await this.interalKrakenStaking(emptyPagination(), true);
+  }
+
+  async fetchKrakenStakingEvents(
+    pagination: KrakenStakingPagination
+  ): Promise<KrakenStakingEvents> {
+    const data = await this.interalKrakenStaking({
+      ...pagination,
+      onlyCache: true
+    });
+    return KrakenStakingEvents.parse(data);
+  }
+
+  async importFile(data: FormData): Promise<PendingTask> {
+    const response = await this.axios.post<ActionResult<PendingTask>>(
+      '/import',
+      data,
+      {
         validateStatus: validStatus,
+        transformResponse: basicAxiosTransformer,
         headers: {
           'Content-Type': 'multipart/form-data'
         }
-      })
-      .then(handleResponse);
+      }
+    );
+
+    return handleResponse(response);
   }
 
   queryBinanceMarkets(location: string): Promise<string[]> {
@@ -985,33 +1124,26 @@ export class RotkehlchenApi {
       .then(handleResponse);
   }
 
-  downloadCSV(): Promise<ActionStatus> {
-    return this.axios
-      .get('/history/download/', {
+  async downloadCSV(): Promise<ActionStatus> {
+    try {
+      const response = await this.axios.get('/history/download/', {
         responseType: 'blob',
         validateStatus: validTaskStatus
-      })
-      .then(async response => {
-        if (response.status === 200) {
-          const url = window.URL.createObjectURL(response.data);
-          const link = document.createElement('a');
-          link.id = 'history-download-link';
-          link.href = url;
-          link.setAttribute('download', 'reports.zip');
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          return { success: true };
-        }
-
-        const body = await (response.data as Blob).text();
-        const result: ActionResult<null> = JSON.parse(body);
-
-        return { success: false, message: result.message };
-      })
-      .catch(reason => {
-        return { success: false, message: reason.message };
       });
+
+      if (response.status === 200) {
+        const url = window.URL.createObjectURL(response.data);
+        downloadFileByUrl(url, 'reports.zip');
+        return { success: true };
+      }
+
+      const body = await (response.data as Blob).text();
+      const result: ActionResult<null> = JSON.parse(body);
+
+      return { success: false, message: result.message };
+    } catch (e: any) {
+      return { success: false, message: e.message };
+    }
   }
 
   async airdrops(): Promise<PendingTask> {
@@ -1086,6 +1218,43 @@ export class RotkehlchenApi {
     return this.axios
       .get<ActionResult<PendingTask>>('/nfts', {
         params: axiosSnakeCaseTransformer(params),
+        validateStatus: validWithoutSessionStatus,
+        transformResponse: basicAxiosTransformer
+      })
+      .then(handleResponse);
+  }
+
+  async exportSnapshotCSV(payload: {
+    path: string;
+    timestamp: number;
+  }): Promise<boolean> {
+    return this.axios
+      .post<ActionResult<boolean>>(
+        '/snapshot/export',
+        axiosSnakeCaseTransformer(payload),
+        {
+          validateStatus: validWithoutSessionStatus,
+          transformResponse: basicAxiosTransformer
+        }
+      )
+      .then(handleResponse);
+  }
+
+  async downloadSnapshot(payload: { timestamp: number }): Promise<any> {
+    return this.axios.post<any>(
+      '/snapshot/download',
+      axiosSnakeCaseTransformer(payload),
+      {
+        validateStatus: validWithoutSessionStatus,
+        responseType: 'arraybuffer'
+      }
+    );
+  }
+
+  async deleteSnapshot(payload: { timestamp: number }): Promise<boolean> {
+    return this.axios
+      .delete<ActionResult<boolean>>('/snapshot/delete', {
+        data: axiosSnakeCaseTransformer(payload),
         validateStatus: validWithoutSessionStatus,
         transformResponse: basicAxiosTransformer
       })

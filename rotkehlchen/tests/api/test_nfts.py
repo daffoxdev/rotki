@@ -3,6 +3,7 @@ import warnings as test_warnings
 
 import pytest
 import requests
+from flaky import flaky
 
 from rotkehlchen.chain.ethereum.modules.nfts import FREE_NFT_LIMIT
 from rotkehlchen.constants.misc import ZERO
@@ -19,6 +20,7 @@ TEST_ACC2 = '0x3Ba6eB0e4327B96aDe6D4f3b578724208a590CEF'
 TEST_ACC3 = '0xC21A5ee89D306353e065a6dd5779470DE395DBaC'
 
 
+@flaky(max_runs=3, min_passes=1)  # all opensea calls have become quite flaky
 @pytest.mark.parametrize('ethereum_accounts', [[TEST_ACC1]])
 @pytest.mark.parametrize('start_with_valid_premium', [bool(random.getrandbits(1))])
 @pytest.mark.parametrize('ethereum_modules', [['nfts']])
@@ -54,7 +56,6 @@ def test_nft_query(rotkehlchen_api_server, start_with_valid_premium):
         if entry['token_identifier'] == '_nft_0xc3f733ca98e0dad0386979eb96fb1722a1a05e69_129':
 
             assert entry['name'] == 'MoonCat #129: 0x0082206dcb'
-            assert entry['permalink'] == 'https://opensea.io/assets/0xc3f733ca98e0dad0386979eb96fb1722a1a05e69/129'  # noqa: E501
             assert entry['external_link'] == 'https://purrse.mooncat.community/129'
             assert entry['image_url'] == 'https://lh3.googleusercontent.com/C5ceArerHdGigmSt9tCsUD67Nbxr-P05fSsP_Pye34zN78lr2519P66kANkb55nfWW-ZMWFM4oCawLF4fW2jfRPxWButdqIX0QM95DM'  # noqa: E501
             assert FVal(entry['price_eth']) > ZERO
@@ -69,6 +70,7 @@ def test_nft_query(rotkehlchen_api_server, start_with_valid_premium):
     assert nft_found, 'Could not find and verify the test NFT'
 
 
+@flaky(max_runs=3, min_passes=1)  # all opensea calls have become quite flaky
 @pytest.mark.parametrize('ethereum_accounts', [[]])
 @pytest.mark.parametrize('start_with_valid_premium', [True])
 @pytest.mark.parametrize('ethereum_modules', [['nfts']])
@@ -111,6 +113,7 @@ def test_nft_query_after_account_add(rotkehlchen_api_server):
     assert TEST_ACC2 in result['addresses']
 
 
+@flaky(max_runs=3, min_passes=1)  # all opensea calls have become quite flaky
 @pytest.mark.parametrize('ethereum_accounts', [[TEST_ACC2, TEST_ACC3]])
 @pytest.mark.parametrize('start_with_valid_premium', [True])
 @pytest.mark.parametrize('ethereum_modules', [['nfts']])

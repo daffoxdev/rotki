@@ -101,6 +101,7 @@ export default class ActiveModules extends Vue {
 
   get style() {
     return {
+      background: this.$vuetify.theme.dark ? '#1E1E1E' : 'white',
       width: `${this.modules.length * 38}px`
     };
   }

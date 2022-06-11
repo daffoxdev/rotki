@@ -4,27 +4,33 @@ import json
 import logging
 from collections import defaultdict
 from json.decoder import JSONDecodeError
-from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Tuple, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    DefaultDict,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 from urllib.parse import urlencode
 
 import gevent
 import requests
-from typing_extensions import Literal
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_binance
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
 from rotkehlchen.db.constants import BINANCE_MARKETS_KEY
-from rotkehlchen.errors import (
-    DeserializationError,
-    InputError,
-    RemoteError,
-    UnknownAsset,
-    UnsupportedAsset,
-)
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.misc import InputError, RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import (
     AssetMovement,
     BinancePair,
@@ -49,7 +55,7 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_timestamp_from_binance,
     deserialize_timestamp_from_date,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, AssetMovementCategory, Fee, Location, Timestamp
+from rotkehlchen.types import ApiKey, ApiSecret, AssetMovementCategory, Fee, Location, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
 from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
@@ -185,7 +191,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             database: 'DBHandler',
             msg_aggregator: MessagesAggregator,
             uri: str = BINANCE_BASE_URL,
-            PAIRS: Optional[List[str]] = None,  # noqa: N803
+            binance_selected_trade_pairs: Optional[List[str]] = None,  # noqa: N803
     ):
         exchange_location = Location.BINANCE
         if uri == BINANCEUS_BASE_URL:
@@ -205,7 +211,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
         })
         self.msg_aggregator = msg_aggregator
         self.offset_ms = 0
-        self.selected_pairs = PAIRS
+        self.selected_pairs = binance_selected_trade_pairs
 
     def first_connection(self) -> None:
         if self.first_connection_made:
@@ -498,10 +504,11 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             try:
                 asset = asset_from_binance(asset_symbol)
             except UnsupportedAsset as e:
-                self.msg_aggregator.add_warning(
-                    f'Found unsupported {self.name} asset {e.asset_name}. '
-                    f'Ignoring its balance query.',
-                )
+                if e.asset_name != 'ETF':
+                    self.msg_aggregator.add_warning(
+                        f'Found unsupported {self.name} asset {e.asset_name}. '
+                        f'Ignoring its balance query.',
+                    )
                 continue
             except UnknownAsset as e:
                 self.msg_aggregator.add_warning(
@@ -1266,7 +1273,7 @@ class Binance(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             )
             log.debug(f'{self.name} fiat withdraw history result', results_num=len(fiat_withdraws))
         else:
-            fiat_deposits = fiat_withdraws = []
+            fiat_deposits, fiat_withdraws = [], []
 
         movements = []
         for raw_movement in deposits + withdraws:

@@ -9,7 +9,7 @@
 
           <v-switch
             v-model="anonymousUsageAnalytics"
-            class="general-settings__fields__anonymous-usage-statistics"
+            class="general-settings__fields__anonymous-usage-statistics mb-4 mt-0"
             color="primary"
             :label="$t('general_settings.labels.anonymous_analytics')"
             :success-messages="
@@ -45,6 +45,7 @@
             <v-col class="shrink">
               <v-switch
                 v-model="versionUpdateCheckEnabled"
+                class="mt-3"
                 :label="
                   $t('general_settings.labels.version_update_check_enabled')
                 "
@@ -118,7 +119,7 @@
 
           <v-switch
             v-model="displayDateInLocaltime"
-            class="mt-0 general-settings__fields__display-date-in-localtime"
+            class="general-settings__fields__display-date-in-localtime mb-4 mt-0"
             color="primary"
             :label="$t('general_settings.labels.display_date_in_localtime')"
             :success-messages="
@@ -542,14 +543,16 @@ export default class General extends Mixins<SettingsMixin<SettingsEntries>>(
     setting: SettingsEntries,
     baseMessage: BaseMessage
   ): Promise<boolean> {
-    const { message, success } = await this.settingsUpdate(update);
+    const result = await this.settingsUpdate(update);
 
     this.validateSettingChange(
       setting,
-      success ? 'success' : 'error',
-      success ? baseMessage.success : `${baseMessage.error}: ${message}`
+      result.success ? 'success' : 'error',
+      result.success
+        ? baseMessage.success
+        : `${baseMessage.error}: ${result.message}`
     );
-    return success;
+    return result.success;
   }
 
   async onSelectedCurrencyChange(currency: Currency) {
@@ -609,7 +612,7 @@ export default class General extends Mixins<SettingsMixin<SettingsEntries>>(
   async onThousandSeparatorChange(thousandSeparator: string) {
     if (
       thousandSeparator === this.decimalSeparator ||
-      /[0-9]/.test(thousandSeparator)
+      /[0-9+e]/.test(thousandSeparator)
     ) {
       const state = this.$store.state;
       this.thousandSeparator = state.settings![THOUSAND_SEPARATOR];
@@ -643,7 +646,7 @@ export default class General extends Mixins<SettingsMixin<SettingsEntries>>(
             'general_settings.decimal_separator.validation.cannot_be_the_same'
           ).toString();
         }
-        if (/[0-9]/.test(v)) {
+        if (/[0-9+e]/.test(v)) {
           return this.$t(
             'general_settings.decimal_separator.validation.cannot_be_numeric_character'
           ).toString();

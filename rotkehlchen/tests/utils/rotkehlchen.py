@@ -4,7 +4,7 @@ from unittest.mock import _patch, patch
 
 import requests
 
-from rotkehlchen.accounting.structures import Balance, BalanceType
+from rotkehlchen.accounting.structures.balance import Balance, BalanceType
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
@@ -22,7 +22,7 @@ from rotkehlchen.tests.utils.exchanges import (
     patch_poloniex_balances_query,
     try_get_first_exchange,
 )
-from rotkehlchen.typing import BTCAddress, ChecksumEthAddress, Location, Timestamp
+from rotkehlchen.types import BTCAddress, ChecksumEthAddress, Location, Timestamp
 
 
 class BalancesTestSetup(NamedTuple):

@@ -22,6 +22,7 @@ import {
   DATE_INPUT_FORMAT,
   DECIMAL_SEPARATOR,
   DEFI_SETUP_DONE,
+  ENABLE_ENS,
   EXPLORERS,
   FrontendSettingsPayload,
   GRAPH_ZERO_BASED,
@@ -39,11 +40,11 @@ import {
   VISIBLE_TIMEFRAMES
 } from '@/types/frontend-settings';
 
-jest.mock('@/services/rotkehlchen-api');
+vi.mock('@/services/rotkehlchen-api');
 
 describe('settings:actions', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
   test('updates settings on valid payload', async () => {
     expect.assertions(1);
@@ -87,7 +88,8 @@ describe('settings:actions', () => {
             },
             [DATE_INPUT_FORMAT]: DateFormat.DateMonthYearHourMinuteSecond,
             [VERSION_UPDATE_CHECK_FREQUENCY]:
-              Defaults.DEFAULT_VERSION_UPDATE_CHECK_FREQUENCY
+              Defaults.DEFAULT_VERSION_UPDATE_CHECK_FREQUENCY,
+            [ENABLE_ENS]: true
           })
         )
       })

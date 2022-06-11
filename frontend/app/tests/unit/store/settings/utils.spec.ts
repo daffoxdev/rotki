@@ -15,6 +15,7 @@ import {
   CURRENCY_LOCATION,
   DECIMAL_SEPARATOR,
   DEFI_SETUP_DONE,
+  ENABLE_ENS,
   EXPLORERS,
   FrontendSettings,
   GRAPH_ZERO_BASED,
@@ -32,7 +33,7 @@ import {
 
 describe('settings:utils', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    vi.resetAllMocks();
   });
 
   test('restore nothing is the loaded value has an unexpected type', async () => {
@@ -68,7 +69,8 @@ describe('settings:utils', () => {
       [LIGHT_THEME]: LIGHT_COLORS,
       [DARK_THEME]: DARK_COLORS,
       [GRAPH_ZERO_BASED]: false,
-      [NFTS_IN_NET_VALUE]: true
+      [NFTS_IN_NET_VALUE]: true,
+      [ENABLE_ENS]: true
     });
   });
 });

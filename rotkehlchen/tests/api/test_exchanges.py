@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 import pytest
 import requests
 
+from rotkehlchen.constants import ONE
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.constants.limits import FREE_ASSET_MOVEMENTS_LIMIT, FREE_TRADES_LIMIT
 from rotkehlchen.db.constants import KRAKEN_ACCOUNT_TYPE_KEY
@@ -20,6 +21,7 @@ from rotkehlchen.exchanges.kucoin import API_KEY_ERROR_CODE_ACTION as KUCOIN_API
 from rotkehlchen.exchanges.manager import SUPPORTED_EXCHANGES
 from rotkehlchen.fval import FVal
 from rotkehlchen.globaldb import GlobalDBHandler
+from rotkehlchen.globaldb.binance import GlobalDBBinance
 from rotkehlchen.tests.utils.api import (
     api_url_for,
     assert_error_response,
@@ -46,7 +48,7 @@ from rotkehlchen.tests.utils.history import (
     prepare_rotki_for_history_processing_test,
 )
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import AssetMovementCategory, Location, Timestamp, TradeType
+from rotkehlchen.types import AssetMovementCategory, Location, Timestamp, TradeType
 
 
 def mock_validate_api_key():
@@ -63,6 +65,8 @@ def mock_validate_api_key_success(location: Location):
     name = str(location)
     if location == Location.BINANCEUS:
         name = 'binance'
+    if location == Location.FTXUS:
+        name = 'ftx'
     return patch(
         f'rotkehlchen.exchanges.{name}.{name.capitalize()}.validate_api_key',
         return_value=(True, ''),
@@ -73,6 +77,8 @@ def mock_validate_api_key_failure(location: Location):
     name = str(location)
     if location == Location.BINANCEUS:
         name = 'binance'
+    if location == Location.FTXUS:
+        name = 'ftx'
     return patch(
         f'rotkehlchen.exchanges.{name}.{name.capitalize()}.validate_api_key',
         side_effect=mock_validate_api_key,
@@ -885,9 +891,9 @@ def test_delete_external_exchange_data_works(rotkehlchen_api_server_with_exchang
         base_asset=A_ETH,
         quote_asset=A_EUR,
         trade_type=TradeType.BUY,
-        amount=FVal(1),
-        rate=FVal(1),
-        fee=FVal(1),
+        amount=ONE,
+        rate=ONE,
+        fee=ONE,
         fee_currency=A_EUR,
         link='',
         notes='',
@@ -902,7 +908,7 @@ def test_delete_external_exchange_data_works(rotkehlchen_api_server_with_exchang
         asset=A_BTC,
         amount=FVal(100),
         fee_asset=A_BTC,
-        fee=FVal(1),
+        fee=ONE,
         link='') for x in (Location.CRYPTOCOM, Location.KRAKEN)]
     rotki.data.db.add_asset_movements(movements)
     assert len(rotki.data.db.get_trades(filter_query=TradesFilterQuery.make(), has_premium=True)) == 2  # noqa: E501
@@ -1074,7 +1080,7 @@ def test_edit_exchange_kraken_account_type(rotkehlchen_api_server_with_exchanges
     assert_error_response(
         response=response,
         status_code=HTTPStatus.BAD_REQUEST,
-        contained_in_msg='pleb is not a valid kraken account type',
+        contained_in_msg='Failed to deserialize KrakenAccountType value pleb',
     )
 
 
@@ -1146,11 +1152,11 @@ def test_binance_query_pairs(rotkehlchen_api_server_with_exchanges):
         ),
         params={'location': Location.BINANCE},
     )
-    globaldb = GlobalDBHandler()
+    binance_globaldb = GlobalDBBinance(GlobalDBHandler())
     result = assert_proper_response_with_result(response)
     some_pairs = {'ETHUSDC', 'BTCUSDC', 'BNBBTC', 'FTTBNB'}
     assert some_pairs.issubset(result)
-    binance_pairs_num = len(globaldb.get_binance_pairs(Location.BINANCE))
+    binance_pairs_num = len(binance_globaldb.get_all_binance_pairs(Location.BINANCE))
     assert binance_pairs_num != 0
     response = requests.get(
         api_url_for(
@@ -1159,7 +1165,7 @@ def test_binance_query_pairs(rotkehlchen_api_server_with_exchanges):
         ),
         params={'location': Location.BINANCEUS},
     )
-    binanceus_pairs_num = len(globaldb.get_binance_pairs(Location.BINANCEUS))
+    binanceus_pairs_num = len(binance_globaldb.get_all_binance_pairs(Location.BINANCEUS))
     assert binanceus_pairs_num != 0
     result = assert_proper_response_with_result(response)
     some_pairs = {'ETHUSD', 'BTCUSDC', 'BNBUSDT'}

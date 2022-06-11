@@ -1,3 +1,5 @@
+vi.mock('@/i18n');
+
 import Vue from 'vue';
 
 function stringify(value: { [key: string]: any }): string {

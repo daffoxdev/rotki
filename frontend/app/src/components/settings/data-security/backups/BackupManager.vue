@@ -19,6 +19,8 @@
         :loading="loading"
         :items="backups"
         :directory="directory"
+        :selected="selected"
+        @change="onSelectedChange"
         @remove="remove"
       />
       <template #buttons>
@@ -31,12 +33,32 @@
         >
           {{ $t('backup_manager.backup_button') }}
         </v-btn>
+        <v-btn
+          v-if="selected.length > 0"
+          depressed
+          color="error"
+          @click="showConfirmMassDelete = true"
+        >
+          {{ $t('backup_manager.delete_selected') }}
+        </v-btn>
       </template>
     </card>
+    <confirm-dialog
+      :display="!!showConfirmMassDelete"
+      :title="$t('database_backups.confirm.title')"
+      :message="
+        $t('database_backups.confirm.mass_message', {
+          length: selected.length
+        })
+      "
+      @cancel="showConfirmMassDelete = false"
+      @confirm="massRemove"
+    />
   </fragment>
 </template>
 
 <script lang="ts">
+import { Severity } from '@rotki/common/lib/messages';
 import {
   computed,
   defineComponent,
@@ -44,6 +66,7 @@ import {
   Ref,
   ref
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import Fragment from '@/components/helper/Fragment';
 import RefreshButton from '@/components/helper/RefreshButton.vue';
 import DatabaseBackups from '@/components/settings/data-security/backups/DatabaseBackups.vue';
@@ -53,20 +76,27 @@ import i18n from '@/i18n';
 import { DatabaseInfo, UserDbBackup } from '@/services/backup/types';
 import { api } from '@/services/rotkehlchen-api';
 import { useNotifications } from '@/store/notifications';
-import { Severity } from '@/store/notifications/consts';
 import { size } from '@/utils/data';
 import { logger } from '@/utils/logging';
+
+const isSameEntry = (firstDb: UserDbBackup, secondDb: UserDbBackup) => {
+  return (
+    firstDb.version === secondDb.version &&
+    firstDb.time === secondDb.time &&
+    firstDb.size === secondDb.size
+  );
+};
 
 const setupBackupInfo = () => {
   const backupInfo = ref<DatabaseInfo | null>();
   const loading = ref(false);
 
   const backups = computed(() => {
-    return backupInfo?.value?.userdb?.backups ?? [];
+    return get(backupInfo)?.userdb?.backups ?? [];
   });
 
   const directory = computed(() => {
-    const info = backupInfo.value;
+    const info = get(backupInfo);
     if (!info) {
       return '';
     }
@@ -83,7 +113,7 @@ const setupBackupInfo = () => {
   });
 
   const userDb = computed(() => {
-    const info = backupInfo.value;
+    const info = get(backupInfo);
     return {
       size: info ? size(info.userdb.info.size) : '0',
       version: info ? info.userdb.info.version : '0'
@@ -91,7 +121,7 @@ const setupBackupInfo = () => {
   });
 
   const globalDb = computed(() => {
-    const info = backupInfo.value;
+    const info = get(backupInfo);
     return {
       schema: info ? info.globaldb.globaldbSchemaVersion : '0',
       assets: info ? info.globaldb.globaldbAssetsVersion : '0'
@@ -100,8 +130,8 @@ const setupBackupInfo = () => {
 
   const loadInfo = async () => {
     try {
-      loading.value = true;
-      backupInfo.value = await api.backups.info();
+      set(loading, true);
+      set(backupInfo, await api.backups.info());
     } catch (e: any) {
       logger.error(e);
       const { notify } = useNotifications();
@@ -115,7 +145,7 @@ const setupBackupInfo = () => {
           .toString()
       });
     } finally {
-      loading.value = false;
+      set(loading, false);
     }
   };
   onMounted(loadInfo);
@@ -130,23 +160,63 @@ const setupBackupInfo = () => {
   };
 };
 
-function setupBackupActions(
+const setupBackupActions = (
   directory: Ref<string>,
   backupInfo: Ref<DatabaseInfo | null | undefined>,
-  refresh: () => Promise<void>
-) {
+  refresh: () => Promise<void>,
+  selected: Ref<UserDbBackup[]>,
+  showConfirmMassDelete: Ref<boolean>
+) => {
+  const massRemove = async () => {
+    const filepaths = get(selected).map(db => getFilepath(db, directory));
+    try {
+      await api.backups.deleteBackup(filepaths);
+      if (get(backupInfo)) {
+        const info: DatabaseInfo = { ...get(backupInfo)! };
+        get(selected).forEach((db: UserDbBackup) => {
+          const index = info.userdb.backups.findIndex(backup =>
+            isSameEntry(backup, db)
+          );
+          info.userdb.backups.splice(index, 1);
+        });
+        set(backupInfo, info);
+      }
+      set(selected, []);
+    } catch (e: any) {
+      logger.error(e);
+      const { notify } = useNotifications();
+      notify({
+        display: true,
+        title: i18n.t('database_backups.delete_error.title').toString(),
+        message: i18n
+          .t('database_backups.delete_error.mass_message', {
+            message: e.message
+          })
+          .toString()
+      });
+    }
+
+    set(showConfirmMassDelete, false);
+  };
+
   const remove = async (db: UserDbBackup) => {
     const filepath = getFilepath(db, directory);
     try {
-      await api.backups.deleteBackup(filepath);
-      if (backupInfo.value) {
-        const info: DatabaseInfo = { ...backupInfo.value };
-        const index = info.userdb.backups.findIndex(
-          ({ size, time, version }) =>
-            version === db.version && time === db.time && size === db.size
+      await api.backups.deleteBackup([filepath]);
+      if (get(backupInfo)) {
+        const info: DatabaseInfo = { ...get(backupInfo)! };
+        const index = info.userdb.backups.findIndex(backup =>
+          isSameEntry(backup, db)
         );
         info.userdb.backups.splice(index, 1);
-        backupInfo.value = info;
+        set(backupInfo, info);
+
+        if (get(selected).length > 0) {
+          set(
+            selected,
+            get(selected).filter(item => !isSameEntry(item, db))
+          );
+        }
       }
     } catch (e: any) {
       logger.error(e);
@@ -168,7 +238,7 @@ function setupBackupActions(
 
   const backup = async () => {
     try {
-      saving.value = true;
+      set(saving, true);
       const filepath = await api.backups.createBackup();
       const { notify } = useNotifications();
       notify({
@@ -196,11 +266,11 @@ function setupBackupActions(
           .toString()
       });
     } finally {
-      saving.value = false;
+      set(saving, false);
     }
   };
-  return { remove, backup, saving };
-}
+  return { remove, massRemove, backup, saving };
+};
 
 const BackupManager = defineComponent({
   name: 'BackupManager',
@@ -214,9 +284,25 @@ const BackupManager = defineComponent({
     const getBackupInfo = setupBackupInfo();
     const { backupInfo, directory } = getBackupInfo;
 
+    const showConfirmMassDelete = ref<boolean>(false);
+
+    const selected = ref<UserDbBackup[]>([]);
+    const onSelectedChange = (newSelected: UserDbBackup[]) => {
+      set(selected, newSelected);
+    };
+
     return {
       ...getBackupInfo,
-      ...setupBackupActions(directory, backupInfo, getBackupInfo.loadInfo)
+      ...setupBackupActions(
+        directory,
+        backupInfo,
+        getBackupInfo.loadInfo,
+        selected,
+        showConfirmMassDelete
+      ),
+      selected,
+      showConfirmMassDelete,
+      onSelectedChange
     };
   }
 });

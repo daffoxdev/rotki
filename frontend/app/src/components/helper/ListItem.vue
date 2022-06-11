@@ -1,7 +1,14 @@
 <template>
-  <span v-bind="$attrs" :class="$style.wrapper" @click="click">
+  <span
+    v-bind="$attrs"
+    :class="{
+      [$style.wrapper]: true,
+      [$style.dense]: dense
+    }"
+    @click="click"
+  >
     <slot name="icon" :class="$style.icon" />
-    <span :class="$style.details">
+    <span v-if="showDetails" :class="$style.details">
       <span :class="$style.title" data-cy="details-symbol">
         {{ title }}
       </span>
@@ -26,32 +33,41 @@ import {
   PropType,
   toRefs
 } from '@vue/composition-api';
+import { get } from '@vueuse/core';
 import { setupThemeCheck } from '@/composables/common';
 
 export default defineComponent({
   name: 'ListItem',
   props: {
     title: {
-      required: true,
-      type: String
+      required: false,
+      type: String,
+      default: ''
     },
     subtitle: {
       required: false,
       type: String as PropType<string | null>,
       default: null
+    },
+    dense: { required: false, type: Boolean, default: false },
+    showDetails: {
+      required: false,
+      type: Boolean,
+      default: true
     }
   },
+  emits: ['click'],
   setup(props, { emit }) {
     const { subtitle } = toRefs(props);
     const { currentBreakpoint } = setupThemeCheck();
-    const large = computed(() => currentBreakpoint.value.lgAndUp);
+    const large = computed(() => get(currentBreakpoint).lgAndUp);
     const visibleSubtitle = computed(() => {
-      const sub = subtitle.value;
+      const sub = get(subtitle);
       if (!sub) {
         return '';
       }
       const truncLength = 7;
-      const small = currentBreakpoint.value.mdAndDown;
+      const small = get(currentBreakpoint).mdAndDown;
       const length = sub.length;
 
       if (!small || (length <= truncLength * 2 && small)) {
@@ -81,11 +97,15 @@ export default defineComponent({
   flex-direction: row;
   align-items: center;
   width: 100%;
-  margin-top: 12px;
-  margin-bottom: 12px;
 
-  @media (min-width: 700px) and (max-width: 1500px) {
-    width: 100px;
+  &:not(.dense) {
+    margin-top: 12px;
+    margin-bottom: 12px;
+  }
+
+  &.dense {
+    margin-top: 4px;
+    margin-bottom: 4px;
   }
 }
 
@@ -99,7 +119,7 @@ export default defineComponent({
   width: 100%;
   margin-left: 16px;
 
-  @media (min-width: 700px) and (max-width: 1500px) {
+  @media (min-width: 700px) and (max-width: 1200px) {
     width: 100px;
   }
 }
@@ -108,8 +128,9 @@ export default defineComponent({
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
+  font-weight: 500;
 
-  @media (min-width: 700px) and (max-width: 1500px) {
+  @media (min-width: 700px) and (max-width: 1200px) {
     width: 100px;
   }
 }
@@ -120,7 +141,7 @@ export default defineComponent({
   overflow: hidden;
   white-space: nowrap;
 
-  @media (min-width: 700px) and (max-width: 1500px) {
+  @media (min-width: 700px) and (max-width: 1200px) {
     width: 100px;
   }
 }

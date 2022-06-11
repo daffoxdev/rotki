@@ -4,7 +4,7 @@ import pytest
 
 from rotkehlchen.chain.ethereum.airdrops import AIRDROPS, check_airdrops
 from rotkehlchen.constants.assets import A_1INCH, A_GRAIN, A_UNI
-from rotkehlchen.errors import UnableToDecryptRemoteData
+from rotkehlchen.errors.misc import UnableToDecryptRemoteData
 
 TEST_ADDR1 = '0x2B888954421b424C5D3D9Ce9bB67c9bD47537d12'
 TEST_ADDR2 = '0x51985CE8BB9AB1708746b24e22e37CD7A980Ec24'
@@ -36,7 +36,7 @@ def test_check_airdrops(ethereum_accounts, data_dir):
 
     # Test data is returned for the address correctly
     assert len(data) == 2
-    assert len(data[TEST_ADDR1]) == 3
+    assert len(data[TEST_ADDR1]) == 4
     assert data[TEST_ADDR1]['uniswap'] == {
         'amount': '400',
         'asset': A_UNI,

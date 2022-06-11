@@ -28,13 +28,19 @@
     </card>
     <accounting-settings-display
       :accounting-settings="report.settings"
-      class="mt-4"
+      class="mt-4 mb-8"
     />
-    <export-report-csv v-if="exportable" />
+    <div v-if="latest" class="d-flex">
+      <export-report-csv class="mr-4" />
+      <report-actionable
+        :report="report"
+        :initial-open="initialOpenReportActionable"
+      />
+    </div>
     <profit-loss-overview
       class="mt-8"
-      :overview="report.overview"
-      :symbol="report.currency"
+      :report="report"
+      :symbol="report.settings.profitCurrency"
       :loading="loading"
     />
     <profit-loss-events
@@ -54,6 +60,7 @@ import {
   onUnmounted,
   ref
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import { storeToRefs } from 'pinia';
 import BaseExternalLink from '@/components/base/BaseExternalLink.vue';
 import ProgressScreen from '@/components/helper/ProgressScreen.vue';
@@ -61,14 +68,16 @@ import AccountingSettingsDisplay from '@/components/profitloss/AccountingSetting
 import ExportReportCsv from '@/components/profitloss/ExportReportCsv.vue';
 import ProfitLossEvents from '@/components/profitloss/ProfitLossEvents.vue';
 import ProfitLossOverview from '@/components/profitloss/ProfitLossOverview.vue';
+import ReportActionable from '@/components/profitloss/ReportActionable.vue';
 import ReportHeader from '@/components/profitloss/ReportHeader.vue';
 import { useRoute, useRouter } from '@/composables/common';
 import { Routes } from '@/router/routes';
 import { useReports } from '@/store/reports';
 
 export default defineComponent({
-  name: 'ProfitLossReports',
+  name: 'ProfitLossReport',
   components: {
+    ReportActionable,
     ExportReportCsv,
     ProgressScreen,
     ReportHeader,
@@ -82,30 +91,44 @@ export default defineComponent({
     const refreshing = ref(false);
     const reportsStore = useReports();
     const { report, reports } = storeToRefs(reportsStore);
-    const { fetchReports, fetchReport, clearReport, canExport } = reportsStore;
+
+    const { fetchReports, fetchReport, clearReport, isLatestReport } =
+      reportsStore;
     const router = useRouter();
     const route = useRoute();
     let firstPage = true;
 
-    const currentRoute = route.value;
+    const initialOpenReportActionable = ref<boolean>(false);
+
+    const currentRoute = get(route);
     const reportId = parseInt(currentRoute.params.id);
-    const exportable = canExport(reportId);
+    const latest = isLatestReport(reportId);
 
     onMounted(async () => {
-      if (reports.value.entries.length === 0) {
+      if (get(reports).entries.length === 0) {
         await fetchReports();
       }
       const success = await fetchReport(reportId);
       if (!success) {
-        router.push(Routes.PROFIT_LOSS_REPORTS);
+        router.push(Routes.PROFIT_LOSS_REPORTS.route);
       }
-      loading.value = false;
+
+      if (get(route).query.openReportActionable) {
+        set(initialOpenReportActionable, true);
+        router.replace({ query: {} });
+      }
+
+      if (get(route).query.openReportActionable) {
+        set(initialOpenReportActionable, true);
+        router.replace({ query: {} });
+      }
+      set(loading, false);
     });
 
     const showUpgradeMessage = computed(
       () =>
-        report.value.entriesLimit > 0 &&
-        report.value.entriesLimit < report.value.entriesFound
+        get(report).entriesLimit > 0 &&
+        get(report).entriesLimit < get(report).entriesFound
     );
 
     onUnmounted(() => clearReport());
@@ -123,17 +146,18 @@ export default defineComponent({
         firstPage = false;
         return;
       }
-      refreshing.value = true;
+      set(refreshing, true);
       await fetchReport(reportId, { limit, offset });
-      refreshing.value = false;
+      set(refreshing, false);
     };
 
     return {
+      initialOpenReportActionable,
       loading,
       refreshing,
       report,
       showUpgradeMessage,
-      exportable,
+      latest,
       onPage
     };
   }

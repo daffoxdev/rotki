@@ -53,6 +53,7 @@ export default defineComponent({
       required: true
     }
   },
+  emits: ['input'],
   setup(_props, { emit }) {
     const store = useStore();
     const custom = computed(({ year }) => year === 'custom');
@@ -114,9 +115,3 @@ export default defineComponent({
   }
 });
 </script>
-
-<style scoped lang="scss">
-.range-selector {
-  height: 260px;
-}
-</style>

@@ -8,8 +8,9 @@ import gevent
 import pytest
 import requests
 from eth_utils import to_checksum_address
+from flaky import flaky
 
-from rotkehlchen.chain.substrate.typing import KusamaAddress
+from rotkehlchen.chain.substrate.types import KusamaAddress
 from rotkehlchen.constants.assets import A_DAI
 from rotkehlchen.constants.misc import ZERO
 from rotkehlchen.fval import FVal
@@ -44,7 +45,7 @@ from rotkehlchen.tests.utils.substrate import (
     SUBSTRATE_ACC1_KSM_ADDR,
     SUBSTRATE_ACC2_KSM_ADDR,
 )
-from rotkehlchen.typing import BlockchainAccountData, SupportedBlockchain
+from rotkehlchen.types import BlockchainAccountData, SupportedBlockchain
 from rotkehlchen.utils.misc import from_wei
 
 logger = logging.getLogger(__name__)
@@ -505,6 +506,36 @@ def test_add_blockchain_accounts(
             status_code=HTTPStatus.BAD_REQUEST,
             contained_in_msg=f'Blockchain account/s {ethereum_accounts[0]} already exist',
         )
+
+    # Add a BCH account
+    response = requests.put(api_url_for(
+        rotkehlchen_api_server,
+        "blockchainsaccountsresource",
+        blockchain='BCH',
+    ), json={'accounts': [
+        {'address': 'prettyirrelevant.eth'},
+        {'address': '12tkqA9xSoowkzoERHMWNKsTey55YEBqkv'},
+    ]})
+
+    result = assert_proper_response_with_result(response)
+    assert result['per_account']['BCH'] is not None
+
+    # Check that the BCH balance is present in DB
+    accounts = rotki.data.db.get_blockchain_accounts()
+    assert len(accounts.bch) == 2
+
+    # Try adding same BCH address but in different formats
+    response = requests.put(api_url_for(
+        rotkehlchen_api_server,
+        "blockchainsaccountsresource",
+        blockchain='BCH',
+    ), json={
+        'accounts': [
+            {'address': '1Mnwij9Zkk6HtmdNzyEUFgp6ojoLaZekP8'},
+            {'address': 'bitcoincash:qrjp962nn74p57w0gaf77d335upghk220yceaxqxwa'},
+        ],
+    })
+    assert_error_response(response, 'appears multiple times in the request data')
 
 
 @pytest.mark.parametrize('number_of_eth_accounts', [0])
@@ -1817,6 +1848,7 @@ def test_add_ksm_blockchain_account_invalid(rotkehlchen_api_server):
     )
 
 
+@flaky(max_runs=3, min_passes=1)  # Kusama open nodes some times time out
 @pytest.mark.parametrize('number_of_eth_accounts', [0])
 @pytest.mark.parametrize('kusama_manager_connect_at_start', [KUSAMA_TEST_NODES])
 def test_add_ksm_blockchain_account(rotkehlchen_api_server):
@@ -1965,6 +1997,7 @@ def test_add_ksm_blockchain_account_invalid_ens_domain(rotkehlchen_api_server):
     )
 
 
+@flaky(max_runs=3, min_passes=1)  # Kusama open nodes some times time out
 @pytest.mark.parametrize('number_of_eth_accounts', [0])
 @pytest.mark.parametrize('kusama_manager_connect_at_start', [KUSAMA_TEST_NODES])
 def test_add_ksm_blockchain_account_ens_domain(rotkehlchen_api_server):
@@ -2014,6 +2047,7 @@ def test_add_ksm_blockchain_account_ens_domain(rotkehlchen_api_server):
     assert FVal(total_ksm['usd_value']) >= ZERO
 
 
+@flaky(max_runs=3, min_passes=1)  # Kusama open nodes some times time out
 @pytest.mark.parametrize('number_of_eth_accounts', [0])
 @pytest.mark.parametrize('ksm_accounts', [[SUBSTRATE_ACC1_KSM_ADDR, ENS_BRUNO_KSM_ADDR]])
 @pytest.mark.parametrize('kusama_manager_connect_at_start', [KUSAMA_TEST_NODES])

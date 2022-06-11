@@ -22,11 +22,12 @@ from rotkehlchen.constants.assets import (
     A_SDL,
     A_TORN,
     A_UNI,
+    A_VCOW,
 )
 from rotkehlchen.constants.timing import DEFAULT_TIMEOUT_TUPLE
-from rotkehlchen.errors import RemoteError, UnableToDecryptRemoteData
+from rotkehlchen.errors.misc import RemoteError, UnableToDecryptRemoteData
 from rotkehlchen.logging import RotkehlchenLogsAdapter
-from rotkehlchen.typing import ChecksumEthAddress
+from rotkehlchen.types import ChecksumEthAddress
 from rotkehlchen.utils.serialization import jsonloads_dict, rlk_jsondumps
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,16 @@ AIRDROPS = {
         'https://raw.githubusercontent.com/rotki/data/main/airdrops/saddle_finance.csv',
         A_SDL,
         'https://saddle.exchange/#/',
+    ),
+    'cow_mainnet': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/cow_mainnet.csv',
+        A_VCOW,
+        'https://cowswap.exchange/#/claim',
+    ),
+    'cow_gnosis': (
+        'https://raw.githubusercontent.com/rotki/data/main/airdrops/cow_gnosis.csv',
+        A_VCOW,
+        'https://cowswap.exchange/#/claim',
     ),
 }
 
@@ -284,7 +295,15 @@ def check_airdrops(
             addr, amount, *_ = row
             # not doing to_checksum_address() here since the file addresses are checksummed
             # and doing to_checksum_address() so many times hits performance
-            if protocol_name in ('cornichon', 'tornado', 'grain', 'lido', 'sdl'):
+            if protocol_name in (
+                'cornichon',
+                'tornado',
+                'grain',
+                'lido',
+                'sdl',
+                'cow_mainnet',
+                'cow_gnosis',
+            ):
                 amount = token_normalized_value_decimals(int(amount), 18)
             if addr in addresses:
                 found_data[addr][protocol_name] = {
@@ -294,8 +313,7 @@ def check_airdrops(
                 }
         csvfile.close()
 
-    # TODO: fix next line annotation
-    for protocol_name, airdrop_data in POAP_AIRDROPS.items():  # type: ignore
+    for protocol_name, poap_airdrop_data in POAP_AIRDROPS.items():
         data_dict = get_poap_airdrop_data(protocol_name, data_dir)
         for addr, assets in data_dict.items():
             # not doing to_checksum_address() here since the file addresses are checksummed
@@ -307,8 +325,8 @@ def check_airdrops(
                 found_data[addr]['poap'].append({
                     'event': protocol_name,
                     'assets': assets,
-                    'link': airdrop_data[1],
-                    'name': airdrop_data[2],
+                    'link': poap_airdrop_data[1],
+                    'name': poap_airdrop_data[2],
                 })
 
     return dict(found_data)

@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Literal,
     Optional,
     Tuple,
     TypeVar,
@@ -21,18 +22,13 @@ from typing import (
 )
 
 from gevent.lock import Semaphore
-from typing_extensions import Literal
 from web3.exceptions import BadFunctionCallOutput
 
-from rotkehlchen.accounting.structures import (
-    AssetBalance,
-    Balance,
-    BalanceSheet,
-    DefiEvent,
-    DefiEventType,
-)
+from rotkehlchen.accounting.structures.balance import Balance, BalanceSheet
 from rotkehlchen.assets.asset import Asset, EthereumToken
 from rotkehlchen.chain.bitcoin import get_bitcoin_addresses_balances
+from rotkehlchen.chain.bitcoin.bch import get_bitcoin_cash_addresses_balances
+from rotkehlchen.chain.bitcoin.xpub import XpubData
 from rotkehlchen.chain.ethereum.defi.chad import DefiChad
 from rotkehlchen.chain.ethereum.defi.structures import DefiProtocolBalances
 from rotkehlchen.chain.ethereum.modules import (
@@ -51,11 +47,11 @@ from rotkehlchen.chain.ethereum.modules import (
     YearnVaults,
     YearnVaultsV2,
 )
-from rotkehlchen.chain.ethereum.structures import Eth2Validator
+from rotkehlchen.chain.ethereum.modules.eth2.structures import Eth2Validator
 from rotkehlchen.chain.ethereum.tokens import EthTokens
-from rotkehlchen.chain.ethereum.typing import string_to_ethereum_address
+from rotkehlchen.chain.ethereum.types import string_to_ethereum_address
 from rotkehlchen.chain.substrate.manager import wait_until_a_node_is_available
-from rotkehlchen.chain.substrate.typing import KusamaAddress, PolkadotAddress
+from rotkehlchen.chain.substrate.types import KusamaAddress, PolkadotAddress
 from rotkehlchen.chain.substrate.utils import (
     KUSAMA_NODE_CONNECTION_TIMEOUT,
     POLKADOT_NODE_CONNECTION_TIMEOUT,
@@ -63,6 +59,7 @@ from rotkehlchen.chain.substrate.utils import (
 from rotkehlchen.constants.assets import (
     A_ADX,
     A_AVAX,
+    A_BCH,
     A_BTC,
     A_DAI,
     A_DOT,
@@ -76,19 +73,19 @@ from rotkehlchen.db.eth2 import DBEth2
 from rotkehlchen.db.filtering import Eth2DailyStatsFilterQuery
 from rotkehlchen.db.queried_addresses import QueriedAddresses
 from rotkehlchen.db.utils import BlockchainAccounts
-from rotkehlchen.errors import (
+from rotkehlchen.errors.asset import UnknownAsset
+from rotkehlchen.errors.misc import (
     EthSyncError,
     InputError,
     ModuleInactive,
     ModuleInitializationFailure,
-    UnknownAsset,
 )
 from rotkehlchen.fval import FVal
 from rotkehlchen.greenlets import GreenletManager
 from rotkehlchen.inquirer import Inquirer
 from rotkehlchen.logging import RotkehlchenLogsAdapter
 from rotkehlchen.premium.premium import Premium
-from rotkehlchen.typing import (
+from rotkehlchen.types import (
     BTCAddress,
     ChecksumEthAddress,
     Eth2PubKey,
@@ -107,12 +104,12 @@ from rotkehlchen.utils.mixins.lockable import LockableQueryMixIn, protect_with_l
 if TYPE_CHECKING:
     from rotkehlchen.chain.avalanche.manager import AvalancheManager
     from rotkehlchen.chain.ethereum.manager import EthereumManager
-    from rotkehlchen.chain.ethereum.modules.nfts import Nfts
-    from rotkehlchen.chain.ethereum.typing import (
+    from rotkehlchen.chain.ethereum.modules.eth2.structures import (
         Eth2Deposit,
         ValidatorDailyStats,
         ValidatorDetails,
     )
+    from rotkehlchen.chain.ethereum.modules.nfts import Nfts
     from rotkehlchen.chain.substrate.manager import SubstrateManager
     from rotkehlchen.db.dbhandler import DBHandler
     from rotkehlchen.externalapis.beaconchain import BeaconChain
@@ -184,6 +181,7 @@ class BlockchainBalances:
     eth: DefaultDict[ChecksumEthAddress, BalanceSheet] = field(init=False)
     eth2: DefaultDict[Eth2PubKey, BalanceSheet] = field(init=False)
     btc: Dict[BTCAddress, Balance] = field(init=False)
+    bch: Dict[BTCAddress, Balance] = field(init=False)
     ksm: Dict[KusamaAddress, BalanceSheet] = field(init=False)
     dot: Dict[PolkadotAddress, BalanceSheet] = field(init=False)
     avax: DefaultDict[ChecksumEthAddress, BalanceSheet] = field(init=False)
@@ -193,6 +191,7 @@ class BlockchainBalances:
         balances.eth = self.eth.copy()
         balances.eth2 = self.eth2.copy()
         balances.btc = self.btc.copy()
+        balances.bch = self.bch.copy()
         balances.ksm = self.ksm.copy()
         balances.dot = self.dot.copy()
         balances.avax = self.avax.copy()
@@ -202,6 +201,7 @@ class BlockchainBalances:
         self.eth = defaultdict(BalanceSheet)
         self.eth2 = defaultdict(BalanceSheet)
         self.btc = defaultdict(Balance)
+        self.bch = defaultdict(Balance)
         self.ksm = defaultdict(BalanceSheet)
         self.dot = defaultdict(BalanceSheet)
         self.avax = defaultdict(BalanceSheet)
@@ -210,42 +210,24 @@ class BlockchainBalances:
         eth_balances = {k: v.serialize() for k, v in self.eth.items()}
         eth2_balances = {k: v.serialize() for k, v in self.eth2.items()}
         btc_balances: Dict[str, Any] = {}
+        bch_balances: Dict[str, Any] = {}
         ksm_balances = {k: v.serialize() for k, v in self.ksm.items()}
         dot_balances = {k: v.serialize() for k, v in self.dot.items()}
         avax_balances = {k: v.serialize() for k, v in self.avax.items()}
 
-        xpub_mappings = self.db.get_addresses_to_xpub_mapping(list(self.btc.keys()))
-        for btc_account, balances in self.btc.items():
-            xpub_result = xpub_mappings.get(btc_account, None)
-            if xpub_result is None:
-                if 'standalone' not in btc_balances:
-                    btc_balances['standalone'] = {}
+        btc_xpub_mappings = self.db.get_addresses_to_xpub_mapping(list(self.btc.keys()))
+        bch_xpub_mappings = self.db.get_addresses_to_xpub_mapping(list(self.bch.keys()))
 
-                addresses_dict = btc_balances['standalone']
-            else:
-                if 'xpubs' not in btc_balances:
-                    btc_balances['xpubs'] = []
-
-                addresses_dict = None
-                for xpub_entry in btc_balances['xpubs']:
-                    found = (
-                        xpub_result.xpub.xpub == xpub_entry['xpub'] and
-                        xpub_result.derivation_path == xpub_entry['derivation_path']
-                    )
-                    if found:
-                        addresses_dict = xpub_entry['addresses']
-                        break
-
-                if addresses_dict is None:  # new xpub, create the mapping
-                    new_entry: Dict[str, Any] = {
-                        'xpub': xpub_result.xpub.xpub,
-                        'derivation_path': xpub_result.derivation_path,
-                        'addresses': {},
-                    }
-                    btc_balances['xpubs'].append(new_entry)
-                    addresses_dict = new_entry['addresses']
-
-            addresses_dict[btc_account] = balances.serialize()
+        self._serialize_bitcoin_balances(
+            xpub_mappings=btc_xpub_mappings,
+            bitcoin_balances=btc_balances,
+            blockchain=SupportedBlockchain.BITCOIN,
+        )
+        self._serialize_bitcoin_balances(
+            xpub_mappings=bch_xpub_mappings,
+            bitcoin_balances=bch_balances,
+            blockchain=SupportedBlockchain.BITCOIN_CASH,
+        )
 
         blockchain_balances: Dict[str, Dict] = {}
         if eth_balances != {}:
@@ -254,6 +236,8 @@ class BlockchainBalances:
             blockchain_balances['ETH2'] = eth2_balances
         if btc_balances != {}:
             blockchain_balances['BTC'] = btc_balances
+        if bch_balances != {}:
+            blockchain_balances['BCH'] = bch_balances
         if ksm_balances != {}:
             blockchain_balances['KSM'] = ksm_balances
         if dot_balances != {}:
@@ -270,6 +254,8 @@ class BlockchainBalances:
             return self.eth2 != {}
         if blockchain == SupportedBlockchain.BITCOIN:
             return self.btc != {}
+        if blockchain == SupportedBlockchain.BITCOIN_CASH:
+            return self.bch != {}
         if blockchain == SupportedBlockchain.KUSAMA:
             return self.ksm != {}
         if blockchain == SupportedBlockchain.POLKADOT:
@@ -297,6 +283,8 @@ class BlockchainBalances:
             return account in self.eth2
         if blockchain == SupportedBlockchain.BITCOIN:
             return account in self.btc
+        if blockchain == SupportedBlockchain.BITCOIN_CASH:
+            return account in self.bch
         if blockchain == SupportedBlockchain.KUSAMA:
             return account in self.ksm
         if blockchain == SupportedBlockchain.POLKADOT:
@@ -305,6 +293,46 @@ class BlockchainBalances:
             return account in self.avax
         # else
         raise AssertionError('Invalid blockchain value')
+
+    def _serialize_bitcoin_balances(
+        self,
+        bitcoin_balances: Dict[str, Any],
+        xpub_mappings: Dict[BTCAddress, XpubData],
+        blockchain: Literal[SupportedBlockchain.BITCOIN, SupportedBlockchain.BITCOIN_CASH],
+    ) -> None:
+        """This is a helper function to serialize the balances for BTC & BCH accounts."""
+        accounts_balances: Dict[BTCAddress, Balance] = getattr(self, blockchain.value.lower())
+        for account, balances in accounts_balances.items():
+            xpub_result = xpub_mappings.get(account, None)
+            if xpub_result is None:
+                if 'standalone' not in bitcoin_balances:
+                    bitcoin_balances['standalone'] = {}
+
+                addresses_dict = bitcoin_balances['standalone']
+            else:
+                if 'xpubs' not in bitcoin_balances:
+                    bitcoin_balances['xpubs'] = []
+
+                addresses_dict = None
+                for xpub_entry in bitcoin_balances['xpubs']:
+                    found = (
+                        xpub_result.xpub.xpub == xpub_entry['xpub'] and
+                        xpub_result.derivation_path == xpub_entry['derivation_path']
+                    )
+                    if found:
+                        addresses_dict = xpub_entry['addresses']
+                        break
+
+                if addresses_dict is None:  # new xpub, create the mapping
+                    btc_new_entry: Dict[str, Any] = {
+                        'xpub': xpub_result.xpub.xpub,
+                        'derivation_path': xpub_result.derivation_path,
+                        'addresses': {},
+                    }
+                    bitcoin_balances['xpubs'].append(btc_new_entry)
+                    addresses_dict = btc_new_entry['addresses']
+
+            addresses_dict[account] = balances.serialize()
 
 
 @dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=True)
@@ -356,6 +384,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
 
         self.defi_lock = Semaphore()
         self.btc_lock = Semaphore()
+        self.bch_lock = Semaphore()
         self.eth_lock = Semaphore()
         self.ksm_lock = Semaphore()
         self.dot_lock = Semaphore()
@@ -367,8 +396,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         self.totals: BalanceSheet = BalanceSheet()
         self.premium = premium
         self.greenlet_manager = greenlet_manager
-        # TODO: Turn this mapping into a typed dict once we upgrade to python 3.8
-        self.eth_modules: Dict[ModuleName, Union[EthereumModule]] = {}
+        self.eth_modules: Dict[ModuleName, EthereumModule] = {}
         for given_module in eth_modules:
             self.activate_module(given_module)
 
@@ -451,13 +479,13 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
             return None
 
         self.eth_modules[module_name] = instance
-        # also run any startup initialization actions for the module
-        self.greenlet_manager.spawn_and_track(
-            after_seconds=None,
-            task_name=f'startup of {module_name}',
-            exception_is_error=True,
-            method=instance.on_startup,
-        )
+        if instance.on_startup is not None:  # run startup initialization actions for the module
+            self.greenlet_manager.spawn_and_track(
+                after_seconds=None,
+                task_name=f'startup of {module_name}',
+                exception_is_error=True,
+                method=instance.on_startup,
+            )
         return instance
 
     def deactivate_module(self, module_name: ModuleName) -> None:
@@ -581,6 +609,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         should_query_eth = not blockchain or blockchain == SupportedBlockchain.ETHEREUM
         should_query_eth2 = not blockchain or blockchain == SupportedBlockchain.ETHEREUM_BEACONCHAIN  # noqa: E501
         should_query_btc = not blockchain or blockchain == SupportedBlockchain.BITCOIN
+        should_query_bch = not blockchain or blockchain == SupportedBlockchain.BITCOIN_CASH
         should_query_ksm = not blockchain or blockchain == SupportedBlockchain.KUSAMA
         should_query_dot = not blockchain or blockchain == SupportedBlockchain.POLKADOT
         should_query_avax = not blockchain or blockchain == SupportedBlockchain.AVALANCHE
@@ -597,6 +626,8 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
             )
         if should_query_btc:
             self.query_btc_balances(ignore_cache=ignore_cache)
+        if should_query_bch:
+            self.query_bch_balances(ignore_cache=ignore_cache)
         if should_query_ksm:
             self.query_kusama_balances(ignore_cache=ignore_cache)
         if should_query_dot:
@@ -623,7 +654,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
 
         self.balances.btc = {}
         btc_usd_price = Inquirer().find_usd_price(A_BTC)
-        total = FVal(0)
+        total = ZERO
         balances = get_bitcoin_addresses_balances(self.accounts.btc)
         for account, balance in balances.items():
             total += balance
@@ -632,6 +663,33 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
                 usd_value=balance * btc_usd_price,
             )
         self.totals.assets[A_BTC] = Balance(amount=total, usd_value=total * btc_usd_price)
+
+    @protect_with_lock()
+    @cache_response_timewise()
+    def query_bch_balances(
+            self,  # pylint: disable=unused-argument
+            # Kwargs here is so linters don't complain when the "magic" ignore_cache kwarg is given
+            **kwargs: Any,
+    ) -> None:
+        """Queries api.haskoin.com for the balance of all BCH accounts
+
+        May raise:
+        - RemotError if there is a problem querying any remote
+        """
+        if len(self.accounts.bch) == 0:
+            return
+
+        self.balances.bch = {}
+        bch_usd_price = Inquirer().find_usd_price(A_BCH)
+        total = ZERO
+        balances = get_bitcoin_cash_addresses_balances(self.accounts.bch)
+        for account, balance in balances.items():
+            total += balance
+            self.balances.bch[account] = Balance(
+                amount=balance,
+                usd_value=balance * bch_usd_price,
+            )
+        self.totals.assets[A_BCH] = Balance(amount=total, usd_value=total * bch_usd_price)
 
     @protect_with_lock()
     @cache_response_timewise()
@@ -686,7 +744,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         # Query avax balance
         avax_usd_price = Inquirer().find_usd_price(A_AVAX)
         account_amount = self.avalanche.get_multiavax_balance(self.accounts.avax)
-        avax_total = FVal(0)
+        avax_total = ZERO
         for account, amount in account_amount.items():
             avax_total += amount
             usd_value = amount * avax_usd_price
@@ -735,23 +793,32 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
             total_balance += balance
         self.totals.assets[A_DOT] = total_balance
 
-    def sync_btc_accounts_with_db(self) -> None:
-        """Call this function after having deleted BTC accounts from the DB to
+    def sync_bitcoin_accounts_with_db(
+        self,
+        blockchain: Literal[SupportedBlockchain.BITCOIN, SupportedBlockchain.BITCOIN_CASH],
+    ) -> None:
+        """Call this function after having deleted BTC/BCH accounts from the DB to
         sync the chain manager's balances and accounts with the DB
 
         For example this is called after removing an xpub which deletes all derived
         addresses from the DB.
         """
-        db_btc_accounts = self.database.get_blockchain_accounts().btc
+        db_btc_accounts = getattr(
+            self.database.get_blockchain_accounts(),
+            blockchain.value.lower(),
+        )
         accounts_to_remove = []
-        for btc_account in self.accounts.btc:
-            if btc_account not in db_btc_accounts:
-                accounts_to_remove.append(btc_account)
+        for account in getattr(self.accounts, blockchain.value.lower()):
+            if account not in db_btc_accounts:
+                accounts_to_remove.append(account)
 
-        balances_mapping = get_bitcoin_addresses_balances(accounts_to_remove)
+        if blockchain == SupportedBlockchain.BITCOIN:
+            balances_mapping = get_bitcoin_addresses_balances(accounts_to_remove)
+        else:
+            balances_mapping = get_bitcoin_cash_addresses_balances(accounts_to_remove)
         balances = [balances_mapping.get(x, ZERO) for x in accounts_to_remove]
         self.modify_blockchain_accounts(
-            blockchain=SupportedBlockchain.BITCOIN,
+            blockchain=blockchain,
             accounts=accounts_to_remove,
             append_or_remove='remove',
             add_or_sub=operator.sub,
@@ -809,6 +876,58 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
 
         # At the very end add/remove it from the accounts
         getattr(self.accounts.btc, append_or_remove)(account)
+
+    def modify_bch_account(
+            self,
+            account: BTCAddress,
+            append_or_remove: str,
+            add_or_sub: AddOrSub,
+            already_queried_balance: Optional[FVal] = None,
+    ) -> None:
+        """Either appends or removes a BCH acccount.
+
+        If already_queried_balance is not None then instead of querying the balance
+        of the account we can use the already queried one.
+
+        Call with 'append', operator.add to add the account
+        Call with 'remove', operator.sub to remove the account
+
+        May raise:
+        - RemotError if there is a problem querying blockchain.info or cryptocompare
+        """
+        bch_usd_price = Inquirer().find_usd_price(A_BCH)
+        remove_with_populated_balance = (
+            append_or_remove == 'remove' and len(self.balances.bch) != 0
+        )
+        # Query the balance of the account except for the case when it's removed
+        # and there is no other account in the balances
+        if append_or_remove == 'append' or remove_with_populated_balance:
+            if already_queried_balance is None:
+                balances = get_bitcoin_cash_addresses_balances([account])
+                balance = balances[account]
+            else:
+                balance = already_queried_balance
+            usd_balance = balance * bch_usd_price
+
+        if append_or_remove == 'append':
+            self.balances.bch[account] = Balance(amount=balance, usd_value=usd_balance)
+        elif append_or_remove == 'remove':
+            if account in self.balances.bch:
+                del self.balances.bch[account]
+        else:
+            raise AssertionError('Programmer error: Should be append or remove')
+
+        if len(self.balances.bch) == 0:
+            # If the last account was removed balance should be 0
+            self.totals.assets[A_BCH] = Balance()
+        else:
+            self.totals.assets[A_BCH] = add_or_sub(
+                self.totals.assets[A_BCH],
+                Balance(balance, usd_balance),
+            )
+
+        # At the very end add/remove it from the accounts
+        getattr(self.accounts.bch, append_or_remove)(account)
 
     def modify_eth_account(
             self,
@@ -1057,6 +1176,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         """Removes blockchain accounts and requeries all balances after the removal.
 
         The accounts are removed from the blockchain object and not from the database.
+        Database removal happens afterwards at the caller.
         Returns the new total balances, the actually removes accounts (some
         accounts may have been invalid) and also any errors that occured
         during the removal.
@@ -1130,6 +1250,24 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
                 for idx, account in enumerate(accounts):
                     a_balance = already_queried_balances[idx] if already_queried_balances else None
                     self.modify_btc_account(
+                        BTCAddress(account),
+                        append_or_remove,
+                        add_or_sub,
+                        already_queried_balance=a_balance,
+                    )
+
+        elif blockchain == SupportedBlockchain.BITCOIN_CASH:
+            with self.bch_lock:
+                if append_or_remove == 'append':
+                    self.check_accounts_exist(blockchain, accounts)
+
+                # we are adding/removing accounts, make sure query cache is flushed
+                self.flush_cache('query_bch_balances')
+                self.flush_cache('query_balances')
+                self.flush_cache('query_balances', blockchain=SupportedBlockchain.BITCOIN_CASH)
+                for idx, account in enumerate(accounts):
+                    a_balance = already_queried_balances[idx] if already_queried_balances else None
+                    self.modify_bch_account(
                         BTCAddress(account),
                         append_or_remove,
                         add_or_sub,
@@ -1288,10 +1426,6 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         eth_balances = self.balances.eth
         for account, token_balances in balance_result.items():
             for token, token_balance in token_balances.items():
-                if token_usd_price[token] == ZERO:
-                    # skip tokens that have no price
-                    continue
-
                 token_totals[token] += token_balance
                 balance = Balance(
                     amount=token_balance,
@@ -1413,7 +1547,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         eth_accounts = self.accounts.eth
         eth_usd_price = Inquirer().find_usd_price(A_ETH)
         balances = self.ethereum.get_multieth_balance(eth_accounts)
-        eth_total = FVal(0)
+        eth_total = ZERO
         for account, balance in balances.items():
             eth_total += balance
             usd_value = balance * eth_usd_price
@@ -1653,7 +1787,7 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
             self,
             from_timestamp: Timestamp,
             to_timestamp: Timestamp,
-    ) -> List[DefiEvent]:
+    ) -> List['ValidatorDailyStats']:
         """May raise:
         - ModuleInactive if eth2 module is not activated
         - RemoteError if a remote query to beacon chain fails and is not caught in the method
@@ -1665,7 +1799,6 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
         if to_timestamp < 1607212800:  # Dec 1st UTC
             return []  # no need to bother querying before beacon chain launch
 
-        defi_events = []
         # Ask for details to detect any new validators
         eth2.get_details(addresses=self.queried_addresses_for_module('eth2'))
         # Create a mapping of validator index to ownership proportion
@@ -1680,40 +1813,16 @@ class ChainManager(CacheableMixIn, LockableQueryMixIn):
             msg_aggregator=self.msg_aggregator,
         )
         for stats_entry in stats:
-            got_asset = got_balance = spent_asset = spent_balance = None
             if stats_entry.pnl_balance.amount == ZERO:
                 continue
 
             # Take into account the validator ownership proportion if is not 100%
-            validator_ownership = validators_ownership.get(stats_entry.validator_index, FVal(1))
+            validator_ownership = validators_ownership.get(stats_entry.validator_index, ONE)
             if validator_ownership != ONE:
-                pnl_balance = Balance(
-                    amount=stats_entry.pnl_balance.amount * validator_ownership,
-                    usd_value=stats_entry.pnl_balance.usd_value * validator_ownership,
-                )
-            else:
-                pnl_balance = stats_entry.pnl_balance
+                stats_entry.pnl = stats_entry.pnl * validator_ownership
+                stats_entry.ownership_percentage = validator_ownership
 
-            if pnl_balance.amount > ZERO:
-                got_asset = A_ETH
-                got_balance = pnl_balance
-            else:  # negative
-                spent_asset = A_ETH
-                spent_balance = -pnl_balance
-
-            defi_events.append(DefiEvent(
-                timestamp=stats_entry.timestamp,
-                wrapped_event=stats_entry,
-                event_type=DefiEventType.ETH2_EVENT,
-                got_asset=got_asset,
-                got_balance=got_balance,
-                spent_asset=spent_asset,
-                spent_balance=spent_balance,
-                pnl=[AssetBalance(asset=A_ETH, balance=pnl_balance)],
-                count_spent_got_cost_basis=True,
-            ))
-
-        return defi_events
+        return stats
 
     def get_eth2_validators(self) -> List[Eth2Validator]:
         """May raise:

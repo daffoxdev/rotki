@@ -6,9 +6,7 @@ export class LedgerActionPage {
     cy.get('.history__ledger-actions')
       .scrollIntoView()
       .should('be.visible')
-      .click({
-        force: true
-      });
+      .click();
   }
 
   fetchLedgerActions() {
@@ -19,7 +17,9 @@ export class LedgerActionPage {
 
     return () => {
       // Wait for response.status to be 200
-      cy.wait('@apiCall').its('response.statusCode').should('equal', 200);
+      cy.wait('@apiCall', { timeout: 30000 })
+        .its('response.statusCode')
+        .should('equal', 200);
       cy.wait(500);
     };
   }
@@ -28,9 +28,13 @@ export class LedgerActionPage {
     cy.get('.ledger-actions__add').click();
     cy.get('[data-cy=ledger-action-form]').should('be.visible');
     selectLocation('[data-cy=location]', ledgerAction.location);
-    cy.get('[data-cy=datetime]')
-      .type(`{selectall}{backspace}${ledgerAction.datetime}`)
-      .click({ force: true }); // Click is needed to hide the popup
+    cy.get('[data-cy=datetime]').type(
+      `{selectall}{backspace}${ledgerAction.datetime}`
+    );
+
+    // clicking outside to a fully visible element to close the datepicker
+    cy.get('[data-cy=bottom-dialog]').find('.card-title').click();
+
     selectAsset('[data-cy=asset]', ledgerAction.asset, ledgerAction.asset_id);
     cy.get('[data-cy=amount]').type(ledgerAction.amount);
     cy.get('[data-cy=action-type]').parent().click();
@@ -50,6 +54,9 @@ export class LedgerActionPage {
   }
 
   visibleEntries(visible: number) {
+    cy.get('.ledger_actions tbody').should('be.visible');
+    cy.get('.v-data-table__progress').should('not.exist');
+    cy.get('.v-data-table__empty-wrapper').should('not.exist');
     cy.get('.ledger_actions tbody').find('tr').should('have.length', visible);
   }
 
@@ -58,26 +65,26 @@ export class LedgerActionPage {
 
     cy.get('@row')
       .find('td')
-      .eq(1)
+      .eq(2)
       .find('[data-cy=ledger-action-location]')
       .should('contain', ledgerAction.location);
 
     cy.get('@row')
       .find('td')
-      .eq(2)
+      .eq(3)
       .find('[data-cy=ledger-action-type]')
-      .should('contain', ledgerAction.action_type);
+      .should('contain', ledgerAction.action_type.toLowerCase());
 
     cy.get('@row')
       .find('td')
-      .eq(3)
+      .eq(4)
       .find('[data-cy=ledger-action-asset]')
       .find('[data-cy=details-symbol]')
       .should('contain', ledgerAction.asset);
 
     cy.get('@row')
       .find('td')
-      .eq(4)
+      .eq(5)
       .find('[data-cy=display-amount]')
       .should('contain', ledgerAction.amount);
   }
@@ -86,7 +93,7 @@ export class LedgerActionPage {
     cy.get('.ledger_actions tbody > tr')
       .eq(position)
       .find('[data-cy=row-edit]')
-      .click({ force: true });
+      .click();
 
     cy.get('[data-cy=ledger-action-form]').should('be.visible');
     cy.get('[data-cy=amount]').clear();

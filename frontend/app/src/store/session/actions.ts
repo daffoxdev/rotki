@@ -1,5 +1,7 @@
 import { ActionResult } from '@rotki/common/lib/data';
+import { Severity } from '@rotki/common/lib/messages';
 import { TimeFramePersist } from '@rotki/common/lib/settings/graphs';
+import { get } from '@vueuse/core';
 import { ActionTree } from 'vuex';
 import { lastLogin } from '@/components/account-management/utils';
 import { EXTERNAL_EXCHANGES } from '@/data/defaults';
@@ -21,11 +23,12 @@ import {
   WatcherTypes
 } from '@/services/session/types';
 import { SYNC_DOWNLOAD, SyncAction } from '@/services/types-api';
+import { useAssetInfoRetrieval, useIgnoredAssetsStore } from '@/store/assets';
 import { Section, Status } from '@/store/const';
 import { ACTION_PURGE_PROTOCOL } from '@/store/defi/const';
-import { HistoryActions } from '@/store/history/consts';
+import { useHistory, useTransactions } from '@/store/history';
+import { useTxQueryStatus } from '@/store/history/query-status';
 import { useNotifications } from '@/store/notifications';
-import { Severity } from '@/store/notifications/consts';
 import { useReports } from '@/store/reports';
 import {
   ACTION_PURGE_CACHED_DATA,
@@ -38,9 +41,15 @@ import {
   SessionState
 } from '@/store/session/types';
 import { ACTION_PURGE_DATA } from '@/store/staking/consts';
+import { useMainStore } from '@/store/store';
 import { useTasks } from '@/store/tasks';
-import { ActionStatus, Message, RotkehlchenState } from '@/store/types';
-import { getStatusUpdater, showError, showMessage } from '@/store/utils';
+import { ActionStatus, RotkehlchenState } from '@/store/types';
+import {
+  getStatusUpdater,
+  setAnimationsEnabled,
+  showError,
+  showMessage
+} from '@/store/utils';
 import {
   Exchange,
   KrakenAccountType,
@@ -75,9 +84,12 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
     const options = {
       root: true
     };
+
+    const { fetchIgnored } = useHistory();
+    const { fetchIgnoredAssets } = useIgnoredAssetsStore();
     const async = [
-      dispatch(`history/${HistoryActions.FETCH_IGNORED}`, null, options),
-      dispatch('fetchIgnoredAssets'),
+      fetchIgnored(),
+      fetchIgnoredAssets(),
       dispatch('session/fetchWatchers', null, options),
       dispatch('balances/fetchManualBalances', null, options),
       dispatch('statistics/fetchNetValue', null, options),
@@ -91,7 +103,7 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
   },
 
   async unlock(
-    { commit, dispatch, rootState, rootGetters: { status } },
+    { commit, dispatch, rootState },
     { settings, exchanges, newAccount, sync, username }: UnlockPayload
   ): Promise<ActionStatus> {
     try {
@@ -118,21 +130,16 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
       monitor.start();
       commit('tags', await api.getTags());
       commit('login', { username, newAccount });
-      dispatch('balances/fetchSupportedAssets', null, { root: true });
+      const { fetchSupportedAssets } = useAssetInfoRetrieval();
+      fetchSupportedAssets();
+      const { fetchCounterparties } = useTransactions();
+      fetchCounterparties();
 
       if (!newAccount || sync) {
         await dispatch('refreshData', exchanges);
       } else {
-        const ethUpdater = getStatusUpdater(
-          commit,
-          Section.BLOCKCHAIN_ETH,
-          status
-        );
-        const btcUpdater = getStatusUpdater(
-          commit,
-          Section.BLOCKCHAIN_BTC,
-          status
-        );
+        const ethUpdater = getStatusUpdater(Section.BLOCKCHAIN_ETH);
+        const btcUpdater = getStatusUpdater(Section.BLOCKCHAIN_BTC);
         ethUpdater.setStatus(Status.LOADED);
         btcUpdater.setStatus(Status.LOADED);
       }
@@ -285,13 +292,14 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
     commit('balances/reset', payload, opts);
     commit('defi/reset', payload, opts);
     commit('settings/reset', payload, opts);
-    commit('history/reset', payload, opts);
     commit('statistics/reset', payload, opts);
     commit('staking/reset', payload, opts);
-    commit('reset', payload, opts);
+    useHistory().reset();
+    useTxQueryStatus().reset();
     useNotifications().reset();
     useReports().reset();
     useTasks().reset();
+    useMainStore().reset();
   },
 
   async addTag({ commit }, tag: Tag): Promise<ActionStatus> {
@@ -336,24 +344,21 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
   },
 
   async setKrakenAccountType({ commit }, krakenAccountType: KrakenAccountType) {
+    const { setMessage } = useMainStore();
     try {
       const settings = await api.setSettings({
         krakenAccountType
       });
       commit('generalSettings', settings.general);
-      commit(
-        'setMessage',
-        {
-          title: i18n
-            .t('actions.session.kraken_account.success.title')
-            .toString(),
-          description: i18n
-            .t('actions.session.kraken_account.success.message')
-            .toString(),
-          success: true
-        } as Message,
-        { root: true }
-      );
+      setMessage({
+        title: i18n
+          .t('actions.session.kraken_account.success.title')
+          .toString(),
+        description: i18n
+          .t('actions.session.kraken_account.success.message')
+          .toString(),
+        success: true
+      });
     } catch (e: any) {
       showError(
         e.message,
@@ -562,6 +567,11 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
         newPassword
       );
       showMessage(i18n.t('actions.session.password_change.success').toString());
+
+      if (success && interop.isPackaged) {
+        interop.clearPassword();
+      }
+
       return {
         success
       };
@@ -573,50 +583,10 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
       };
     }
   },
-
-  async fetchIgnoredAssets({ commit }): Promise<void> {
-    try {
-      const ignoredAssets = await api.assets.ignoredAssets();
-      commit('ignoreAssets', ignoredAssets);
-    } catch (e: any) {
-      const title = i18n.tc('actions.session.ignored_assets.error.title');
-      const message = i18n.tc(
-        'actions.session.ignored_assets.error.message',
-        0,
-        {
-          error: e.message
-        }
-      );
-      const { notify } = useNotifications();
-      notify({
-        title,
-        message,
-        display: true
-      });
-    }
-  },
-  async ignoreAsset({ commit }, asset: string): Promise<ActionStatus> {
-    try {
-      const ignoredAssets = await api.assets.modifyAsset(true, asset);
-      commit('ignoreAssets', ignoredAssets);
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
-  },
-  async unignoreAsset({ commit }, asset: string): Promise<ActionStatus> {
-    try {
-      const ignoredAssets = await api.assets.modifyAsset(false, asset);
-      commit('ignoreAssets', ignoredAssets);
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
-  },
   async forceSync({ dispatch }, action: SyncAction): Promise<void> {
     const { isTaskRunning, awaitTask } = useTasks();
     const taskType = TaskType.FORCE_SYNC;
-    if (isTaskRunning(taskType).value) {
+    if (get(isTaskRunning(taskType))) {
       return;
     }
     const { notify } = useNotifications();
@@ -652,34 +622,28 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
       });
     }
   },
-  async [ACTION_PURGE_CACHED_DATA]({ dispatch }, purgable: Purgeable) {
+  async [ACTION_PURGE_CACHED_DATA]({ dispatch }, purgeable: Purgeable) {
     const opts = { root: true };
-    if (purgable === ALL_CENTRALIZED_EXCHANGES) {
-      await dispatch(
-        `history/${HistoryActions.PURGE_EXCHANGE}`,
-        ALL_CENTRALIZED_EXCHANGES,
-        opts
-      );
-    } else if (purgable === ALL_DECENTRALIZED_EXCHANGES) {
+    const { purgeExchange } = useHistory();
+
+    if (purgeable === ALL_CENTRALIZED_EXCHANGES) {
+      await purgeExchange(ALL_CENTRALIZED_EXCHANGES);
+    } else if (purgeable === ALL_DECENTRALIZED_EXCHANGES) {
       await dispatch(`defi/${ACTION_PURGE_PROTOCOL}`, Module.UNISWAP, opts);
       await dispatch(`defi/${ACTION_PURGE_PROTOCOL}`, Module.BALANCER, opts);
-    } else if (purgable === ALL_MODULES) {
+    } else if (purgeable === ALL_MODULES) {
       await dispatch(`staking/${ACTION_PURGE_DATA}`, ALL_MODULES, opts);
       await dispatch(`defi/${ACTION_PURGE_PROTOCOL}`, ALL_MODULES, opts);
     } else if (
-      SUPPORTED_EXCHANGES.includes(purgable as SupportedExchange) ||
-      EXTERNAL_EXCHANGES.includes(purgable as SupportedExternalExchanges)
+      SUPPORTED_EXCHANGES.includes(purgeable as SupportedExchange) ||
+      EXTERNAL_EXCHANGES.includes(purgeable as SupportedExternalExchanges)
     ) {
-      await dispatch(
-        `history/${HistoryActions.PURGE_EXCHANGE}`,
-        purgable,
-        opts
-      );
-    } else if (Object.values(Module).includes(purgable as Module)) {
-      if ([Module.ETH2, Module.ADEX].includes(purgable as Module)) {
-        await dispatch(`staking/${ACTION_PURGE_DATA}`, purgable, opts);
+      await purgeExchange(purgeable as SupportedExchange);
+    } else if (Object.values(Module).includes(purgeable as Module)) {
+      if ([Module.ETH2, Module.ADEX].includes(purgeable as Module)) {
+        await dispatch(`staking/${ACTION_PURGE_DATA}`, purgeable, opts);
       } else {
-        await dispatch(`defi/${ACTION_PURGE_PROTOCOL}`, purgable, opts);
+        await dispatch(`defi/${ACTION_PURGE_PROTOCOL}`, purgeable, opts);
       }
     }
   },
@@ -724,5 +688,10 @@ export const actions: ActionTree<SessionState, RotkehlchenState> = {
 
   async dismissUpdatePopup({ commit }): Promise<void> {
     commit('setShowUpdatePopup', false);
+  },
+
+  setAnimationsEnabled({ commit }, enabled: boolean): void {
+    commit('setAnimationsEnabled', enabled);
+    setAnimationsEnabled(enabled);
   }
 };

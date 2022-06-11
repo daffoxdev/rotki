@@ -1,15 +1,21 @@
 import { NumericString } from '@rotki/common';
 import { z } from 'zod';
 import { Constraints } from '@/data/constraints';
-import { currencies } from '@/data/currencies';
+import { findCurrency } from '@/data/currencies';
 import { axiosCamelCaseTransformer } from '@/services/axios-tranformers';
-import { Currency } from '@/types/currency';
 import { Exchange, KrakenAccountType } from '@/types/exchanges';
 import { FrontendSettings } from '@/types/frontend-settings';
 import { LedgerActionEnum } from '@/types/ledger-actions';
 import { ModuleEnum } from '@/types/modules';
 
-export const PriceOracle = z.enum(['cryptocompare', 'coingecko', 'manual']);
+export const PriceOracle = z.enum([
+  'cryptocompare',
+  'coingecko',
+  'manual',
+  'uniswapv3',
+  'uniswapv2',
+  'saddle'
+]);
 export type PriceOracle = z.infer<typeof PriceOracle>;
 
 const OtherSettings = z.object({
@@ -45,7 +51,8 @@ const GeneralSettings = z.object({
   displayDateInLocaltime: z.boolean(),
   currentPriceOracles: z.array(PriceOracle),
   historicalPriceOracles: z.array(PriceOracle),
-  ssf0graphMultiplier: z.number().default(0)
+  ssf0graphMultiplier: z.number().default(0),
+  nonSyncingExchanges: z.array(Exchange)
 });
 
 export type GeneralSettings = z.infer<typeof GeneralSettings>;
@@ -54,33 +61,32 @@ export const BaseAccountingSettings = z.object({
   calculatePastCostBasis: z.boolean(),
   includeCrypto2crypto: z.boolean(),
   includeGasCosts: z.boolean(),
-  taxfreeAfterPeriod: z.number().nullable(),
-  accountForAssetsMovements: z.boolean()
+  taxfreeAfterPeriod: z.number().nullish(),
+  accountForAssetsMovements: z.boolean(),
+  profitCurrency: z.string().nullish()
 });
 
 export type BaseAccountingSettings = z.infer<typeof BaseAccountingSettings>;
+
+export enum CostBasisMethod {
+  Fifo = 'fifo',
+  Lifo = 'lifo'
+}
+
+export const CostBasisMethodEnum = z.nativeEnum(CostBasisMethod);
 
 const AccountingSettings = z
   .object({
     pnlCsvWithFormulas: z.boolean(),
     pnlCsvHaveSummary: z.boolean(),
-    taxableLedgerActions: z.array(LedgerActionEnum)
+    taxableLedgerActions: z.array(LedgerActionEnum),
+    costBasisMethod: CostBasisMethodEnum.default(CostBasisMethod.Fifo)
   })
   .merge(BaseAccountingSettings);
 
 export type AccountingSettings = z.infer<typeof AccountingSettings>;
 
 export type AccountingSettingsUpdate = Partial<AccountingSettings>;
-
-const findCurrency = (currencySymbol: string) => {
-  const currency: Currency | undefined = currencies.find(
-    currency => currency.tickerSymbol === currencySymbol
-  );
-  if (!currency) {
-    throw new Error(`Could not find ${currencySymbol}`);
-  }
-  return currency;
-};
 
 const Settings = GeneralSettings.merge(AccountingSettings).merge(OtherSettings);
 
@@ -114,7 +120,8 @@ const getAccountingSettings = (settings: UserSettings): AccountingSettings => ({
   includeCrypto2crypto: settings.includeCrypto2crypto,
   accountForAssetsMovements: settings.accountForAssetsMovements,
   calculatePastCostBasis: settings.calculatePastCostBasis,
-  taxableLedgerActions: settings.taxableLedgerActions
+  taxableLedgerActions: settings.taxableLedgerActions,
+  costBasisMethod: settings.costBasisMethod
 });
 
 const getGeneralSettings = (settings: UserSettings): GeneralSettings => ({
@@ -131,7 +138,8 @@ const getGeneralSettings = (settings: UserSettings): GeneralSettings => ({
   displayDateInLocaltime: settings.displayDateInLocaltime,
   currentPriceOracles: settings.currentPriceOracles,
   historicalPriceOracles: settings.historicalPriceOracles,
-  ssf0graphMultiplier: settings.ssf0graphMultiplier
+  ssf0graphMultiplier: settings.ssf0graphMultiplier,
+  nonSyncingExchanges: settings.nonSyncingExchanges
 });
 
 const getOtherSettings = (settings: UserSettings): OtherSettings => ({
@@ -207,7 +215,7 @@ export const READ_ONLY_TAGS: Record<ReadOnlyTag, Tag> = {
     backgroundColor: 'C5DEF5',
     foregroundColor: '000000',
     readOnly: true,
-    icon: require('@/assets/images/modules/loopring.svg')
+    icon: '/assets/images/modules/loopring.svg'
   }
 };
 

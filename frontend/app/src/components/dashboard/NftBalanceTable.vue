@@ -77,38 +77,18 @@
         <percentage-display :value="percentageOfCurrentGroup(item.usdPrice)" />
       </template>
       <template #body.append="{ isMobile }">
-        <tr v-if="!isMobile" class="font-weight-medium">
-          <td colspan="2">
-            {{ $t('nft_balance_table.row.total') }}
-          </td>
-          <td class="text-end">
-            <amount-display
-              :value="total"
-              show-currency="symbol"
-              fiat-currency="USD"
-            />
-          </td>
-          <td
-            v-if="tableHeaders.length - 3"
-            :colspan="tableHeaders.length - 3"
+        <row-append
+          label-colspan="2"
+          :label="$t('nft_balance_table.row.total')"
+          :right-patch-colspan="tableHeaders.length - 3"
+          :is-mobile="isMobile"
+        >
+          <amount-display
+            :value="total"
+            show-currency="symbol"
+            fiat-currency="USD"
           />
-        </tr>
-        <tr v-else class="font-weight-medium">
-          <td
-            class="d-flex align-center justify-space-between font-weight-medium"
-          >
-            <div>
-              {{ $t('nft_balance_table.row.total') }}
-            </div>
-            <div>
-              <amount-display
-                :value="total"
-                show-currency="symbol"
-                fiat-currency="USD"
-              />
-            </div>
-          </td>
-        </tr>
+        </row-append>
       </template>
     </data-table>
   </card>
@@ -117,11 +97,13 @@
 <script lang="ts">
 import { BigNumber } from '@rotki/common';
 import { computed, defineComponent, Ref } from '@vue/composition-api';
+import { get } from '@vueuse/core';
 import { DataTableHeader } from 'vuetify';
 import VisibleColumnsSelector from '@/components/dashboard/VisibleColumnsSelector.vue';
 import MenuTooltipButton from '@/components/helper/MenuTooltipButton.vue';
+import RowAppend from '@/components/helper/RowAppend.vue';
 import { setupStatusChecking } from '@/composables/common';
-import { currency } from '@/composables/session';
+import { setupGeneralSettings } from '@/composables/session';
 import { setupSettings } from '@/composables/settings';
 import i18n from '@/i18n';
 import { Routes } from '@/router/routes';
@@ -142,8 +124,9 @@ const tableHeaders = (
   dashboardTablesVisibleColumns: Ref<DashboardTablesVisibleColumns>
 ) => {
   return computed<DataTableHeader[]>(() => {
-    const visibleColumns =
-      dashboardTablesVisibleColumns.value[DashboardTableType.NFT];
+    const visibleColumns = get(dashboardTablesVisibleColumns)[
+      DashboardTableType.NFT
+    ];
 
     const headers: DataTableHeader[] = [
       {
@@ -161,7 +144,7 @@ const tableHeaders = (
       {
         text: i18n
           .t('nft_balance_table.column.price', {
-            currency: currency.value
+            currency: get(currency)
           })
           .toString(),
         value: 'usdPrice',
@@ -203,7 +186,11 @@ const tableHeaders = (
 
 export default defineComponent({
   name: 'NftBalanceTable',
-  components: { VisibleColumnsSelector, MenuTooltipButton },
+  components: {
+    RowAppend,
+    VisibleColumnsSelector,
+    MenuTooltipButton
+  },
   setup() {
     const store = useStore();
     const balances = computed<NonFungibleBalance[]>(
@@ -216,6 +203,8 @@ export default defineComponent({
       () => store.getters['statistics/totalNetWorthUsd']
     );
 
+    const { currencySymbol } = setupGeneralSettings();
+
     const calculatePercentage = (value: BigNumber, divider: BigNumber) => {
       const percentage = divider.isZero()
         ? 0
@@ -224,11 +213,11 @@ export default defineComponent({
     };
 
     const percentageOfTotalNetValue = (value: BigNumber) => {
-      return calculatePercentage(value, totalNetWorthUsd.value);
+      return calculatePercentage(value, get(totalNetWorthUsd));
     };
 
     const percentageOfCurrentGroup = (value: BigNumber) => {
-      return calculatePercentage(value, total.value);
+      return calculatePercentage(value, get(total));
     };
 
     const refresh = async () => {
@@ -239,7 +228,7 @@ export default defineComponent({
     };
 
     const total = computed(() => {
-      return balances.value.reduce(
+      return get(balances).reduce(
         (sum, value) => sum.plus(value.usdPrice),
         Zero
       );
@@ -248,11 +237,10 @@ export default defineComponent({
     const { dashboardTablesVisibleColumns } = setupSettings();
 
     const mappedBalances = computed(() => {
-      return balances.value.map(balance => {
+      return get(balances).map(balance => {
         return {
           ...balance,
-          imageUrl:
-            balance.imageUrl || require('@/assets/images/placeholder.svg'),
+          imageUrl: balance.imageUrl || '/assets/images/placeholder.svg',
           isVideo: isVideo(balance.imageUrl)
         };
       });
@@ -260,12 +248,12 @@ export default defineComponent({
 
     return {
       mappedBalances,
-      tableHeaders: tableHeaders(currency, dashboardTablesVisibleColumns),
-      currency,
+      tableHeaders: tableHeaders(currencySymbol, dashboardTablesVisibleColumns),
+      currency: currencySymbol,
       refresh,
       total,
       loading: shouldShowLoadingScreen(Section.NON_FUNGIBLE_BALANCES),
-      nonFungibleRoute: Routes.NON_FUNGIBLE,
+      nonFungibleRoute: Routes.ACCOUNTS_BALANCES_NON_FUNGIBLE.route,
       percentageOfTotalNetValue,
       percentageOfCurrentGroup
     };

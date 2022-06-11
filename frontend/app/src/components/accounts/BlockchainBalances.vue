@@ -21,8 +21,8 @@
         :display="openDialog"
         :title="dialogTitle"
         :subtitle="dialogSubtitle"
-        :primary-action="$t('blockchain_balances.form_dialog.save')"
-        :secondary-action="$t('blockchain_balances.form_dialog.cancel')"
+        :primary-action="$tc('blockchain_balances.form_dialog.save')"
+        :secondary-action="$tc('blockchain_balances.form_dialog.cancel')"
         :action-disabled="!valid"
         @confirm="saveAccount()"
         @cancel="clearDialog()"
@@ -36,6 +36,7 @@
       </big-dialog>
       <asset-balances
         data-cy="blockchain-asset-balances"
+        :loading="balancesLoading"
         :title="$t('blockchain_balances.per_asset.title')"
         :balances="blockchainAssets"
       />
@@ -165,17 +166,20 @@ import {
   Ref,
   ref
 } from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
 import AccountBalances from '@/components/accounts/AccountBalances.vue';
 import AccountForm, {
   AccountFormType
 } from '@/components/accounts/AccountForm.vue';
+import AssetBalances from '@/components/AssetBalances.vue';
 import BigDialog from '@/components/dialogs/BigDialog.vue';
 import PriceRefresh from '@/components/helper/PriceRefresh.vue';
-import AssetBalances from '@/components/settings/AssetBalances.vue';
 import { BlockchainData, setupBlockchainData } from '@/composables/balances';
-import { useProxy } from '@/composables/common';
+import { useRoute, useRouter } from '@/composables/common';
 import i18n from '@/i18n';
 import { BlockchainAccountWithBalance } from '@/store/balances/types';
+import { useTasks } from '@/store/tasks';
+import { TaskType } from '@/types/task-type';
 
 type Intersections = {
   [key in Blockchain]: boolean;
@@ -199,48 +203,58 @@ const BlockchainBalances = defineComponent({
     const form = ref<AccountFormType | null>(null);
 
     const createAccount = () => {
-      accountToEdit.value = null;
-      dialogTitle.value = i18n
-        .t('blockchain_balances.form_dialog.add_title')
-        .toString();
-      dialogSubtitle.value = '';
-      openDialog.value = true;
+      set(accountToEdit, null);
+      set(
+        dialogTitle,
+        i18n.t('blockchain_balances.form_dialog.add_title').toString()
+      );
+      set(dialogSubtitle, '');
+      set(openDialog, true);
     };
 
     const editAccount = (account: BlockchainAccountWithBalance) => {
-      accountToEdit.value = account;
-      dialogTitle.value = i18n
-        .t('blockchain_balances.form_dialog.edit_title')
-        .toString();
-      dialogSubtitle.value = i18n
-        .t('blockchain_balances.form_dialog.edit_subtitle')
-        .toString();
-      openDialog.value = true;
+      set(accountToEdit, account);
+      set(
+        dialogTitle,
+        i18n.t('blockchain_balances.form_dialog.edit_title').toString()
+      );
+      set(
+        dialogSubtitle,
+        i18n.t('blockchain_balances.form_dialog.edit_subtitle').toString()
+      );
+      set(openDialog, true);
     };
 
     const clearDialog = async () => {
-      openDialog.value = false;
+      set(openDialog, false);
       setTimeout(async () => {
-        if (form.value) {
-          await form.value.reset();
+        if (get(form)) {
+          await get(form)!.reset();
         }
-        accountToEdit.value = null;
+        set(accountToEdit, null);
       }, 300);
     };
 
     const saveAccount = async () => {
-      if (!form.value) {
+      if (!get(form)) {
         return;
       }
-      const success = await form.value.save();
+      const success = await get(form)!.save();
       if (success) {
         await clearDialog();
       }
     };
 
-    const proxy = useProxy();
+    const router = useRouter();
+    const route = useRoute();
+
     onMounted(() => {
-      openDialog.value = !!proxy.$route.query.add;
+      const query = get(route).query;
+
+      if (query.add) {
+        createAccount();
+        router.replace({ query: {} });
+      }
     });
 
     const intersections = ref<Intersections>({
@@ -256,17 +270,17 @@ const BlockchainBalances = defineComponent({
       entries: IntersectionObserverEntry[],
       value: Blockchain
     ) => {
-      intersections.value = {
-        ...intersections.value,
+      set(intersections, {
+        ...get(intersections),
         [value]: entries[0].isIntersecting
-      };
+      });
     };
 
     const blockchainData = setupBlockchainData();
 
     const getFirstContext = (data: BlockchainData) => {
       const hasData = (data: Ref<BlockchainAccountWithBalance[]>) => {
-        return data.value.length > 0;
+        return get(data).length > 0;
       };
 
       if (hasData(data.btcAccounts)) {
@@ -283,7 +297,7 @@ const BlockchainBalances = defineComponent({
     };
 
     const context = computed(() => {
-      const intersect = intersections.value;
+      const intersect = get(intersections);
       let currentContext = getFirstContext(blockchainData);
 
       for (const current in Blockchain) {
@@ -309,7 +323,11 @@ const BlockchainBalances = defineComponent({
         updateWhenRatio(entries, Blockchain.AVAX)
     };
 
+    const { isTaskRunning } = useTasks();
+    const balancesLoading = isTaskRunning(TaskType.QUERY_BLOCKCHAIN_BALANCES);
+
     return {
+      balancesLoading,
       form,
       context,
       accountToEdit,

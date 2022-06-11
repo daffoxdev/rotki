@@ -1,5 +1,7 @@
 import { SupportedAsset } from '@rotki/common/lib/data';
 import { AxiosInstance, AxiosResponseTransformer } from 'axios';
+import { z } from 'zod';
+import { ActiveLogLevel } from '@/electron-main/ipc';
 
 export const SYNC_UPLOAD = 'upload';
 export const SYNC_DOWNLOAD = 'download';
@@ -8,15 +10,13 @@ const SYNC_ACTIONS = [SYNC_DOWNLOAD, SYNC_UPLOAD] as const;
 
 export type SyncAction = typeof SYNC_ACTIONS[number];
 
-export interface SupportedAssets {
-  readonly [key: string]: Omit<SupportedAsset, 'identifier'>;
-}
+export const SupportedAssets = z.record(
+  SupportedAsset.omit({ identifier: true })
+);
+
+export type SupportedAssets = z.infer<typeof SupportedAssets>;
 
 export class TaskNotFoundError extends Error {}
-
-export interface AsyncQuery {
-  readonly task_id: number;
-}
 
 export interface PendingTask {
   readonly taskId: number;
@@ -27,47 +27,26 @@ export interface Messages {
   readonly errors: string[];
 }
 
-export interface LocationData {
-  readonly time: number;
-  readonly location: string;
-  readonly usd_value: string;
-}
-
 // This is equivalent to python's AssetBalance named tuple
-export interface DBAssetBalance {
-  readonly time: number;
-  readonly asset: string;
-  readonly amount: string;
-  readonly usd_value: string;
-}
-
 export interface PeriodicClientQueryResult {
   readonly lastBalanceSave: number;
   readonly ethNodeConnection: boolean;
   readonly lastDataUploadTs: number;
 }
 
-export interface NetValue {
-  readonly times: number[];
-  readonly data: number[];
-}
+const BackendVersion = z.object({
+  ourVersion: z.string().optional(),
+  latestVersion: z.string().nullish(),
+  downloadUrl: z.string().nullish()
+});
 
-export interface SingleAssetBalance {
-  readonly time: number;
-  readonly amount: string;
-  readonly usd_value: string;
-}
+export const BackendInfo = z.object({
+  logLevel: ActiveLogLevel,
+  version: BackendVersion,
+  dataDirectory: z.string()
+});
 
-export interface BackendVersion {
-  readonly ourVersion?: string;
-  readonly latestVersion?: string;
-  readonly downloadUrl?: string;
-}
-
-export interface BackendInfo {
-  readonly version: BackendVersion;
-  readonly dataDirectory: string;
-}
+export type BackendInfo = z.infer<typeof BackendInfo>;
 
 export interface GeneralAccountData {
   readonly address: string;

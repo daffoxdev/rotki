@@ -1,4 +1,3 @@
-import contextlib
 import json
 import os
 from contextlib import ExitStack, contextmanager
@@ -7,14 +6,16 @@ from shutil import copyfile
 from unittest.mock import patch
 
 import pytest
+from pysqlcipher3 import dbapi2 as sqlcipher
 
-from rotkehlchen.accounting.structures import BalanceType
+from rotkehlchen.accounting.structures.balance import BalanceType
 from rotkehlchen.assets.asset import Asset, EthereumToken
-from rotkehlchen.assets.typing import AssetType
+from rotkehlchen.assets.types import AssetType
 from rotkehlchen.data_handler import DataHandler
 from rotkehlchen.db.dbhandler import DBHandler
 from rotkehlchen.db.filtering import AssetMovementsFilterQuery
 from rotkehlchen.db.old_create import OLD_DB_SCRIPT_CREATE_TABLES
+from rotkehlchen.db.schema import DB_SCRIPT_CREATE_TABLES
 from rotkehlchen.db.settings import ROTKEHLCHEN_DB_VERSION
 from rotkehlchen.db.upgrade_manager import UPGRADES_LIST
 from rotkehlchen.db.upgrades.v6_v7 import (
@@ -28,7 +29,7 @@ from rotkehlchen.db.upgrades.v7_v8 import (
     v7_generate_asset_movement_id,
 )
 from rotkehlchen.db.upgrades.v13_v14 import REMOVED_ASSETS, REMOVED_ETH_TOKENS
-from rotkehlchen.errors import DBUpgradeError
+from rotkehlchen.errors.misc import DBUpgradeError
 from rotkehlchen.tests.utils.database import (
     _init_prepared_db,
     _use_prepared_db,
@@ -37,7 +38,7 @@ from rotkehlchen.tests.utils.database import (
     mock_dbhandler_update_owned_assets,
 )
 from rotkehlchen.tests.utils.factories import make_ethereum_address
-from rotkehlchen.typing import ChecksumEthAddress
+from rotkehlchen.types import ChecksumEthAddress
 from rotkehlchen.user_messages import MessagesAggregator
 
 creation_patch = patch(
@@ -66,17 +67,9 @@ def target_patch(target_version: int):
         'rotkehlchen.db.upgrade_manager.UPGRADES_LIST',
         new=new_upgrades_list,
     )
-    if target_version <= 5:
-        # For tests where no old DB exists we need to first create tables
-        d = patch(
-            'rotkehlchen.db.dbhandler.PASSWORDCHECK_STATEMENT',
-            new=OLD_DB_SCRIPT_CREATE_TABLES,
-        )
-    else:
-        d = contextlib.nullcontext()  # type: ignore
 
-    with a, b, c, d:
-        yield (a, b, c, d)
+    with a, b, c:
+        yield (a, b, c)
 
 
 def _init_db_with_target_version(
@@ -84,10 +77,19 @@ def _init_db_with_target_version(
         user_data_dir: Path,
         msg_aggregator: MessagesAggregator,
 ) -> DBHandler:
+    no_tables_created_after_init = patch(
+        'rotkehlchen.db.dbhandler.DB_SCRIPT_CREATE_TABLES',
+        new='',
+    )
     with ExitStack() as stack:
         stack.enter_context(target_patch(target_version=target_version))
-        if target_version <= 24:
+        if target_version not in (2, 4):
+            # Some early upgrade tests rely on a mocked creation so we need to not touch it
+            # for others do not allow latest tables to be created after init
+            stack.enter_context(no_tables_created_after_init)
+        if target_version <= 25:
             stack.enter_context(mock_dbhandler_update_owned_assets())
+            stack.enter_context(mock_dbhandler_add_globaldb_assetids())
         db = DBHandler(
             user_data_dir=user_data_dir,
             password='123',
@@ -227,6 +229,7 @@ def populate_db_and_check_for_asset_renaming(
         ),
     )
     db.conn.commit()
+    db.logout()
 
     # now relogin and check that all tables have appropriate data
     with mock_dbhandler_update_owned_assets(), creation_patch:
@@ -308,7 +311,7 @@ def populate_db_and_check_for_asset_renaming(
 
     assert new_db.get_version() == target_version
     with mock_dbhandler_update_owned_assets():
-        del new_db  # explicit delete the db so update_owned_assets still runs mocked
+        new_db.logout()  # logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_1_to_2(data_dir, username):
@@ -339,7 +342,7 @@ def test_upgrade_db_1_to_2(data_dir, username):
     # Also make sure that we have updated to the target_version
     assert version == 2
     with mock_dbhandler_update_owned_assets():
-        del data.db  # explicit delete the db so update_owned_assets still runs mocked
+        data.db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_2_to_3(user_data_dir):
@@ -361,7 +364,6 @@ def test_upgrade_db_2_to_3(user_data_dir):
             renamed_asset='BSV',
             target_version=3,
         )
-        del db  # explicit delete the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_3_to_4(data_dir, username):
@@ -400,7 +402,7 @@ def test_upgrade_db_3_to_4(data_dir, username):
     # Also make sure that we have updated to the target_version
     assert version == 4
     with mock_dbhandler_update_owned_assets():
-        del data.db  # explicit delete the db so update_owned_assets still runs mocked
+        data.db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_4_to_5(user_data_dir):
@@ -422,7 +424,6 @@ def test_upgrade_db_4_to_5(user_data_dir):
             renamed_asset='BCH',
             target_version=5,
         )
-        del db  # explicit delete the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_5_to_6(user_data_dir):
@@ -515,7 +516,7 @@ def test_upgrade_db_5_to_6(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 6
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_6_to_7(user_data_dir):
@@ -577,7 +578,7 @@ def test_upgrade_db_6_to_7(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 7
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_7_to_8(user_data_dir):
@@ -737,7 +738,7 @@ def test_upgrade_db_7_to_8(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 8
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_broken_db_7_to_8(user_data_dir):
@@ -783,7 +784,7 @@ def test_upgrade_db_8_to_9(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 9
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_9_to_10(user_data_dir):
@@ -806,7 +807,7 @@ def test_upgrade_db_9_to_10(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 10
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_10_to_11(user_data_dir):
@@ -837,7 +838,7 @@ def test_upgrade_db_10_to_11(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 11
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_11_to_12(user_data_dir):
@@ -863,7 +864,7 @@ def test_upgrade_db_11_to_12(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 12
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_12_to_13(user_data_dir):
@@ -917,7 +918,7 @@ def test_upgrade_db_12_to_13(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 13
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_13_to_14(user_data_dir):
@@ -967,7 +968,7 @@ def test_upgrade_db_13_to_14(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 14
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_15_to_16(user_data_dir):
@@ -995,7 +996,7 @@ def test_upgrade_db_15_to_16(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 16
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_16_to_17(user_data_dir):
@@ -1043,7 +1044,7 @@ def test_upgrade_db_16_to_17(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 17
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_18_to_19(user_data_dir):
@@ -1071,7 +1072,7 @@ def test_upgrade_db_18_to_19(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 19
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_19_to_20(user_data_dir):
@@ -1103,7 +1104,7 @@ def test_upgrade_db_19_to_20(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 20
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_20_to_21(user_data_dir):
@@ -1168,7 +1169,7 @@ def test_upgrade_db_20_to_21(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 21
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_21_to_22(user_data_dir):  # pylint: disable=unused-argument
@@ -1204,7 +1205,7 @@ def test_upgrade_db_21_to_22(user_data_dir):  # pylint: disable=unused-argument
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 22
     with mock_dbhandler_update_owned_assets():
-        del db  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()  # explicit logout the db so update_owned_assets still runs mocked
 
 
 def test_upgrade_db_22_to_23_with_frontend_settings(user_data_dir):
@@ -1244,6 +1245,7 @@ def test_upgrade_db_22_to_23_with_frontend_settings(user_data_dir):
     assert cursor.execute(
         'SELECT COUNT(*) from trades WHERE location = "T";',
     ).fetchone()[0] == 2
+    db_v22.logout()
 
     # Migrate to v23
     db = _init_db_with_target_version(
@@ -1286,7 +1288,7 @@ def test_upgrade_db_22_to_23_with_frontend_settings(user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 23
     with mock_dbhandler_update_owned_assets():
-        del db, db_v22  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()
 
 
 @pytest.mark.parametrize('use_clean_caching_directory', [True])
@@ -1326,6 +1328,7 @@ def test_upgrade_db_22_to_23_without_frontend_settings(data_dir, user_data_dir):
         'SELECT COUNT(*) FROM settings WHERE name = "historical_data_start";',
     ).fetchone()[0] == 1
 
+    db_v22.logout()
     # Migrate to v23
     db = _init_db_with_target_version(
         target_version=23,
@@ -1368,7 +1371,7 @@ def test_upgrade_db_22_to_23_without_frontend_settings(data_dir, user_data_dir):
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 23
     with mock_dbhandler_update_owned_assets():
-        del db, db_v22  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()
 
 
 def test_upgrade_db_23_to_24(user_data_dir):  # pylint: disable=unused-argument
@@ -1391,6 +1394,7 @@ def test_upgrade_db_23_to_24(user_data_dir):  # pylint: disable=unused-argument
     ).fetchone()[0] == 1
     assert cursor.execute('SELECT COUNT(*) from adex_events;').fetchone()[0] == 1
 
+    db_v23.logout()
     # Migrate to v24
     db = _init_db_with_target_version(
         target_version=24,
@@ -1429,7 +1433,7 @@ def test_upgrade_db_23_to_24(user_data_dir):  # pylint: disable=unused-argument
     # Finally also make sure that we have updated to the target version
     assert db.get_version() == 24
     with mock_dbhandler_update_owned_assets():
-        del db, db_v23  # explicit delete the db so update_owned_assets still runs mocked
+        db.logout()
 
 
 @pytest.mark.parametrize('use_clean_caching_directory', [True])
@@ -1570,7 +1574,8 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
     ]
 
     with mock_dbhandler_update_owned_assets():
-        del db_v24  # explicit delete the db so update_owned_assets still runs mocked
+        db_v24.logout()
+
     # Migrate to v25
     db = _init_db_with_target_version(
         target_version=25,
@@ -1758,13 +1763,11 @@ def test_upgrade_db_24_to_25(user_data_dir):  # pylint: disable=unused-argument
 
     # Check errors/warnings
     warnings = msg_aggregator.consume_warnings()
-    assert len(warnings) == 11
+    assert len(warnings) == 9
     for idx in (0, 1, 3, 5, 7):
         assert "During v24 -> v25 DB upgrade could not find key '_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94'" in warnings[idx]  # noqa: E501
-    for idx in (2, 4, 6):
+    for idx in (2, 4, 6, 8):
         assert "During v24 -> v25 DB upgrade could not find key '_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e'" in warnings[idx]  # noqa: E501
-    assert 'Unknown/unsupported asset _ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94' in warnings[9]  # noqa: E501
-    assert 'Unknown/unsupported asset _ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e' in warnings[10]  # noqa: E501
     errors = msg_aggregator.consume_errors()
     assert len(errors) == 0
     # Finally also make sure that we have updated to the target version
@@ -1783,10 +1786,10 @@ def test_upgrade_db_25_to_26(globaldb, user_data_dir, have_kraken, have_kraken_s
 
     # make sure the globaldb has a custom token used in the DB
     globaldb.add_asset(
-        asset_id='_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94',
+        asset_id='_ceth_0xa54d2EBfD977ad836203c85F18db2F0a0cF88854',
         asset_type=AssetType.ETHEREUM_TOKEN,
         data=EthereumToken.initialize(
-            address=ChecksumEthAddress('0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94'),
+            address=ChecksumEthAddress('0xa54d2EBfD977ad836203c85F18db2F0a0cF88854'),
             decimals=18,
             name='foo',
             symbol='FOO',
@@ -1882,7 +1885,7 @@ def test_upgrade_db_25_to_26(globaldb, user_data_dir, have_kraken, have_kraken_s
         ('CNY', 'test CNY balance', '1', 'A'),
         ('_ceth_0x8Ab7404063Ec4DBcfd4598215992DC3F8EC853d7', 'exotic asset', '1500', 'A'),
         ('_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'test for duplication', '100000', 'J'),  # noqa: E501
-        ('_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94', 'test custom token balance', '65', 'A'),  # noqa: E501
+        ('_ceth_0xa54d2EBfD977ad836203c85F18db2F0a0cF88854', 'test custom token balance', '65', 'A'),  # noqa: E501
         ('_ceth_0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9', 'test_asset_with_same_symbol', '85', 'A'),  # noqa: E501
         ('_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e', 'test_custom_token', '25', 'A'),  # this token is not known but will still be here after the upgrade  # noqa: E501
     ]
@@ -2016,7 +2019,7 @@ def test_upgrade_db_25_to_26(globaldb, user_data_dir, have_kraken, have_kraken_s
         ('CNY', 'test CNY balance', '1', 'A'),
         ('_ceth_0x8Ab7404063Ec4DBcfd4598215992DC3F8EC853d7', 'exotic asset', '1500', 'A'),
         ('_ceth_0x111111111117dC0aa78b770fA6A738034120C302', 'test for duplication', '100000', 'J'),  # noqa: E501
-        ('_ceth_0x48Fb253446873234F2fEBbF9BdeAA72d9d387f94', 'test custom token balance', '65', 'A'),  # noqa: E501
+        ('_ceth_0xa54d2EBfD977ad836203c85F18db2F0a0cF88854', 'test custom token balance', '65', 'A'),  # noqa: E501
         ('_ceth_0x50D1c9771902476076eCFc8B2A83Ad6b9355a4c9', 'test_asset_with_same_symbol', '85', 'A'),  # noqa: E501
         ('_ceth_0xdb89d55d8878680FED2233ea6E1Ae7DF79C7073e', 'test_custom_token', '25', 'A'),  # this token is not known but will still be here after the upgrade  # noqa: E501
     ]
@@ -2083,7 +2086,7 @@ def test_upgrade_db_25_to_26(globaldb, user_data_dir, have_kraken, have_kraken_s
                 '0.001504',
             )
     userdb_assets_num = cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0]
-    globaldb_cursor = globaldb._conn.cursor()
+    globaldb_cursor = globaldb.conn.cursor()
     globaldb_assets_num = globaldb_cursor.execute('SELECT COUNT(*) from assets;').fetchone()[0]
     msg = 'User DB should contain 1 extra asset that is moved over without existing in the global DB'  # noqa: E501
     assert globaldb_assets_num == userdb_assets_num - 1, msg
@@ -2126,6 +2129,7 @@ def test_upgrade_db_26_to_27(user_data_dir):  # pylint: disable=unused-argument
     assert cursor.execute('SELECT COUNT(*) from balancer_pools;').fetchone()[0] == 1
     assert cursor.execute('SELECT COUNT(*) from balancer_events;').fetchone()[0] == 1
 
+    db_v26.logout()
     # Migrate to v27
     db = _init_db_with_target_version(
         target_version=27,
@@ -2160,6 +2164,8 @@ def test_upgrade_db_27_to_28(user_data_dir):  # pylint: disable=unused-argument
     # Checks before migration
     assert cursor.execute('SELECT COUNT(*) FROM aave_events;').fetchone()[0] == 1
     assert cursor.execute('SELECT COUNT(*) from yearn_vaults_events;').fetchone()[0] == 1
+
+    db_v27.logout()
     # Migrate to v28
     db = _init_db_with_target_version(
         target_version=28,
@@ -2249,6 +2255,8 @@ def test_upgrade_db_28_to_29(user_data_dir):  # pylint: disable=unused-argument
             entry[4],
         ))
     assert transactions_before == expected_transactions_before
+
+    db_v28.logout()
     # Migrate to v29
     db = _init_db_with_target_version(
         target_version=29,
@@ -2368,6 +2376,7 @@ def test_upgrade_db_30_to_31(user_data_dir, db_with_set_version):  # pylint: dis
         ('kraken_asset_movements_kraken1', 0, 1634850532),
     ]
 
+    db_v30.logout()
     if db_with_set_version:
         db_name = 'v30_rotkehlchen.db'
     else:
@@ -2400,6 +2409,294 @@ def test_upgrade_db_30_to_31(user_data_dir, db_with_set_version):  # pylint: dis
         ('eth2_deposits_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 1602667372, 1637575118),
         ('kraken_asset_movements_kraken1', 0, 1634850532),
     ]
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_31_to_32(user_data_dir):  # pylint: disable=unused-argument  # noqa: E501
+    """Test upgrading the DB from version 31 to version 32.
+
+    - Check that subtype is correctly updated
+    - Check that gitcoin data is properly delete
+    - Check that trades with fee missing, sets fee_currency to NULL and vice versa
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v31_rotkehlchen.db')
+    db_v31 = _init_db_with_target_version(
+        target_version=31,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db_v31.conn.cursor()
+    result = cursor.execute('SELECT rowid from history_events')
+    old_ids = {row[0] for row in result}
+    assert len(old_ids) == 19
+    cursor.execute(
+        'SELECT subtype from history_events',
+    )
+    subtypes = [row[0] for row in cursor]
+    assert set(subtypes) == {
+        'staking deposit asset',
+        'staking receive asset',
+        None,
+        'fee',
+        'staking remove asset',
+    }
+    # check used query ranges
+    result = cursor.execute('SELECT * from used_query_ranges').fetchall()
+    assert result == [
+        ('ethtxs_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 0, 1637575118),
+        ('eth2_deposits_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 1602667372, 1637575118),
+        ('kraken_asset_movements_kraken1', 0, 1634850532),
+        ('gitcoingrants_0x4362BBa5a26b07db048Bc2603f843E21Ac22D75E', 1, 2),
+    ]
+    # Check gitcoin ledger actions are there
+    result = cursor.execute('SELECT * from ledger_actions').fetchall()
+    assert result == [
+        (1, 1, 'A', 'A', '1', 'ETH', None, None, None, None),
+        (2, 2, 'A', '^', '1', 'ETH', None, None, None, None),
+        (3, 3, 'A', '^', '1', 'ETH', None, None, None, None),
+    ]
+    result = cursor.execute('SELECT * from ledger_actions_gitcoin_data').fetchall()
+    assert result == [(2, '0x1', 1, 1, 'A'), (3, '0x2', 1, 1, 'B')]
+    # Check that the other gitcoin tables exist at this point
+    for name in ('gitcoin_tx_type', 'ledger_actions_gitcoin_data', 'gitcoin_grant_metadata'):
+        assert cursor.execute(
+            'SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name=?', (name,),
+        ).fetchone()[0] == 1
+
+    manual_balance_before = cursor.execute(
+        'SELECT asset, label, amount, location, category FROM '
+        'manually_tracked_balances;',
+    ).fetchall()
+
+    # check that the trades with invalid fee/fee_currency are present at this point
+    trades_before = cursor.execute('SELECT * FROM trades WHERE id != ? AND id != ?', ("foo1", "foo2")).fetchall()  # noqa: E501
+    assert trades_before == [
+        ('1111111', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', '3.4', 'USD', None, None),  # noqa: E501
+        ('1111112', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', '3.4', None, None, None),  # noqa: E501
+        ('1111113', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', None, 'USD', None, None),  # noqa: E501
+    ]
+    # Check that there are invalid pairs of (event_identifier, sequence_index)
+    base_entries_query = 'SELECT * from history_events WHERE event_identifier="KRAKEN-REMOTE-ID3"'
+    result = cursor.execute(base_entries_query).fetchall()
+    assert len(result) == 5
+    assert len([row[2] for row in result]) == 5
+    assert len({row[2] for row in result}) == 4
+    assert len([True for event in result if event[-1] is not None]) == 2
+
+    base_entries_query = 'SELECT * from history_events WHERE event_identifier="KRAKEN-REMOTE-ID4"'
+    result = cursor.execute(base_entries_query).fetchall()
+    assert len(result) == 5
+    assert len([row[2] for row in result]) == 5
+    assert len({row[2] for row in result}) == 3
+
+    # check that user_credential_mappings with setting_name=PAIRS are present
+    selected_binance_markets_before = cursor.execute('SELECT * from user_credentials_mappings WHERE setting_name="PAIRS"').fetchall()  # noqa: E501
+    assert selected_binance_markets_before == [
+        ('binance', 'E', 'PAIRS', 'pro'),
+        ('binanceus', 'S', 'PAIRS', 'abc'),
+    ]
+
+    tag_mappings_before = cursor.execute('SELECT object_reference, tag_name FROM tag_mappings').fetchall()  # noqa: E501
+    assert tag_mappings_before == [
+        ('LABEL1', 'TAG1'),
+        ('LABEL2', 'TAG2'),
+    ]
+
+    # Check that we have old staking events
+    expected_timestamp = 16099501664486
+    cursor.execute('SELECT COUNT(*) FROM history_events WHERE subtype="staking remove asset" AND type="unstaking"')  # noqa: E501
+    assert cursor.fetchone() == (1,)
+    cursor.execute('SELECT COUNT(*), timestamp FROM history_events WHERE subtype="staking receive asset" AND type="unstaking"')  # noqa: E501
+    assert cursor.fetchone() == (1, expected_timestamp)
+
+    db_v31.logout()
+    # Execute upgrade
+    db = _init_db_with_target_version(
+        target_version=32,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+    cursor.execute('SELECT subtype FROM history_events')
+    subtypes = {row[0] for row in cursor}
+    assert subtypes == {'deposit asset', 'receive wrapped', 'reward', 'fee', None, 'remove asset'}
+    result = cursor.execute('SELECT identifier FROM history_events ORDER BY identifier')
+    assert [x[0] for x in result] == list(range(1, 20)), 'identifier column should be added'
+    # check used query range got delete and rest are intact
+    result = cursor.execute('SELECT * from used_query_ranges').fetchall()
+    assert result == [
+        ('ethtxs_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 0, 1637575118),
+        ('eth2_deposits_0x45E6CA515E840A4e9E02A3062F99216951825eB2', 1602667372, 1637575118),
+        ('kraken_asset_movements_kraken1', 0, 1634850532),
+    ]
+    # Check that the non-gitcoin ledger action is still there
+    result = cursor.execute('SELECT * from ledger_actions').fetchall()
+    assert result == [(1, 1, 'A', 'A', '1', 'ETH', None, None, None, None)]
+    # Check that all gitcoin tables are deleted
+    for name in ('gitcoin_tx_type', 'ledger_actions_gitcoin_data', 'gitcoin_grant_metadata'):
+        assert cursor.execute(
+            'SELECT COUNT(*) FROM sqlite_master WHERE type="table" AND name=?', (name,),
+        ).fetchone()[0] == 0
+
+    manual_balance_after = cursor.execute(
+        'SELECT asset, label, amount, location, category FROM '
+        'manually_tracked_balances;',
+    ).fetchall()
+
+    manual_balance_expected = [
+        ('1CR', 'LABEL1', '34.5', 'A', 'B'),
+        ('2GIVE', 'LABEL2', '0.3', 'B', 'B'),
+        ('1CR', 'LABEL3', '3', 'A', 'A'),
+    ]
+    assert manual_balance_expected == manual_balance_before == manual_balance_after
+
+    manual_balance_ids = cursor.execute('SELECT id FROM manually_tracked_balances;').fetchall()
+
+    assert [1, 2, 3] == [x[0] for x in manual_balance_ids]
+
+    # Check that trades with fee missing sets fee_currency to NULL and vice versa
+    trades_expected = cursor.execute('SELECT * FROM trades WHERE id != ? AND id != ?', ('foo1', 'foo2')).fetchall()  # noqa: E501
+    assert trades_expected == [
+        ('1111111', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', '3.4', 'USD', None, None),  # noqa: E501
+        ('1111112', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', None, None, None, None),  # noqa: E501
+        ('1111113', 1595640208, 'external', 'ETH', 'USD', 'buy', '1.5541', '22.1', None, None, None, None),  # noqa: E501
+    ]
+
+    # Check that sequence indeces are unique for the same event identifier
+    base_entries_query = 'SELECT * from history_events WHERE event_identifier="KRAKEN-REMOTE-ID3"'
+    result = cursor.execute(base_entries_query).fetchall()
+    assert len(result) == 5
+    assert len([row[2] for row in result]) == 5
+    assert len({row[2] for row in result}) == 5
+
+    base_entries_query = 'SELECT * from history_events WHERE event_identifier="KRAKEN-REMOTE-ID4"'
+    result = cursor.execute(base_entries_query).fetchall()
+    assert len(result) == 5
+    assert len([row[2] for row in result]) == 5
+    assert len({row[2] for row in result}) == 5
+
+    ens_names_test_data = ('0xASDF123', 'TEST_ENS_NAME', 1)
+    cursor.execute('INSERT INTO ens_mappings(address, ens_name, last_update) VALUES(?, ?, ?)', ens_names_test_data)  # noqa: E501
+    data_in_db = cursor.execute('SELECT address, ens_name, last_update FROM ens_mappings').fetchone()  # noqa: E501
+    assert data_in_db == ens_names_test_data
+    # Check that selected binance markets settings_name changed to the updated one.
+    selected_binance_markets_after = cursor.execute('SELECT * from user_credentials_mappings WHERE setting_name="binance_selected_trade_pairs"').fetchall()  # noqa: E501
+    assert selected_binance_markets_after == [
+        ('binance', 'E', 'binance_selected_trade_pairs', 'pro'),
+        ('binanceus', 'S', 'binance_selected_trade_pairs', 'abc'),
+    ]
+    tag_mappings_after = cursor.execute('SELECT object_reference, tag_name FROM tag_mappings').fetchall()  # noqa: E501
+    assert tag_mappings_after == [
+        ('1', 'TAG1'),
+        ('2', 'TAG2'),
+    ]
+
+    # Check that staking events have been updated
+    cursor.execute('SELECT COUNT(*) FROM history_events WHERE subtype="staking remove asset" AND type="unstaking"')  # noqa: E501
+    assert cursor.fetchone() == (0,)
+    cursor.execute('SELECT COUNT(*) FROM history_events WHERE subtype="staking receive asset" AND type="unstaking"')  # noqa: E501
+    assert cursor.fetchone() == (0,)
+    cursor.execute('SELECT COUNT(*), timestamp FROM history_events WHERE subtype="remove asset" AND type="staking"')  # noqa: E501
+    assert cursor.fetchone() == (1, expected_timestamp // 10)
+    cursor.execute('SELECT COUNT(*), timestamp FROM history_events WHERE subtype="remove asset" AND type="staking"')  # noqa: E501
+    assert cursor.fetchone() == (1, expected_timestamp // 10)
+
+
+@pytest.mark.parametrize('use_clean_caching_directory', [True])
+def test_upgrade_db_32_to_33(user_data_dir):  # pylint: disable=unused-argument  # noqa: E501
+    """Test upgrading the DB from version 32 to version 33.
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v32_rotkehlchen.db')
+    db_v32 = _init_db_with_target_version(
+        target_version=32,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db_v32.conn.cursor()
+    # check that you cannot add blockchain column in xpub_mappings
+    with pytest.raises(sqlcipher.OperationalError) as exc_info:  # pylint: disable=no-member
+        cursor.execute(
+            'INSERT INTO xpub_mappings(address, xpub, derivation_path, account_index, derived_index, blockchain) '  # noqa: 501
+            'VALUES ("1234", "abcd", "d", 3, 6, "BCH");',
+        )
+    assert 'cannot INSERT into generated column "blockchain"' in str(exc_info)
+    xpub_mapping_data = (
+        '1LZypJUwJJRdfdndwvDmtAjrVYaHko136r',
+        'xpub68V4ZQQ62mea7ZUKn2urQu47Bdn2Wr7SxrBxBDDwE3kjytj361YBGSKDT4WoBrE5htrSB8eAMe59NPnKrcAbiv2veN5GQUmfdjRddD1Hxrk',  # noqa: 501
+        'm',
+        0,
+        0,
+        'BTC',
+    )
+    old_xpub_mappings = cursor.execute('SELECT * FROM xpub_mappings').fetchall()
+    assert len(old_xpub_mappings) == 1
+    assert old_xpub_mappings[0] == xpub_mapping_data
+
+    db_v32.logout()
+    # Execute upgrade
+    db = _init_db_with_target_version(
+        target_version=33,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+    # check that xpubs mappings were not altered.
+    new_xpub_mappings = cursor.execute('SELECT * FROM xpub_mappings').fetchall()
+    assert new_xpub_mappings == old_xpub_mappings
+    # check that you can now add blockchain column in xpub_mappings
+    address = '1MKSdDCtBSXiE49vik8xUG2pTgTGGh5pqe'
+    cursor.execute(
+        'INSERT INTO xpub_mappings(address, xpub, derivation_path, account_index, derived_index, blockchain) '  # noqa: 501
+        'VALUES (?, ?, ?, ?, ?, ?);',
+        (address, xpub_mapping_data[1], 'm', 0, 1, 'BCH'),
+    )
+    all_xpubs_mappings = cursor.execute('SELECT * FROM xpub_mappings').fetchall()
+    assert len(all_xpubs_mappings) == 2
+
+
+def test_latest_upgrade_adds_remove_tables(user_data_dir):
+    """
+    This is a test that we can only do for the last upgrade.
+    It tests that we know and have included addition statements for all
+    of the new database tables introduced.
+
+    Each time a new database upgrade is added this will need to be modified as
+    this is just to reminds us not to forget to add create table statements.
+    """
+    msg_aggregator = MessagesAggregator()
+    _use_prepared_db(user_data_dir, 'v31_rotkehlchen.db')
+    last_db = _init_db_with_target_version(
+        target_version=31,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = last_db.conn.cursor()
+    result = cursor.execute('SELECT name FROM sqlite_master WHERE type="table"')
+    tables_before = {x[0] for x in result}
+
+    last_db.logout()
+    # Execute upgrade
+    db = _init_db_with_target_version(
+        target_version=32,
+        user_data_dir=user_data_dir,
+        msg_aggregator=msg_aggregator,
+    )
+    cursor = db.conn.cursor()
+    result = cursor.execute('SELECT name FROM sqlite_master WHERE type="table"')
+    tables_after_upgrade = {x[0] for x in result}
+    # also add latest tables (this will indicate if DB upgrade missed something
+    db.conn.executescript(DB_SCRIPT_CREATE_TABLES)
+    result = cursor.execute('SELECT name FROM sqlite_master WHERE type="table"')
+    tables_after_creation = {x[0] for x in result}
+
+    removed_tables = {'gitcoin_grant_metadata', 'ledger_actions_gitcoin_data', 'gitcoin_tx_type'}
+    missing_tables = tables_before - tables_after_upgrade
+    assert missing_tables == removed_tables
+    assert tables_after_creation - tables_after_upgrade == set()
+    new_tables = tables_after_upgrade - tables_before
+    assert new_tables == {'ens_mappings', 'ethereum_internal_transactions', 'ethtx_address_mappings', 'evm_tx_mappings', 'history_events_mappings'}  # noqa: E501
 
 
 def test_db_newer_than_software_raises_error(data_dir, username):

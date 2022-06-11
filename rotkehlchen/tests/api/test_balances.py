@@ -6,13 +6,14 @@ from unittest.mock import patch
 import gevent
 import pytest
 import requests
+from flaky import flaky
 
-from rotkehlchen.accounting.structures import BalanceType
+from rotkehlchen.accounting.structures.balance import BalanceType
 from rotkehlchen.balances.manual import ManuallyTrackedBalance
 from rotkehlchen.chain.bitcoin import get_bitcoin_addresses_balances
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import RemoteError
+from rotkehlchen.errors.misc import RemoteError
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.api import (
     ASYNC_TASK_WAIT_TIMEOUT,
@@ -42,7 +43,7 @@ from rotkehlchen.tests.utils.substrate import (
     SUBSTRATE_ACC1_KSM_ADDR,
     SUBSTRATE_ACC2_KSM_ADDR,
 )
-from rotkehlchen.typing import Location, SupportedBlockchain, Timestamp
+from rotkehlchen.types import Location, SupportedBlockchain, Timestamp
 
 
 def assert_all_balances(
@@ -161,6 +162,7 @@ def test_query_all_balances(
         ethereum_accounts=ethereum_accounts,
         btc_accounts=btc_accounts,
         manually_tracked_balances=[ManuallyTrackedBalance(
+            id=-1,
             asset=A_EUR,
             label='My EUR bank',
             amount=FVal('1550'),
@@ -366,6 +368,7 @@ def test_query_all_balances_with_manually_tracked_balances(
     rotki = rotkehlchen_api_server_with_exchanges.rest_api.rotkehlchen
     rotki.chain_manager.cache_ttl_secs = 0
     manually_tracked_balances = [ManuallyTrackedBalance(
+        id=-1,
         asset=A_BTC,
         label='XPUB BTC wallet',
         amount=FVal('10'),
@@ -373,6 +376,7 @@ def test_query_all_balances_with_manually_tracked_balances(
         tags=None,
         balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
+        id=-1,
         asset=A_BTC,
         label='BTC in hardware wallet',
         amount=FVal('20'),
@@ -380,6 +384,7 @@ def test_query_all_balances_with_manually_tracked_balances(
         tags=['private'],
         balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
+        id=-1,
         asset=A_ETH,
         label='ETH in a not supported exchange wallet',
         amount=FVal('10'),
@@ -387,6 +392,7 @@ def test_query_all_balances_with_manually_tracked_balances(
         tags=['private'],
         balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
+        id=-1,
         asset=A_EUR,
         label='N26 account',
         amount=FVal('12500.15'),
@@ -394,6 +400,7 @@ def test_query_all_balances_with_manually_tracked_balances(
         tags=None,
         balance_type=BalanceType.ASSET,
     ), ManuallyTrackedBalance(
+        id=-1,
         asset=A_EUR,
         label='Deutsche Bank account',
         amount=FVal('1337.1337'),
@@ -684,6 +691,7 @@ def test_balances_caching_mixup(
         assert result_btc['totals']['liabilities'] == {}
 
 
+@flaky(max_runs=3, min_passes=1)  # Kusama open nodes some times time out
 @pytest.mark.parametrize('number_of_eth_accounts', [0])
 @pytest.mark.parametrize('kusama_manager_connect_at_start', [KUSAMA_TEST_NODES])
 @pytest.mark.parametrize('ksm_accounts', [[SUBSTRATE_ACC1_KSM_ADDR, SUBSTRATE_ACC2_KSM_ADDR]])

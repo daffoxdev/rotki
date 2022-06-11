@@ -1,14 +1,22 @@
 import { BigNumber } from '@rotki/common';
 import { mount, Wrapper } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import Vue from 'vue';
 import Vuetify from 'vuetify';
+import { VTooltip } from 'vuetify/lib/components';
 import AmountDisplay from '@/components/display/AmountDisplay.vue';
 import { currencies } from '@/data/currencies';
 import store from '@/store/store';
 import { bigNumberify, Zero } from '@/utils/bignumbers';
 import '@/filters';
+import '../../i18n';
 
 Vue.use(Vuetify);
+
+// This is workaround used because stubs is somehow not working,
+// Eager prop will render the <slot /> immediately
+// @ts-ignore
+VTooltip.options.props.eager.default = true;
 
 function createWrapper(
   value: BigNumber,
@@ -16,18 +24,15 @@ function createWrapper(
   fiatCurrency: string | null
 ) {
   const vuetify = new Vuetify();
+  const pinia = createPinia();
+  setActivePinia(pinia);
   return mount(AmountDisplay, {
     store,
-    vuetify,
-    stubs: {
-      VTooltip: {
-        template:
-          '<span><slot name="activator"/><slot v-if="!disabled"/></span>',
-        props: {
-          disabled: { type: Boolean }
-        }
-      }
+    pinia,
+    provide: {
+      'vuex-store': store
     },
+    vuetify,
     propsData: {
       value,
       fiatCurrency,
@@ -37,7 +42,7 @@ function createWrapper(
 }
 
 describe('AmountDisplay.vue', () => {
-  let wrapper: Wrapper<AmountDisplay>;
+  let wrapper: Wrapper<any>;
 
   beforeEach(async () => {
     store.commit('session/generalSettings', {
@@ -55,7 +60,9 @@ describe('AmountDisplay.vue', () => {
     test('displays amount converted to selected fiat currency', async () => {
       wrapper = createWrapper(bigNumberify(1.20440001), Zero, 'USD');
       expect(wrapper.find('.amount-display__value').text()).toBe('1.44');
-      expect(wrapper.find('.amount-display__full-value').exists()).toBe(false);
+      expect(wrapper.find('.amount-display__full-value').text()).toBe(
+        '1.445280012'
+      );
     });
 
     test('displays amount converted to selected fiat currency (does not double-convert)', async () => {
@@ -65,7 +72,9 @@ describe('AmountDisplay.vue', () => {
         'EUR'
       );
       expect(wrapper.find('.amount-display__value').text()).toBe('1.20');
-      expect(wrapper.find('.amount-display__full-value').exists()).toBe(false);
+      expect(wrapper.find('.amount-display__full-value').text()).toBe(
+        '1.20440001'
+      );
     });
 
     test('displays amount as it is without fiat conversion', async () => {
@@ -85,7 +94,9 @@ describe('AmountDisplay.vue', () => {
     test('displays amount converted to selected fiat currency as scrambled', async () => {
       wrapper = createWrapper(bigNumberify(1.20440001), Zero, 'USD');
       expect(wrapper.find('.amount-display__value').text()).not.toBe('1.44');
-      expect(wrapper.find('.amount-display__full-value').exists()).toBe(false);
+      expect(wrapper.find('.amount-display__full-value').text()).not.toBe(
+        '1.445280012'
+      );
     });
 
     test('displays amount converted to selected fiat currency (does not double-convert) as scrambled', async () => {
@@ -95,7 +106,9 @@ describe('AmountDisplay.vue', () => {
         'EUR'
       );
       expect(wrapper.find('.amount-display__value').text()).not.toBe('1.20');
-      expect(wrapper.find('.amount-display__full-value').exists()).toBe(false);
+      expect(wrapper.find('.amount-display__full-value').text()).not.toBe(
+        '1.20440001'
+      );
     });
 
     test('displays amount as it is without fiat conversion as scrambled', async () => {

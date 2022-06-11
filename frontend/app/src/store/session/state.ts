@@ -4,6 +4,7 @@ import {
   defaultGeneralSettings
 } from '@/data/factories';
 import { PrivacyMode, SessionState } from '@/store/session/types';
+import { isAnimationsEnabled } from '@/store/utils';
 
 export const defaultState: () => SessionState = () => ({
   newAccount: false,
@@ -24,11 +25,11 @@ export const defaultState: () => SessionState = () => ({
   tags: {},
   watchers: [],
   queriedAddresses: {},
-  ignoredAssets: [],
   lastBalanceSave: 0,
   lastDataUpload: 0,
   timeframe: TimeFramePeriod.ALL,
-  showUpdatePopup: false
+  showUpdatePopup: false,
+  animationsEnabled: isAnimationsEnabled?.() ?? false
 });
 
 export const state: SessionState = defaultState();

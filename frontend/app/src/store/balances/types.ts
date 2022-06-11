@@ -40,6 +40,10 @@ export interface AccountAssetBalances {
   readonly [account: string]: AssetBalances;
 }
 
+export const EnsNames = z.record(z.string().nullable());
+
+export type EnsNames = z.infer<typeof EnsNames>;
+
 export interface BalanceState {
   eth2Validators: Eth2Validators;
   loopringBalances: AccountAssetBalances;
@@ -59,7 +63,6 @@ export interface BalanceState {
   ksmAccounts: GeneralAccountData[];
   dotAccounts: GeneralAccountData[];
   avaxAccounts: GeneralAccountData[];
-  supportedAssets: SupportedAsset[];
   manualBalances: ManualBalanceWithValue[];
   manualLiabilities: ManualBalanceWithValue[];
   manualBalanceByLocation: BalanceByLocation;
@@ -101,12 +104,16 @@ export interface XpubPayload {
   readonly xpubType: XpubKeyType;
 }
 
-export interface BlockchainAccountPayload extends AccountPayload {
+export interface BasicBlockchainAccountPayload {
   readonly blockchain: Blockchain;
   readonly xpub?: XpubPayload;
   readonly accounts?: string[];
   readonly modules?: Module[];
 }
+
+export interface BlockchainAccountPayload
+  extends BasicBlockchainAccountPayload,
+    AccountPayload {}
 
 export interface AccountPayload {
   readonly address: string;

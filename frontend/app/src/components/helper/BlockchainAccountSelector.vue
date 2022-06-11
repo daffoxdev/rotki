@@ -1,8 +1,7 @@
 <template>
   <v-card v-bind="$attrs">
-    <div :id="id" :class="noPadding ? null : 'mx-4 pt-2'">
+    <div :class="noPadding ? null : 'mx-4 pt-2'">
       <v-autocomplete
-        :attach="`#${id}`"
         :value="value"
         :items="displayedAccounts"
         :filter="filter"
@@ -52,13 +51,7 @@
         </template>
         <template #item="data">
           <div
-            class="
-              blockchain-account-selector__list__item
-              d-flex
-              align-center
-              justify-space-between
-              flex-grow-1
-            "
+            class="blockchain-account-selector__list__item d-flex align-center justify-space-between flex-grow-1"
           >
             <div class="blockchain-account-selector__list__item__address-label">
               <v-chip
@@ -92,10 +85,9 @@ import {
   ref,
   toRefs
 } from '@vue/composition-api';
-import { uniqueId } from 'lodash';
+import { get } from '@vueuse/core';
 import AccountDisplay from '@/components/display/AccountDisplay.vue';
 import TagDisplay from '@/components/tags/TagDisplay.vue';
-
 import { setupBlockchainAccounts } from '@/composables/balances';
 import { setupThemeCheck } from '@/composables/common';
 import i18n from '@/i18n';
@@ -135,8 +127,8 @@ export default defineComponent({
     const search = ref('');
     const { accounts } = setupBlockchainAccounts();
     const selectableAccounts = computed(() => {
-      const filteredChains = chains.value;
-      const blockchainAccounts = accounts.value;
+      const filteredChains = get(chains);
+      const blockchainAccounts = get(accounts);
       if (filteredChains.length === 0) {
         return blockchainAccounts;
       }
@@ -147,7 +139,7 @@ export default defineComponent({
 
     const hintText = computed(() => {
       const all = i18n.t('blockchain_account_selector.all').toString();
-      const selection = value.value;
+      const selection = get(value);
       if (Array.isArray(selection)) {
         return selection.length > 0 ? selection.length.toString() : all;
       }
@@ -155,12 +147,12 @@ export default defineComponent({
     });
 
     const displayedAccounts = computed(() => {
-      const addresses = usableAddresses.value;
-      const accounts = selectableAccounts.value;
+      const addresses = get(usableAddresses);
+      const accounts = get(selectableAccounts);
       if (addresses.length > 0) {
         return accounts.filter(({ address }) => addresses.includes(address));
       }
-      return hideOnEmptyUsable.value ? [] : accounts;
+      return get(hideOnEmptyUsable) ? [] : accounts;
     });
 
     const filter = (item: GeneralAccount, queryText: string) => {
@@ -184,10 +176,7 @@ export default defineComponent({
 
     const { dark } = setupThemeCheck();
 
-    const id = uniqueId('rcmp-');
-
     return {
-      id,
       search,
       input,
       filter,

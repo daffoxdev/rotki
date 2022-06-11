@@ -1,6 +1,6 @@
-import { capitalize } from '@/filters';
 import { TradeLocation } from '@/services/history/types';
 import { bigNumberify, Zero } from '@/utils/bignumbers';
+import { toSentenceCase } from '@/utils/text';
 import { AccountBalancesPage } from './index';
 
 export interface FixtureManualBalance {
@@ -17,9 +17,7 @@ export class ManualBalancesPage extends AccountBalancesPage {
     cy.get('.accounts-balances__manual-balances')
       .scrollIntoView()
       .should('be.visible')
-      .click({
-        force: true
-      });
+      .click();
   }
 
   addBalance(balance: FixtureManualBalance) {
@@ -90,7 +88,7 @@ export class ManualBalancesPage extends AccountBalancesPage {
 
     cy.get('@row')
       .find('.manual-balances-list__location')
-      .should('contain', capitalize(balance.location));
+      .should('contain', toSentenceCase(balance.location));
 
     cy.get('@row')
       .find('[data-cy=details-symbol]')
@@ -134,7 +132,7 @@ export class ManualBalancesPage extends AccountBalancesPage {
     cy.get('[data-cy="manual-balances"] tbody')
       .find('tr')
       .eq(position)
-      .find('button.manual-balances-list__actions__edit')
+      .find('button.actions__edit')
       .click();
 
     cy.get('[data-cy="manual-balance-form"]').as('edit-form');
@@ -147,7 +145,7 @@ export class ManualBalancesPage extends AccountBalancesPage {
     cy.get('[data-cy="manual-balances"] tbody')
       .find('tr')
       .eq(position)
-      .find('.manual-balances-list__actions__delete')
+      .find('button.actions__delete')
       .click();
 
     this.confirmDelete();

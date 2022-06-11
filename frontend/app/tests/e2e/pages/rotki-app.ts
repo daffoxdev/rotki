@@ -7,7 +7,7 @@ export class RotkiApp {
     cy.logout();
     // simulate high scaling / low res by making a very small viewpoirt
     cy.get('.connection-loading__content').should('not.exist');
-    cy.get('.account-management__card').then($body => {
+    cy.get('[data-cy=account-management]').then($body => {
       const button = $body.find('.login__button__new-account');
       if (button.length > 0) {
         cy.get('.login__button__new-account').click();
@@ -21,8 +21,20 @@ export class RotkiApp {
     cy.get('.create-account__boxes__user-prompted').click();
     cy.get('.create-account__credentials__button__continue').click();
     cy.get('.create-account__analytics__button__confirm').click();
-    cy.get('.account-management__loading').should('not.exist');
+    cy.get('[data-cy=account-management__loading]').should('not.exist');
     cy.updateAssets();
+  }
+
+  fasterLogin(username: string, password: string = '1234') {
+    cy.createAccount(username, password);
+    this.visit();
+    this.login(username, password);
+    this.closePremiumOverlay();
+  }
+
+  fasterLogout() {
+    cy.logout();
+    this.visit();
   }
 
   closePremiumOverlay() {
@@ -53,19 +65,17 @@ export class RotkiApp {
   }
 
   changePrivacyMode(mode: number) {
-    cy.get('.user-dropdown').click();
-    cy.get('[data-cy="user-dropdown__privacy-mode"]').click();
+    cy.get('.privacy-mode-dropdown').click();
     cy.get(
-      '[data-cy="user-dropdown__privacy-mode__input"] ~ .v-slider__thumb-container'
+      '[data-cy="privacy-mode-dropdown__input"] ~ .v-slider__thumb-container'
     ).as('input');
 
-    cy.get('@input').focus().type('{downarrow}'.repeat(3));
+    cy.get('@input').focus().type('{downarrow}'.repeat(2));
 
     if (mode > 0) {
       cy.get('@input').type('{uparrow}'.repeat(mode));
     }
-    cy.get('[data-cy="user-dropdown__privacy-mode"]').click();
-    cy.get('.user-dropdown').click();
+    cy.get('.privacy-mode-dropdown').click();
   }
 
   drawerIsVisible(isVisible: boolean) {

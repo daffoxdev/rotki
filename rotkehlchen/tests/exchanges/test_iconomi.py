@@ -4,12 +4,12 @@ from unittest.mock import patch
 from rotkehlchen.assets.asset import WORLD_TO_ICONOMI, Asset
 from rotkehlchen.assets.converters import UNSUPPORTED_ICONOMI_ASSETS, asset_from_iconomi
 from rotkehlchen.constants.assets import A_ETH, A_EUR, A_REP
-from rotkehlchen.errors import UnknownAsset
+from rotkehlchen.errors.asset import UnknownAsset
 from rotkehlchen.exchanges.iconomi import Iconomi
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.factories import make_api_key, make_api_secret
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import Location, TradeType
+from rotkehlchen.types import Location, TradeType
 from rotkehlchen.user_messages import MessagesAggregator
 
 ICONOMI_BALANCES_RESPONSE = """{"currency":"USD","daaList":[{"name":"CARUS-AR","ticker":"CAR","balance":"100.0","value":"1000.0"},{"name":"Strategy 2","ticker":"SCND","balance":"80.00000000","value":"0"}],"assetList":[{"name":"Aragon","ticker":"ANT","balance":"1000","value":"200.0"},{"name":"Ethereum","ticker":"ETH","balance":"32","value":"10000.031241234"},{"name":"Augur","ticker":"REP","balance":"0.5314532451","value":"0.8349030710000"}]}"""  # noqa: E501
@@ -42,9 +42,9 @@ def test_iconomi_query_balances_unknown_asset(function_scope_iconomi):
     assert msg == ''
     assert len(balances) == 3
     assert balances[A_ETH].amount == FVal('32.0')
-    assert balances[A_ETH].usd_value == FVal('48.0')
+    assert balances[A_ETH].usd_value == FVal('10000.031241234')
     assert balances[A_REP].amount == FVal('0.5314532451')
-    assert balances[A_REP].usd_value == FVal('0.79717986765')
+    assert balances[A_REP].usd_value == FVal('0.834903071')
 
     warnings = iconomi.msg_aggregator.consume_warnings()
     assert len(warnings) == 2

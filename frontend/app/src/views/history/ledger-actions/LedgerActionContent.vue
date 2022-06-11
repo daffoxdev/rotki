@@ -2,6 +2,7 @@
   <fragment>
     <card outlined-body>
       <v-btn
+        v-if="!locationOverview"
         absolute
         fab
         top
@@ -15,22 +16,25 @@
       </v-btn>
       <template #title>
         <refresh-button
-          :loading="refreshing"
+          v-if="!locationOverview"
+          :loading="loading"
           :tooltip="$t('ledger_actions.refresh_tooltip')"
           @refresh="fetch(true)"
         />
-        {{ $t('ledger_actions.title') }}
+        <navigator-link :to="{ path: pageRoute }" :enabled="!!locationOverview">
+          {{ $t('ledger_actions.title') }}
+        </navigator-link>
       </template>
       <template #actions>
-        <v-row>
+        <v-row v-if="!locationOverview">
           <v-col cols="12" sm="6">
             <ignore-buttons
-              :disabled="selected.length === 0 || loading || refreshing"
+              :disabled="selected.length === 0 || loading"
               @ignore="ignore"
             />
             <div v-if="selected.length > 0" class="mt-2 ms-1">
               {{ $t('ledger_actions.selected', { count: selected.length }) }}
-              <v-btn small text @click="setAllSelected(false)">
+              <v-btn small text @click="selected = []">
                 {{ $t('ledger_actions.clear_selection') }}
               </v-btn>
             </div>
@@ -46,36 +50,41 @@
         </v-row>
       </template>
       <data-table
+        v-model="selected"
         :expanded.sync="expanded"
         :headers="tableHeaders"
-        :items="ledgerActions"
-        :loading="refreshing"
+        :items="data"
+        :loading="loading"
         :options="options"
         :server-items-length="itemLength"
         class="ledger_actions"
+        :single-select="false"
+        :show-select="!locationOverview"
         item-key="identifier"
         show-expand
         single-expand
+        :item-class="item => (item.ignoredInAccounting ? 'darken-row' : '')"
         @update:options="updatePaginationHandler($event)"
       >
-        <template #header.selection>
-          <v-simple-checkbox
-            :ripple="false"
-            :value="isAllSelected"
-            color="primary"
-            @input="setAllSelected($event)"
-          />
-        </template>
-        <template #item.selection="{ item }">
-          <v-simple-checkbox
-            :ripple="false"
-            color="primary"
-            :value="isSelected(item.identifier)"
-            @input="selectionChanged(item.identifier, $event)"
-          />
-        </template>
-        <template #item.ignoredInAccounting="{ item }">
-          <v-icon v-if="item.ignoredInAccounting">mdi-check</v-icon>
+        <template #item.ignoredInAccounting="{ item, isMobile }">
+          <div v-if="item.ignoredInAccounting">
+            <badge-display v-if="isMobile" color="grey">
+              <v-icon small> mdi-eye-off </v-icon>
+              <span class="ml-2">
+                {{ $t('ledger_actions.headers.ignored') }}
+              </span>
+            </badge-display>
+            <v-tooltip v-else bottom>
+              <template #activator="{ on }">
+                <badge-display color="grey" v-on="on">
+                  <v-icon small> mdi-eye-off </v-icon>
+                </badge-display>
+              </template>
+              <span>
+                {{ $t('ledger_actions.headers.ignored') }}
+              </span>
+            </v-tooltip>
+          </div>
         </template>
         <template #item.type="{ item }">
           <event-type-display
@@ -104,7 +113,7 @@
         </template>
         <template #item.actions="{ item }">
           <row-actions
-            :disabled="refreshing"
+            :disabled="loading"
             :edit-tooltip="$t('ledger_actions.edit_tooltip')"
             :delete-tooltip="$t('ledger_actions.delete_tooltip')"
             @edit-click="editLedgerActionHandler(item)"
@@ -130,14 +139,14 @@
       :subtitle="dialogSubtitle"
       :primary-action="$t('ledger_actions.dialog.save')"
       :action-disabled="loading || !valid"
-      @confirm="save()"
+      @confirm="confirmSave()"
       @cancel="clearDialog()"
     >
       <ledger-action-form
         ref="form"
         v-model="valid"
         :edit="editableItem"
-        @refresh="fetch"
+        :save-data="saveData"
       />
     </big-dialog>
     <confirm-dialog
@@ -152,48 +161,61 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, Ref, ref } from '@vue/composition-api';
+import {
+  computed,
+  defineComponent,
+  onMounted,
+  PropType,
+  Ref,
+  ref,
+  toRefs
+} from '@vue/composition-api';
+import { get, set } from '@vueuse/core';
+import { storeToRefs } from 'pinia';
 import { DataTableHeader } from 'vuetify';
 import BigDialog from '@/components/dialogs/BigDialog.vue';
 import ConfirmDialog from '@/components/dialogs/ConfirmDialog.vue';
 import DateDisplay from '@/components/display/DateDisplay.vue';
 import DataTable from '@/components/helper/DataTable.vue';
 import Fragment from '@/components/helper/Fragment';
+import NavigatorLink from '@/components/helper/NavigatorLink.vue';
 import RefreshButton from '@/components/helper/RefreshButton.vue';
 import RowActions from '@/components/helper/RowActions.vue';
+import BadgeDisplay from '@/components/history/BadgeDisplay.vue';
 import TableFilter from '@/components/history/filtering/TableFilter.vue';
 import {
   MatchedKeyword,
   SearchMatcher
 } from '@/components/history/filtering/types';
 import IgnoreButtons from '@/components/history/IgnoreButtons.vue';
-import LedgerActionForm from '@/components/history/LedgerActionForm.vue';
+import LedgerActionForm, {
+  LedgerActionFormInstance
+} from '@/components/history/LedgerActionForm.vue';
 import LocationDisplay from '@/components/history/LocationDisplay.vue';
 import UpgradeRow from '@/components/history/UpgradeRow.vue';
+import { isSectionLoading, useRoute, useRouter } from '@/composables/common';
 import {
-  setupAssetInfoRetrieval,
-  setupSupportedAssets
-} from '@/composables/balances';
-import { setupStatusChecking } from '@/composables/common';
-import {
-  setupAssociatedLocations,
+  getCollectionData,
   setupEntryLimit,
-  setupLedgerActions
+  setupIgnore
 } from '@/composables/history';
 import { setupSettings } from '@/composables/settings';
 import i18n from '@/i18n';
+import { Routes } from '@/router/routes';
 import {
   LedgerAction,
   LedgerActionRequestPayload,
+  NewLedgerAction,
   TradeLocation
 } from '@/services/history/types';
+import { useAssetInfoRetrieval } from '@/store/assets';
 import { Section } from '@/store/const';
+import { useHistory, useLedgerActions } from '@/store/history';
 import { IgnoreActionType, LedgerActionEntry } from '@/store/history/types';
+import { Collection } from '@/types/collection';
 import { LedgerActionType } from '@/types/ledger-actions';
 import { uniqueStrings } from '@/utils/data';
 import { convertToTimestamp, getDateInputISOFormat } from '@/utils/date';
-import { setupIgnore } from '@/views/history/composables/ignore';
-import { setupSelectionMode } from '@/views/history/composables/selection';
 import LedgerActionDetails from '@/views/history/ledger-actions/LedgerActionDetails.vue';
 
 enum LedgerActionFilterKeys {
@@ -219,48 +241,61 @@ type PaginationOptions = {
   sortDesc: boolean[];
 };
 
-const tableHeaders: DataTableHeader[] = [
-  { text: '', value: 'selection', width: '34px', sortable: false },
-  {
-    text: i18n.t('ledger_actions.headers.location').toString(),
-    value: 'location',
-    width: '120px',
-    align: 'center'
-  },
-  {
-    text: i18n.t('ledger_actions.headers.type').toString(),
-    value: 'type'
-  },
-  {
-    text: i18n.t('ledger_actions.headers.asset').toString(),
-    value: 'asset',
-    sortable: false
-  },
-  {
-    text: i18n.t('ledger_actions.headers.amount').toString(),
-    value: 'amount'
-  },
-  {
-    text: i18n.t('ledger_actions.headers.date').toString(),
-    value: 'timestamp'
-  },
-  {
-    text: i18n.t('ledger_actions.headers.ignored').toString(),
-    value: 'ignoredInAccounting',
-    sortable: false
-  },
-  {
-    text: i18n.t('ledger_actions.headers.actions').toString(),
-    align: 'end',
-    value: 'actions',
-    sortable: false
-  },
-  { text: '', value: 'data-table-expand', sortable: false }
-];
+const tableHeaders = (locationOverview: string): DataTableHeader[] => {
+  const headers: DataTableHeader[] = [
+    {
+      text: '',
+      value: 'ignoredInAccounting',
+      sortable: false,
+      class: 'pa-0',
+      cellClass: 'pa-0'
+    },
+    {
+      text: i18n.t('ledger_actions.headers.location').toString(),
+      value: 'location',
+      width: '120px',
+      align: 'center'
+    },
+    {
+      text: i18n.t('ledger_actions.headers.type').toString(),
+      value: 'type'
+    },
+    {
+      text: i18n.t('ledger_actions.headers.asset').toString(),
+      value: 'asset',
+      sortable: false
+    },
+    {
+      text: i18n.t('ledger_actions.headers.amount').toString(),
+      value: 'amount'
+    },
+    {
+      text: i18n.t('ledger_actions.headers.date').toString(),
+      value: 'timestamp'
+    },
+    {
+      text: i18n.t('ledger_actions.headers.actions').toString(),
+      value: 'actions',
+      align: 'center',
+      sortable: false,
+      width: '50'
+    },
+    { text: '', value: 'data-table-expand', sortable: false }
+  ];
+
+  if (locationOverview) {
+    headers.splice(9, 1);
+    headers.splice(1, 1);
+  }
+
+  return headers;
+};
 
 export default defineComponent({
   name: 'LedgerActionContent',
   components: {
+    NavigatorLink,
+    BadgeDisplay,
     RowActions,
     LedgerActionDetails,
     TableFilter,
@@ -275,19 +310,40 @@ export default defineComponent({
     ConfirmDialog,
     BigDialog
   },
-  emits: ['fetch', 'update:payload'],
-  setup(_, { emit }) {
-    const fetch = (refresh: boolean = false) => emit('fetch', refresh);
-    const updatePayload = (payload: Partial<LedgerActionRequestPayload>) =>
-      emit('update:payload', payload);
+  props: {
+    locationOverview: {
+      required: false,
+      type: String as PropType<TradeLocation | ''>,
+      default: ''
+    }
+  },
+  emits: ['fetch'],
+  setup(props, { emit }) {
+    const { locationOverview } = toRefs(props);
 
-    const { ledgerActions, limit, found, total, deleteLedgerAction } =
-      setupLedgerActions();
+    const fetch = (refresh: boolean = false) => emit('fetch', refresh);
+
+    const historyStore = useHistory();
+    const ledgerActionStore = useLedgerActions();
+    const assetInfoRetrievalStore = useAssetInfoRetrieval();
+    const { supportedAssets } = toRefs(assetInfoRetrievalStore);
+    const { getAssetSymbol, getAssetIdentifierForSymbol } =
+      assetInfoRetrievalStore;
+
+    const { associatedLocations } = storeToRefs(historyStore);
+    const { ledgerActions } = storeToRefs(ledgerActionStore);
+    const {
+      addLedgerAction,
+      editLedgerAction,
+      deleteLedgerAction,
+      updateLedgerActionsPayload
+    } = ledgerActionStore;
+
+    const { data, limit, found, total } = getCollectionData<LedgerActionEntry>(
+      ledgerActions as Ref<Collection<LedgerActionEntry>>
+    );
 
     const { itemLength, showUpgradeRow } = setupEntryLimit(limit, found, total);
-
-    const { isSectionRefreshing, shouldShowLoadingScreen } =
-      setupStatusChecking();
 
     const dialogTitle: Ref<string> = ref('');
     const dialogSubtitle: Ref<string> = ref('');
@@ -297,67 +353,76 @@ export default defineComponent({
     const confirmationMessage: Ref<string> = ref('');
     const expanded: Ref<LedgerActionEntry[]> = ref([]);
     const valid: Ref<boolean> = ref(false);
-    const form = ref<LedgerActionForm | null>(null);
+    const form = ref<LedgerActionFormInstance | null>(null);
 
     const newLedgerAction = () => {
-      dialogTitle.value = i18n.t('ledger_actions.dialog.add.title').toString();
-      dialogSubtitle.value = i18n
-        .t('ledger_actions.dialog.add.subtitle')
-        .toString();
-      openDialog.value = true;
+      set(dialogTitle, i18n.t('ledger_actions.dialog.add.title').toString());
+      set(
+        dialogSubtitle,
+        i18n.t('ledger_actions.dialog.add.subtitle').toString()
+      );
+      set(openDialog, true);
     };
 
     const editLedgerActionHandler = (ledgerAction: LedgerActionEntry) => {
-      editableItem.value = ledgerAction;
-      dialogTitle.value = i18n.t('ledger_actions.dialog.edit.title').toString();
-      dialogSubtitle.value = i18n
-        .t('ledger_actions.dialog.edit.subtitle')
-        .toString();
-      openDialog.value = true;
+      set(editableItem, ledgerAction);
+      set(dialogTitle, i18n.t('ledger_actions.dialog.edit.title').toString());
+      set(
+        dialogSubtitle,
+        i18n.t('ledger_actions.dialog.edit.subtitle').toString()
+      );
+      set(openDialog, true);
     };
 
-    const { getAssetSymbol, getAssetIdentifierForSymbol } =
-      setupAssetInfoRetrieval();
-
     const promptForDelete = (ledgerAction: LedgerActionEntry) => {
-      confirmationMessage.value = i18n
-        .t('ledger_actions.delete.message')
-        .toString();
-      ledgerActionToDelete.value = ledgerAction;
+      set(
+        confirmationMessage,
+        i18n.t('ledger_actions.delete.message').toString()
+      );
+      set(ledgerActionToDelete, ledgerAction);
     };
 
     const deleteLedgerActionHandler = async () => {
-      if (!ledgerActionToDelete.value) {
+      if (!get(ledgerActionToDelete)) {
         return;
       }
 
-      const success: boolean = await deleteLedgerAction(
-        ledgerActionToDelete.value?.identifier
+      const { success } = await deleteLedgerAction(
+        get(ledgerActionToDelete)!.identifier!
       );
 
       if (!success) {
         return;
       }
 
-      ledgerActionToDelete.value = null;
-      confirmationMessage.value = '';
+      set(ledgerActionToDelete, null);
+      set(confirmationMessage, '');
       fetch();
     };
 
     const clearDialog = () => {
-      form.value?.reset();
+      get(form)?.reset();
 
-      openDialog.value = false;
-      editableItem.value = null;
+      set(openDialog, false);
+      set(editableItem, null);
     };
 
-    const save = async () => {
-      if (form.value) {
-        const success = await form.value?.save();
+    const confirmSave = async () => {
+      if (get(form)) {
+        const success = await get(form)?.save();
         if (success) {
           clearDialog();
         }
       }
+    };
+
+    const saveData = async (
+      ledgerAction: NewLedgerAction | LedgerActionEntry
+    ) => {
+      if ((<LedgerActionEntry>ledgerAction).identifier) {
+        return await editLedgerAction(ledgerAction as LedgerActionEntry);
+      }
+      return await addLedgerAction(ledgerAction as NewLedgerAction);
     };
 
     const { dateInputFormat } = setupSettings();
@@ -365,16 +430,14 @@ export default defineComponent({
     const options: Ref<PaginationOptions | null> = ref(null);
     const filters: Ref<MatchedKeyword<LedgerActionFilterValueKeys>> = ref({});
 
-    const { supportedAssets } = setupSupportedAssets();
     const availableAssets = computed<string[]>(() => {
-      return supportedAssets.value
+      return get(supportedAssets)
         .map(value => getAssetSymbol(value.identifier))
         .filter(uniqueStrings);
     });
 
-    const { associatedLocations } = setupAssociatedLocations();
     const availableLocations = computed<TradeLocation[]>(() => {
-      return associatedLocations.value;
+      return get(associatedLocations);
     });
 
     const matchers = computed<
@@ -384,8 +447,8 @@ export default defineComponent({
         key: LedgerActionFilterKeys.ASSET,
         keyValue: LedgerActionFilterValueKeys.ASSET,
         description: i18n.t('ledger_actions.filter.asset').toString(),
-        suggestions: () => availableAssets.value,
-        validate: (asset: string) => availableAssets.value.includes(asset),
+        suggestions: () => get(availableAssets),
+        validate: (asset: string) => get(availableAssets).includes(asset),
         transformer: (asset: string) => getAssetIdentifierForSymbol(asset) ?? ''
       },
       {
@@ -403,17 +466,17 @@ export default defineComponent({
         suggestions: () => [],
         hint: i18n
           .t('ledger_actions.filter.date_hint', {
-            format: getDateInputISOFormat(dateInputFormat.value)
+            format: getDateInputISOFormat(get(dateInputFormat))
           })
           .toString(),
         validate: value => {
           return (
             value.length > 0 &&
-            !isNaN(convertToTimestamp(value, dateInputFormat.value))
+            !isNaN(convertToTimestamp(value, get(dateInputFormat)))
           );
         },
         transformer: (date: string) =>
-          convertToTimestamp(date, dateInputFormat.value).toString()
+          convertToTimestamp(date, get(dateInputFormat)).toString()
       },
       {
         key: LedgerActionFilterKeys.END,
@@ -422,39 +485,40 @@ export default defineComponent({
         suggestions: () => [],
         hint: i18n
           .t('ledger_actions.filter.date_hint', {
-            format: getDateInputISOFormat(dateInputFormat.value)
+            format: getDateInputISOFormat(get(dateInputFormat))
           })
           .toString(),
         validate: value => {
           return (
             value.length > 0 &&
-            !isNaN(convertToTimestamp(value, dateInputFormat.value))
+            !isNaN(convertToTimestamp(value, get(dateInputFormat)))
           );
         },
         transformer: (date: string) =>
-          convertToTimestamp(date, dateInputFormat.value).toString()
+          convertToTimestamp(date, get(dateInputFormat)).toString()
       },
       {
         key: LedgerActionFilterKeys.LOCATION,
         keyValue: LedgerActionFilterValueKeys.LOCATION,
         description: i18n.t('ledger_actions.filter.location').toString(),
-        suggestions: () => availableLocations.value,
-        validate: location => availableLocations.value.includes(location as any)
+        suggestions: () => get(availableLocations),
+        validate: location => get(availableLocations).includes(location as any)
       }
     ]);
 
     const updatePayloadHandler = () => {
       let paginationOptions = {};
-      if (options.value) {
-        options.value = {
-          ...options.value,
-          sortBy:
-            options.value.sortBy.length > 0 ? [options.value.sortBy[0]] : [],
-          sortDesc:
-            options.value.sortDesc.length > 0 ? [options.value.sortDesc[0]] : []
-        };
 
-        const { itemsPerPage, page, sortBy, sortDesc } = options.value;
+      const optionsVal = get(options);
+      if (optionsVal) {
+        set(options, {
+          ...optionsVal,
+          sortBy: optionsVal.sortBy.length > 0 ? [optionsVal.sortBy[0]] : [],
+          sortDesc:
+            optionsVal.sortDesc.length > 0 ? [optionsVal.sortDesc[0]] : []
+        });
+
+        const { itemsPerPage, page, sortBy, sortDesc } = get(options)!;
         const offset = (page - 1) * itemsPerPage;
 
         paginationOptions = {
@@ -465,28 +529,32 @@ export default defineComponent({
         };
       }
 
+      if (get(locationOverview)) {
+        filters.value.location = get(locationOverview) as TradeLocation;
+      }
+
       const payload: Partial<LedgerActionRequestPayload> = {
-        ...filters.value,
+        ...(get(filters) as Partial<LedgerActionRequestPayload>),
         ...paginationOptions
       };
 
-      updatePayload(payload);
+      updateLedgerActionsPayload(payload);
     };
 
     const updatePaginationHandler = (newOptions: PaginationOptions | null) => {
-      options.value = newOptions;
+      set(options, newOptions);
       updatePayloadHandler();
     };
 
     const updateFilterHandler = (
       newFilters: MatchedKeyword<LedgerActionFilterKeys>
     ) => {
-      filters.value = newFilters;
+      set(filters, newFilters);
 
       let newOptions = null;
-      if (options.value) {
+      if (get(options)) {
         newOptions = {
-          ...options.value,
+          ...get(options)!,
           page: 1
         };
       }
@@ -495,24 +563,34 @@ export default defineComponent({
     };
 
     const getId = (item: LedgerActionEntry) => item.identifier.toString();
+    const selected: Ref<LedgerActionEntry[]> = ref([]);
 
-    const selectionMode = setupSelectionMode<LedgerActionEntry>(
-      ledgerActions,
-      getId
-    );
+    const pageRoute = Routes.HISTORY_LEDGER_ACTIONS.route;
+
+    const router = useRouter();
+    const route = useRoute();
+
+    onMounted(() => {
+      const query = get(route).query;
+
+      if (query.add) {
+        newLedgerAction();
+        router.replace({ query: {} });
+      }
+    });
 
     return {
-      tableHeaders,
-      ledgerActions,
+      pageRoute,
+      selected,
+      tableHeaders: tableHeaders(get(locationOverview)),
+      data,
       limit,
       found,
       total,
       itemLength,
       fetch,
       showUpgradeRow,
-      updatePayload,
-      loading: shouldShowLoadingScreen(Section.LEDGER_ACTIONS),
-      refreshing: isSectionRefreshing(Section.LEDGER_ACTIONS),
+      loading: isSectionLoading(Section.LEDGER_ACTIONS),
       dialogTitle,
       dialogSubtitle,
       openDialog,
@@ -527,16 +605,16 @@ export default defineComponent({
       deleteLedgerActionHandler,
       form,
       clearDialog,
-      save,
+      confirmSave,
+      saveData,
       options,
       matchers,
       updatePaginationHandler,
       updateFilterHandler,
-      ...selectionMode,
       ...setupIgnore(
         IgnoreActionType.LEDGER_ACTIONS,
-        selectionMode.selected,
-        ledgerActions,
+        selected,
+        data,
         fetch,
         getId
       )

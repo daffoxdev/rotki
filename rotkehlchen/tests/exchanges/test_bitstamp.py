@@ -7,10 +7,11 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 import requests
 
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.converters import asset_from_bitstamp
 from rotkehlchen.constants.assets import A_BTC, A_ETH, A_EUR, A_LINK, A_USD, A_USDC
-from rotkehlchen.errors import RemoteError, UnknownAsset
+from rotkehlchen.errors.asset import UnknownAsset
+from rotkehlchen.errors.misc import RemoteError
 from rotkehlchen.exchanges.bitstamp import (
     API_ERR_AUTH_NONCE_CODE,
     API_ERR_AUTH_NONCE_MESSAGE,
@@ -29,7 +30,7 @@ from rotkehlchen.exchanges.data_structures import (
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.constants import A_GBP
 from rotkehlchen.tests.utils.mock import MockResponse
-from rotkehlchen.typing import Fee, Location, Timestamp
+from rotkehlchen.types import Fee, Location, Timestamp
 from rotkehlchen.utils.serialization import jsonloads_list
 
 

@@ -8,10 +8,7 @@
   <div v-else>
     <open-trades v-if="preview" :data="openTrades" />
     <div class="mt-8">
-      <closed-trades
-        @fetch="fetchTradesHandler"
-        @update:payload="onFilterUpdate($event)"
-      />
+      <closed-trades @fetch="fetchTrades" />
     </div>
   </div>
 </template>
@@ -21,18 +18,16 @@ import {
   computed,
   defineComponent,
   onBeforeMount,
-  onUnmounted,
-  ref
+  onUnmounted
 } from '@vue/composition-api';
-import isEqual from 'lodash/isEqual';
+import { get, useIntervalFn } from '@vueuse/core';
 import ProgressScreen from '@/components/helper/ProgressScreen.vue';
 import ClosedTrades from '@/components/history/ClosedTrades.vue';
 import OpenTrades from '@/components/history/OpenTrades.vue';
 import { setupStatusChecking } from '@/composables/common';
-import { setupAssociatedLocations, setupTrades } from '@/composables/history';
 import { setupSettings } from '@/composables/settings';
-import { TradeRequestPayload } from '@/services/history/types';
 import { Section } from '@/store/const';
+import { useTrades } from '@/store/history';
 import { TradeEntry } from '@/store/history/types';
 
 export default defineComponent({
@@ -43,60 +38,35 @@ export default defineComponent({
     OpenTrades
   },
   setup() {
-    const { itemsPerPage, refreshPeriod } = setupSettings();
-    const { fetchTrades } = setupTrades();
-    const { fetchAssociatedLocations } = setupAssociatedLocations();
+    const { refreshPeriod } = setupSettings();
+    const { fetchTrades } = useTrades();
 
     const preview = computed<boolean>(() => {
-      return !!process.env.VUE_APP_TRADES_PREVIEW;
+      return !!import.meta.env.VITE_TRADES_PREVIEW;
     });
 
     const openTrades: TradeEntry[] = [];
 
-    const payload = ref<TradeRequestPayload>({
-      limit: itemsPerPage.value,
-      offset: 0,
-      orderByAttribute: 'time',
-      ascending: false
-    });
+    const period = get(refreshPeriod) * 60 * 1000;
 
-    const fetchTradesHandler = async (refresh: boolean = false) => {
-      if (refresh) {
-        fetchAssociatedLocations().then();
-      }
-      await fetchTrades({
-        ...payload.value,
-        onlyCache: !refresh
-      });
-    };
-
-    const onFilterUpdate = (newPayload: TradeRequestPayload) => {
-      if (!isEqual(payload.value, newPayload)) {
-        payload.value = newPayload;
-        fetchTradesHandler().then();
-      }
-    };
-
-    const refreshInterval = ref<any>(null);
+    const { pause, resume, isActive } = useIntervalFn(
+      () => {
+        fetchTrades(true);
+      },
+      period,
+      { immediate: false }
+    );
 
     onBeforeMount(async () => {
-      fetchAssociatedLocations().then();
-      fetchTradesHandler().then();
-
-      const period = refreshPeriod.value * 60 * 1000;
+      await fetchTrades();
 
       if (period > 0) {
-        refreshInterval.value = setInterval(
-          async () => fetchTradesHandler(true),
-          period
-        );
+        resume();
       }
     });
 
     onUnmounted(() => {
-      if (refreshInterval.value) {
-        clearInterval(refreshInterval.value);
-      }
+      if (isActive) pause();
     });
 
     const { shouldShowLoadingScreen } = setupStatusChecking();
@@ -104,8 +74,7 @@ export default defineComponent({
     return {
       preview,
       openTrades,
-      fetchTradesHandler,
-      onFilterUpdate,
+      fetchTrades,
       loading: shouldShowLoadingScreen(Section.TRADES)
     };
   }

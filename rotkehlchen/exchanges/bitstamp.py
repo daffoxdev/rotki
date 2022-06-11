@@ -10,6 +10,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     NamedTuple,
     Optional,
     Tuple,
@@ -20,14 +21,15 @@ from urllib.parse import urlencode
 
 import requests
 from requests.adapters import Response
-from typing_extensions import Literal
 
 from rotkehlchen.accounting.ledger_actions import LedgerAction
-from rotkehlchen.accounting.structures import Balance
+from rotkehlchen.accounting.structures.balance import Balance
 from rotkehlchen.assets.asset import Asset
 from rotkehlchen.assets.converters import asset_from_bitstamp
 from rotkehlchen.constants.misc import ZERO
-from rotkehlchen.errors import DeserializationError, RemoteError, UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.asset import UnknownAsset, UnsupportedAsset
+from rotkehlchen.errors.misc import RemoteError
+from rotkehlchen.errors.serialization import DeserializationError
 from rotkehlchen.exchanges.data_structures import (
     AssetMovement,
     AssetMovementCategory,
@@ -46,7 +48,7 @@ from rotkehlchen.serialization.deserialize import (
     deserialize_int_from_str,
     deserialize_timestamp_from_bitstamp_date,
 )
-from rotkehlchen.typing import ApiKey, ApiSecret, AssetAmount, Location, Timestamp
+from rotkehlchen.types import ApiKey, ApiSecret, AssetAmount, Location, Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 from rotkehlchen.utils.misc import ts_now_in_ms
 from rotkehlchen.utils.mixins.cacheable import cache_response_timewise
@@ -408,7 +410,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
             end_ts: Timestamp,
             options: Dict[str, Any],
             case: Literal['trades', 'asset_movements'],
-    ) -> Union[List[Trade], List[AssetMovement]]:
+    ) -> Union[List[Trade], List[AssetMovement], List]:
         """Request a Bitstamp API v2 endpoint paginating via an options
         attribute.
 
@@ -449,7 +451,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
 
         call_options = options.copy()
         limit = options.get('limit', API_MAX_LIMIT)
-        results: Union[List[Trade], List[AssetMovement]] = []  # type: ignore
+        results = []
         while True:
             response = self._api_query(
                 endpoint=endpoint,
@@ -469,8 +471,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                 self.msg_aggregator.add_error(
                     f'Got remote error while querying Bistamp trades: {msg}',
                 )
-                no_results: Union[List[Trade], List[AssetMovement]] = []  # type: ignore
-                return no_results
+                return []
 
             has_results = False
             is_result_timestamp_gt_end_ts = False
@@ -505,7 +506,7 @@ class Bitstamp(ExchangeInterface):  # lgtm[py/missing-call-to-init]
                     )
                     continue
 
-                results.append(result)  # type: ignore
+                results.append(result)
                 has_results = True  # NB: endpoint agnostic
 
             if len(response_list) < limit or is_result_timestamp_gt_end_ts:

@@ -4,7 +4,18 @@
     v-model="currentValue"
     v-bind="$attrs"
     v-on="filteredListeners($listeners)"
-  />
+  >
+    <!-- Pass on all named slots -->
+    <slot v-for="slot in Object.keys($slots)" :slot="slot" :name="slot" />
+    <!-- Pass on all scoped slots -->
+    <template
+      v-for="slot in Object.keys($scopedSlots)"
+      :slot="slot"
+      slot-scope="scope"
+    >
+      <slot :name="slot" v-bind="scope" />
+    </template>
+  </v-text-field>
 </template>
 
 <script lang="ts">
@@ -13,9 +24,9 @@ import {
   defineComponent,
   onMounted,
   ref,
-  toRefs,
-  watch
+  toRefs
 } from '@vue/composition-api';
+import { debouncedWatch, get, set } from '@vueuse/core';
 import Cleave from 'cleave.js';
 import { useStore } from '@/store/utils';
 
@@ -28,15 +39,16 @@ export default defineComponent({
   name: 'AmountInput',
   inheritAttrs: false,
   props: {
+    integer: { required: false, type: Boolean, default: false },
     value: { required: false, type: String, default: '' }
   },
   emits: ['input'],
   setup(props, { emit }) {
-    const { value } = toRefs(props);
+    const { integer, value } = toRefs(props);
 
     const textInput = ref(null);
 
-    const currentValue = ref(value.value);
+    const currentValue = ref(get(value));
 
     const cleave = ref<Cleave | null>(null);
 
@@ -55,30 +67,37 @@ export default defineComponent({
       target: { rawValue: string; value: string };
     }) => {
       let value = target.rawValue;
-      currentValue.value = target.value;
+      set(currentValue, target.value);
       emit('input', value);
     };
 
     onMounted(() => {
-      const inputWrapper = textInput.value as any;
+      const inputWrapper = get(textInput) as any;
       const input = inputWrapper.$el.querySelector('input') as HTMLElement;
 
-      cleave.value = new Cleave(input, {
-        numeral: true,
-        delimiter: thousandSeparator.value,
-        numeralDecimalMark: decimalSeparator.value,
-        numeralDecimalScale: 100,
-        onValueChanged
-      });
+      set(
+        cleave,
+        new Cleave(input, {
+          numeral: true,
+          delimiter: get(thousandSeparator),
+          numeralDecimalMark: get(decimalSeparator),
+          numeralDecimalScale: get(integer) ? 0 : 100,
+          onValueChanged
+        })
+      );
     });
 
-    watch(value, () => {
-      currentValue.value = value.value;
-      cleave.value?.setRawValue(value.value);
-    });
+    debouncedWatch(
+      value,
+      value => {
+        set(currentValue, value);
+        get(cleave)?.setRawValue(value);
+      },
+      { debounce: 400 }
+    );
 
     const focus = () => {
-      const inputWrapper = textInput.value as any;
+      const inputWrapper = get(textInput) as any;
       if (inputWrapper) {
         inputWrapper.focus();
       }

@@ -1,6 +1,10 @@
 import { currencies } from '@/data/currencies';
 import { Defaults } from '@/data/defaults';
-import { AccountingSettings, GeneralSettings } from '@/types/user';
+import {
+  AccountingSettings,
+  CostBasisMethod,
+  GeneralSettings
+} from '@/types/user';
 
 export const defaultGeneralSettings = (): GeneralSettings => ({
   uiFloatingPrecision: Defaults.FLOATING_PRECISION,
@@ -16,7 +20,8 @@ export const defaultGeneralSettings = (): GeneralSettings => ({
   displayDateInLocaltime: Defaults.DISPLAY_DATE_IN_LOCALTIME,
   currentPriceOracles: [],
   historicalPriceOracles: [],
-  ssf0graphMultiplier: 0
+  ssf0graphMultiplier: 0,
+  nonSyncingExchanges: []
 });
 
 export const defaultAccountingSettings = (): AccountingSettings => ({
@@ -27,5 +32,6 @@ export const defaultAccountingSettings = (): AccountingSettings => ({
   taxfreeAfterPeriod: null,
   accountForAssetsMovements: true,
   calculatePastCostBasis: true,
-  taxableLedgerActions: []
+  taxableLedgerActions: [],
+  costBasisMethod: CostBasisMethod.Fifo
 });

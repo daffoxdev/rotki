@@ -1,5 +1,5 @@
 from rotkehlchen.assets.asset import Asset, EthereumToken
-from rotkehlchen.chain.ethereum.typing import string_to_ethereum_address
+from rotkehlchen.chain.ethereum.types import string_to_ethereum_address
 from rotkehlchen.constants.assets import A_EUR
 
 A_RDN = EthereumToken('0x255Aa6DF07540Cb5d3d297f0D0D4D84cb52bc8e6')
@@ -26,6 +26,8 @@ A_DOLLAR_BASED = EthereumToken('0x68A118Ef45063051Eac49c7e647CE5Ace48a68a5')
 A_BAND = EthereumToken('0xBA11D00c5f74255f56a5E366F4F77f5A186d7f55')
 A_YAM_V1 = EthereumToken('0x0e2298E3B3390e3b945a5456fBf59eCc3f55DA16')
 A_AXS = EthereumToken('0xBB0E17EF65F82Ab018d8EDd776e8DD940327B28b')
+A_CHI = EthereumToken('0x0000000000004946c0e9F43F4Dee607b0eF1fA1c')
+A_PAN = EthereumToken('0xD56daC73A4d6766464b38ec6D91eB45Ce7457c44')
 
 A_LUNA = Asset('LUNA-2')
 A_AIR2 = Asset('AIR-2')

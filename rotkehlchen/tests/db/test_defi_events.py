@@ -1,20 +1,20 @@
-from rotkehlchen.accounting.structures import Balance
-from rotkehlchen.chain.ethereum.modules.yearn.vaults import YEARN_VAULTS
-from rotkehlchen.chain.ethereum.structures import (
+from rotkehlchen.accounting.structures.balance import Balance
+from rotkehlchen.chain.ethereum.modules.aave.structures import (
     AaveBorrowEvent,
     AaveDepositWithdrawalEvent,
     AaveInterestEvent,
     AaveLiquidationEvent,
     AaveRepayEvent,
-    YearnVaultEvent,
 )
+from rotkehlchen.chain.ethereum.modules.yearn.structures import YearnVaultEvent
+from rotkehlchen.chain.ethereum.modules.yearn.vaults import YEARN_VAULTS
 from rotkehlchen.constants.assets import A_DAI, A_ETH, A_MANA, A_WBTC, A_YV1_DAI
 from rotkehlchen.constants.misc import ONE
 from rotkehlchen.data_handler import DataHandler
 from rotkehlchen.fval import FVal
 from rotkehlchen.tests.utils.aave import A_ADAI_V1
 from rotkehlchen.tests.utils.factories import make_ethereum_address
-from rotkehlchen.typing import Timestamp
+from rotkehlchen.types import Timestamp
 from rotkehlchen.user_messages import MessagesAggregator
 
 

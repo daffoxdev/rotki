@@ -1,6 +1,7 @@
 import datetime
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import py
@@ -17,7 +18,7 @@ from rotkehlchen.tests.fixtures import *  # noqa: F401,F403
 from rotkehlchen.chain.ethereum import patch_web3  # isort:skip # pylint: disable=unused-import # lgtm[py/unused-import] # noqa
 
 assert sys.version_info.major == 3, 'Need to use python 3 for rotki'
-assert 6 <= sys.version_info.minor <= 7, 'Need to use python 3.6 or python 3.7 for rotki'
+assert 9 == sys.version_info.minor, 'Need to use python 3.9 for rotki'
 
 
 def pytest_addoption(parser):
@@ -38,7 +39,7 @@ if sys.platform == 'darwin':
     @pytest.fixture(scope='session', autouse=True)
     def _tmpdir_short(request):
         """Shorten tmpdir paths"""
-        from _pytest.tmpdir import TempdirFactory  # pylint: disable=import-outside-toplevel
+        from pytest import TempdirFactory  # pylint: disable=import-outside-toplevel
 
         def getbasetemp(self):
             """ return base temporary directory. """
@@ -95,7 +96,9 @@ def profiler(request):
         )
 
         now = datetime.datetime.now()
-        stack_path = Path('/tmp') / f'{now:%Y%m%d_%H%M}_stack.data'
+        tmpdirname = tempfile.gettempdir()
+        stack_path = Path(tmpdirname) / f'{now:%Y%m%d_%H%M}_stack.data'
+        print(f'Stack data is saved at: {stack_path}')
         stack_stream = open(stack_path, 'w')
         flame = FlameGraphCollector(stack_stream)
         profiler_instance = TraceSampler(flame)

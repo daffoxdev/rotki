@@ -19,88 +19,84 @@
         {{ subtitle }}
       </v-card-subtitle>
       <div class="big-dialog__content">
-        <v-row align="center" class="mx-0 big-dialog__body">
-          <v-col v-if="display" cols="12">
-            <slot />
-          </v-col>
-        </v-row>
-        <v-card-actions class="px-6">
-          <v-progress-linear v-if="loading" indeterminate class="mx-4" />
-          <v-spacer />
-          <v-btn
-            color="primary"
-            depressed
-            outlined
-            text
-            class="big-dialog__buttons__cancel"
-            @click="cancel()"
-          >
-            {{ secondaryAction }}
-          </v-btn>
-          <v-btn
-            data-cy="confirm"
-            :color="themes[confirmType].color"
-            :disabled="actionDisabled"
-            depressed
-            class="big-dialog__buttons__confirm"
-            @click="confirm()"
-          >
-            {{ primaryAction }}
-          </v-btn>
-        </v-card-actions>
+        <div class="big-dialog__body">
+          <slot v-if="display" />
+        </div>
       </div>
+      <v-card-actions class="px-6">
+        <v-progress-linear v-if="loading" indeterminate class="mx-4" />
+        <v-spacer />
+        <v-btn
+          color="primary"
+          depressed
+          outlined
+          text
+          class="big-dialog__buttons__cancel"
+          @click="cancel()"
+        >
+          {{ secondaryAction }}
+        </v-btn>
+        <v-btn
+          data-cy="confirm"
+          :color="themes[confirmType].color"
+          :disabled="actionDisabled"
+          depressed
+          class="big-dialog__buttons__confirm"
+          @click="confirm()"
+        >
+          {{ primaryAction }}
+        </v-btn>
+      </v-card-actions>
     </v-card>
   </v-bottom-sheet>
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue } from 'vue-property-decorator';
-import { themes } from '@/components/dialogs/consts';
-import { DialogThemes } from '@/components/dialogs/types';
+import { defineComponent, PropType } from '@vue/composition-api';
+import { DIALOG_TYPES, themes, TYPE_INFO } from '@/components/dialogs/consts';
 
-@Component({})
-export default class BigDialog extends Vue {
-  @Prop({ required: true })
-  title!: string;
-  @Prop({ required: false })
-  subtitle!: string;
-  @Prop({ type: Boolean, required: true })
-  display!: boolean;
-  @Prop({ type: Boolean, required: false, default: false })
-  loading!: boolean;
-  @Prop({ type: Boolean, required: false, default: false })
-  actionDisabled!: boolean;
-  @Prop({ type: String, required: false, default: 'Confirm' })
-  primaryAction!: string;
-  @Prop({ type: String, required: false, default: 'Cancel' })
-  secondaryAction!: string;
-  @Prop({ type: String, required: false, default: 'info' }) // must be one of the types defined in confirmTypesProps below
-  confirmType!: string;
+export default defineComponent({
+  name: 'BigDialog',
+  props: {
+    title: { required: true, type: String },
+    subtitle: { required: false, type: String, default: '' },
+    display: { required: true, type: Boolean },
+    loading: { required: false, type: Boolean, default: false },
+    actionDisabled: { required: false, type: Boolean, default: false },
+    primaryAction: { required: false, type: String, default: 'Confirm' },
+    secondaryAction: { required: false, type: String, default: 'Cancel' },
+    confirmType: {
+      required: false,
+      type: String as PropType<typeof DIALOG_TYPES[number]>,
+      default: TYPE_INFO
+    }
+  },
+  emits: ['confirm', 'cancel'],
+  setup(_, { emit }) {
+    const confirm = () => emit('confirm');
 
-  readonly themes: DialogThemes = themes;
+    const cancel = () => emit('cancel');
 
-  @Emit()
-  confirm() {}
-
-  @Emit()
-  cancel() {}
-}
+    return {
+      themes,
+      confirm,
+      cancel
+    };
+  }
+});
 </script>
 
 <style scoped lang="scss">
-@import '~@/scss/scroll';
-
 .big-dialog {
   height: calc(100vh - 80px);
 
   &__body {
-    padding: 0 16px;
+    padding: 0 1.5rem;
   }
 
   &__content {
-    height: calc(100% - 85px);
-    overflow-y: scroll;
-    @extend .themed-scrollbar;
+    max-height: calc(100% - 120px);
+    overflow-y: auto;
   }
 }
 
@@ -108,6 +104,10 @@ export default class BigDialog extends Vue {
   .v-card {
     border-bottom-left-radius: 0 !important;
     border-bottom-right-radius: 0 !important;
+
+    &__actions {
+      padding: 1rem 1.5rem !important;
+    }
   }
 }
 </style>
