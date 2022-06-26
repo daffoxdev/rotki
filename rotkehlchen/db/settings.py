@@ -89,7 +89,7 @@ TIMESTAMP_KEYS = ('last_write_ts', 'last_data_upload_ts', 'last_balance_save')
 
 
 class DBSettings(NamedTuple):
-    have_premium: bool = False
+    have_premium: bool = True
     version: int = ROTKEHLCHEN_DB_VERSION
     last_write_ts: Timestamp = Timestamp(0)
     premium_should_sync: bool = DEFAULT_PREMIUM_SHOULD_SYNC
